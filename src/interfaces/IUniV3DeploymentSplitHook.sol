@@ -5,7 +5,8 @@ pragma solidity ^0.8.0;
  * @title IUniV3DeploymentSplitHook
  * @notice JuiceBox v4 Split Hook contract that manages a two-stage deployment process:
  * Stage 1: Accumulate project tokens without deploying Uniswap V3 pool
- * Stage 2: Deploy pool with accumulated tokens and route LP fees back to project
+ * Stage 2: Deploy pool with accumulated tokens (triggered manually by project owner or operator)
+ * After deployment: Route LP fees back to project, burn newly received project tokens
  */
 interface IUniV3DeploymentSplitHook {
 
@@ -32,25 +33,28 @@ interface IUniV3DeploymentSplitHook {
     event FeeTokensClaimed(uint256 indexed projectId, address indexed beneficiary, uint256 amount);
 
     /**
-     * @notice Check if project is in accumulation stage based on ruleset weight
+     * @notice Check if a pool has been deployed for a project/terminal token pair
      * @param _projectId The Juicebox project ID
-     * @return isAccumulationStage True if weight > 0 (accumulation stage), false if weight == 0 (deployment stage)
+     * @param _terminalToken The terminal token address
+     * @return deployed True if pool exists
      */
-    function isAccumulationStage(uint256 _projectId) external view returns (bool isAccumulationStage);
-
+    function isPoolDeployed(uint256 _projectId, address _terminalToken) external view returns (bool deployed);
 
     /**
-     * @notice Manually trigger deployment for a project (only works in accumulation stage)
+     * @notice Deploy a UniswapV3 pool using accumulated project tokens
+     * @dev Only callable by the project owner or an operator with SET_BUYBACK_POOL permission
      * @param _projectId The Juicebox project ID
      * @param _terminalToken The terminal token address
      * @param _amount0Min Minimum amount of token0 to add (slippage protection, defaults to 0)
      * @param _amount1Min Minimum amount of token1 to add (slippage protection, defaults to 0)
+     * @param _minCashOutReturn Minimum terminal tokens from cash-out (slippage protection, 0 = auto 1% tolerance)
      */
     function deployPool(
         uint256 _projectId,
         address _terminalToken,
         uint256 _amount0Min,
-        uint256 _amount1Min
+        uint256 _amount1Min,
+        uint256 _minCashOutReturn
     ) external;
 
     /**

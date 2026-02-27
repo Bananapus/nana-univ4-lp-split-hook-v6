@@ -8,52 +8,51 @@ import {IJBSplitHook} from "@bananapus/core/interfaces/IJBSplitHook.sol";
 import {JBSplit} from "@bananapus/core/structs/JBSplit.sol";
 import {JBSplitHookContext} from "@bananapus/core/structs/JBSplitHookContext.sol";
 
-/// @notice Tests for UniV3DeploymentSplitHook accumulation stage behavior.
-/// @dev Covers isAccumulationStage logic, processSplitWith accumulation, revert conditions, and supportsInterface.
+/// @notice Tests for UniV3DeploymentSplitHook pre-deployment (accumulation) behavior.
+/// @dev Covers projectDeployed/isPoolDeployed logic, processSplitWith accumulation, revert conditions, and supportsInterface.
 contract AccumulationStageTest is LPSplitHookTestBase {
-    // ─────────────────────────────────────────────────────────────────────
-    // 1. isAccumulationStage — weight above threshold
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 1. projectDeployed -- false before any pool deployed
+    // -----------------------------------------------------------------------
 
-    /// @notice When current weight (1000e18) >= firstWeight/10 (100e18), project is in accumulation stage.
-    function test_IsAccumulationStage_AboveThreshold() public view {
-        // DEFAULT_WEIGHT = 1000e18, DEFAULT_FIRST_WEIGHT = 1000e18
-        // threshold = 1000e18 / 10 = 100e18
-        // 1000e18 >= 100e18 => true
-        bool result = hook.isAccumulationStage(PROJECT_ID);
-        assertTrue(result, "Should be in accumulation stage when weight is above threshold");
+    /// @notice Before any pool is deployed, projectDeployed should be false.
+    function test_ProjectDeployed_FalseBeforeDeploy() public view {
+        assertFalse(hook.projectDeployed(PROJECT_ID), "projectDeployed should be false before any deploy");
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 2. isAccumulationStage — weight exactly at threshold
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 2. isPoolDeployed -- false before pool deployed for token pair
+    // -----------------------------------------------------------------------
 
-    /// @notice When current weight == firstWeight/10 exactly, project is still in accumulation stage (>= check).
-    function test_IsAccumulationStage_AtThreshold() public {
-        uint256 threshold = DEFAULT_FIRST_WEIGHT / 10; // 100e18
-        controller.setWeight(PROJECT_ID, threshold);
-
-        bool result = hook.isAccumulationStage(PROJECT_ID);
-        assertTrue(result, "Should be in accumulation stage when weight equals threshold exactly");
+    /// @notice Before deployPool is called, isPoolDeployed should return false.
+    function test_IsPoolDeployed_FalseBeforeDeploy() public view {
+        assertFalse(
+            hook.isPoolDeployed(PROJECT_ID, address(terminalToken)),
+            "isPoolDeployed should be false before deploy"
+        );
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 3. isAccumulationStage — weight below threshold
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 3. projectDeployed -- true after pool deployed
+    // -----------------------------------------------------------------------
 
-    /// @notice When current weight < firstWeight/10, project enters deployment stage.
-    function test_IsAccumulationStage_BelowThreshold() public {
-        _enterDeploymentStage(PROJECT_ID);
+    /// @notice After deployPool succeeds, projectDeployed should be true and
+    ///         isPoolDeployed should return true for the deployed token pair.
+    function test_ProjectDeployed_TrueAfterDeploy() public {
+        _accumulateAndDeploy(PROJECT_ID, 100e18);
 
-        bool result = hook.isAccumulationStage(PROJECT_ID);
-        assertFalse(result, "Should NOT be in accumulation stage when weight is below threshold");
+        assertTrue(hook.projectDeployed(PROJECT_ID), "projectDeployed should be true after deploy");
+        assertTrue(
+            hook.isPoolDeployed(PROJECT_ID, address(terminalToken)),
+            "isPoolDeployed should be true after deploy"
+        );
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 4. processSplitWith — accumulates tokens correctly
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 4. processSplitWith -- accumulates tokens correctly
+    // -----------------------------------------------------------------------
 
-    /// @notice Calling processSplitWith in accumulation stage increments accumulatedProjectTokens.
+    /// @notice Calling processSplitWith before pool deployment increments accumulatedProjectTokens.
     function test_ProcessSplit_Accumulates() public {
         uint256 amount = 500e18;
 
@@ -66,9 +65,9 @@ contract AccumulationStageTest is LPSplitHookTestBase {
         );
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 5. processSplitWith — multiple accumulations sum correctly
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 5. processSplitWith -- multiple accumulations sum correctly
+    // -----------------------------------------------------------------------
 
     /// @notice Three separate accumulations should sum to the total.
     function test_ProcessSplit_MultipleAccumulations() public {
@@ -88,9 +87,9 @@ contract AccumulationStageTest is LPSplitHookTestBase {
         );
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 6. processSplitWith — reverts if caller is not the controller
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 6. processSplitWith -- reverts if caller is not the controller
+    // -----------------------------------------------------------------------
 
     /// @notice processSplitWith reverts when msg.sender is not the project controller.
     function test_ProcessSplit_RevertsIf_NotController() public {
@@ -107,9 +106,9 @@ contract AccumulationStageTest is LPSplitHookTestBase {
         hook.processSplitWith(context);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 7. processSplitWith — reverts if hook in context does not match
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 7. processSplitWith -- reverts if hook in context does not match
+    // -----------------------------------------------------------------------
 
     /// @notice processSplitWith reverts when context.split.hook points to a different address.
     function test_ProcessSplit_RevertsIf_HookMismatch() public {
@@ -140,9 +139,9 @@ contract AccumulationStageTest is LPSplitHookTestBase {
         hook.processSplitWith(context);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 8. processSplitWith — reverts if groupId is not 1
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 8. processSplitWith -- reverts if groupId is not 1
+    // -----------------------------------------------------------------------
 
     /// @notice processSplitWith reverts with TerminalTokensNotAllowed when groupId != 1.
     function test_ProcessSplit_RevertsIf_GroupIdNotOne() public {
@@ -159,9 +158,9 @@ contract AccumulationStageTest is LPSplitHookTestBase {
         hook.processSplitWith(context);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 9. processSplitWith — reverts if project has no controller
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 9. processSplitWith -- reverts if project has no controller
+    // -----------------------------------------------------------------------
 
     /// @notice processSplitWith reverts with InvalidProjectId when controllerOf returns address(0).
     function test_ProcessSplit_RevertsIf_InvalidProject() public {
@@ -180,9 +179,9 @@ contract AccumulationStageTest is LPSplitHookTestBase {
         hook.processSplitWith(context);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 10. supportsInterface — both interface IDs return true
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 10. supportsInterface -- both interface IDs return true
+    // -----------------------------------------------------------------------
 
     /// @notice supportsInterface returns true for IUniV3DeploymentSplitHook and IJBSplitHook.
     function test_SupportsInterface() public view {
@@ -201,24 +200,41 @@ contract AccumulationStageTest is LPSplitHookTestBase {
         );
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 11. isAccumulationStage — zero first weight defaults to true
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 11. processSplitWith -- burns after pool deployed
+    // -----------------------------------------------------------------------
 
-    /// @notice When firstWeight is 0, isAccumulationStage defaults to true.
-    function test_IsAccumulationStage_ZeroFirstWeight() public {
-        controller.setFirstWeight(PROJECT_ID, 0);
-        // Also set current weight to 0 so allRulesetsOf returns 0
-        // (MockJBController.allRulesetsOf defaults to current weight when firstWeight=0)
-        controller.setWeight(PROJECT_ID, 0);
+    /// @notice After deployPool is called, processSplitWith burns tokens instead of accumulating.
+    function test_ProcessSplit_BurnsAfterDeployed() public {
+        // Deploy pool first
+        _accumulateAndDeploy(PROJECT_ID, 100e18);
 
-        bool result = hook.isAccumulationStage(PROJECT_ID);
-        assertTrue(result, "Should default to accumulation stage when first weight is 0");
+        assertTrue(hook.projectDeployed(PROJECT_ID), "projectDeployed should be true");
+
+        uint256 burnCountBefore = controller.burnCallCount();
+
+        // Now processSplitWith should burn instead of accumulate
+        uint256 newAmount = 50e18;
+        projectToken.mint(address(hook), newAmount);
+        JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, newAmount);
+
+        vm.prank(address(controller));
+        hook.processSplitWith(context);
+
+        // Verify tokens were burned
+        assertGt(controller.burnCallCount(), burnCountBefore, "burnTokensOf should be called after deployment");
+
+        // Verify accumulated stays 0
+        assertEq(
+            hook.accumulatedProjectTokens(PROJECT_ID),
+            0,
+            "accumulatedProjectTokens should remain 0 after burn"
+        );
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 12. processSplitWith — zero amount succeeds, accumulated stays same
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 12. processSplitWith -- zero amount succeeds, accumulated stays same
+    // -----------------------------------------------------------------------
 
     /// @notice Calling processSplitWith with 0 tokens succeeds and does not change accumulated balance.
     function test_ProcessSplit_ZeroAmount() public {

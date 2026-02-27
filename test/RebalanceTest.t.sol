@@ -20,23 +20,20 @@ contract RebalanceTest is LPSplitHookTestBase {
         pool = hook.poolOf(PROJECT_ID, address(terminalToken));
         poolTokenId = hook.tokenIdForPool(pool);
 
-        // Enter deployment stage (weight below 10% threshold)
-        _enterDeploymentStage(PROJECT_ID);
-
         // Ensure NFPM has tokens so that collect can transfer them to the hook
         // after decreaseLiquidity makes them collectable
         projectToken.mint(address(nfpm), 50e18);
         terminalToken.mint(address(nfpm), 50e18);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 1. rebalanceLiquidity — reverts in accumulation stage
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 1. rebalanceLiquidity -- reverts when no pool exists
+    // -----------------------------------------------------------------------
 
-    /// @notice rebalanceLiquidity reverts with InvalidStageForAction when the project
-    ///         is still in accumulation stage (weight >= 10% of first weight).
-    function test_Rebalance_RevertsInAccumulation() public {
-        // Use a separate project that is still in accumulation stage
+    /// @notice rebalanceLiquidity reverts with InvalidStageForAction when no pool
+    ///         has been deployed for the project/token pair.
+    function test_Rebalance_RevertsIfNoPoolDeployed() public {
+        // Use a separate project that has no pool deployed
         uint256 newProjectId = 3;
         controller.setWeight(newProjectId, DEFAULT_WEIGHT);
         controller.setFirstWeight(newProjectId, DEFAULT_FIRST_WEIGHT);
@@ -47,9 +44,9 @@ contract RebalanceTest is LPSplitHookTestBase {
         hook.rebalanceLiquidity(newProjectId, address(terminalToken), 0, 0, 0, 0);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 2. rebalanceLiquidity — reverts if no pool exists
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 2. rebalanceLiquidity -- reverts if no pool exists for token pair
+    // -----------------------------------------------------------------------
 
     /// @notice rebalanceLiquidity reverts with InvalidStageForAction when there is no pool
     ///         for the given projectId/terminalToken pair.
@@ -70,9 +67,9 @@ contract RebalanceTest is LPSplitHookTestBase {
         hook.rebalanceLiquidity(PROJECT_ID, address(otherToken), 0, 0, 0, 0);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 3. rebalanceLiquidity — reverts if terminal token is invalid
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 3. rebalanceLiquidity -- reverts if terminal token is invalid
+    // -----------------------------------------------------------------------
 
     /// @notice rebalanceLiquidity reverts with InvalidTerminalToken when the terminal token
     ///         has no primary terminal configured in the directory.
@@ -83,9 +80,9 @@ contract RebalanceTest is LPSplitHookTestBase {
         hook.rebalanceLiquidity(PROJECT_ID, randomToken, 0, 0, 0, 0);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 4. rebalanceLiquidity — collects fees first
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 4. rebalanceLiquidity -- collects fees first
+    // -----------------------------------------------------------------------
 
     /// @notice rebalanceLiquidity calls NFPM.collect at least once (the first collect
     ///         before decreaseLiquidity to harvest accrued fees).
@@ -104,9 +101,9 @@ contract RebalanceTest is LPSplitHookTestBase {
         );
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 5. rebalanceLiquidity — removes all liquidity
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 5. rebalanceLiquidity -- removes all liquidity
+    // -----------------------------------------------------------------------
 
     /// @notice rebalanceLiquidity calls NFPM.decreaseLiquidity exactly once to remove
     ///         all liquidity from the existing position.
@@ -122,9 +119,9 @@ contract RebalanceTest is LPSplitHookTestBase {
         );
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 6. rebalanceLiquidity — burns old NFT
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 6. rebalanceLiquidity -- burns old NFT
+    // -----------------------------------------------------------------------
 
     /// @notice rebalanceLiquidity calls NFPM.burn exactly once to remove the old position NFT
     ///         before minting a new one.
@@ -140,9 +137,9 @@ contract RebalanceTest is LPSplitHookTestBase {
         );
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 7. rebalanceLiquidity — mints new position
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 7. rebalanceLiquidity -- mints new position
+    // -----------------------------------------------------------------------
 
     /// @notice rebalanceLiquidity calls NFPM.mint to create a new LP position with
     ///         updated tick bounds. The mint count should increase by 1 from the deploy mint.
@@ -159,9 +156,9 @@ contract RebalanceTest is LPSplitHookTestBase {
         );
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 8. rebalanceLiquidity — updates tokenIdForPool
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 8. rebalanceLiquidity -- updates tokenIdForPool
+    // -----------------------------------------------------------------------
 
     /// @notice After rebalance, the tokenIdForPool mapping should point to a new tokenId
     ///         (different from the original one created during deployPool).
@@ -179,9 +176,9 @@ contract RebalanceTest is LPSplitHookTestBase {
         );
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 9. rebalanceLiquidity — permissionless (anyone can call)
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 9. rebalanceLiquidity -- permissionless (anyone can call)
+    // -----------------------------------------------------------------------
 
     /// @notice rebalanceLiquidity is permissionless: a random user address can call it
     ///         without any special permissions and it succeeds.
@@ -200,9 +197,9 @@ contract RebalanceTest is LPSplitHookTestBase {
         );
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 10. rebalanceLiquidity — routes collected fees
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 10. rebalanceLiquidity -- routes collected fees
+    // -----------------------------------------------------------------------
 
     /// @notice When the position has accrued fees, rebalanceLiquidity collects them and
     ///         routes terminal token fees to the project (via pay for fee project or addToBalance).
@@ -246,7 +243,7 @@ contract RebalanceTest is LPSplitHookTestBase {
         assertTrue(feesRouted, "Collected fees should be routed via pay or addToBalance");
     }
 
-    // ─── Helper ─────────────────────────────────────────────────────────
+    // --- Helper ------------------------------------------------------------
 
     function _sortTokens(address tokenA, address tokenB) internal pure returns (address token0, address token1) {
         return tokenA < tokenB ? (tokenA, tokenB) : (tokenB, tokenA);

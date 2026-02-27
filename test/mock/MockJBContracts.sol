@@ -12,13 +12,65 @@ import {IJBTerminal} from "@bananapus/core/interfaces/IJBTerminal.sol";
 import {MockERC20} from "./MockERC20.sol";
 
 // ═══════════════════════════════════════════════════════════════════════
+// MockJBProjects — minimal ERC721-like mock for ownerOf()
+// ═══════════════════════════════════════════════════════════════════════
+
+contract MockJBProjects {
+    mapping(uint256 tokenId => address owner) public _owners;
+
+    function setOwner(uint256 tokenId, address owner) external {
+        _owners[tokenId] = owner;
+    }
+
+    function ownerOf(uint256 tokenId) external view returns (address) {
+        return _owners[tokenId];
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// MockJBPermissions — minimal mock for hasPermission()
+// ═══════════════════════════════════════════════════════════════════════
+
+contract MockJBPermissions {
+    // operator => account => projectId => permissionId => granted
+    mapping(address => mapping(address => mapping(uint256 => mapping(uint256 => bool)))) public _permissions;
+
+    function setPermission(
+        address operator,
+        address account,
+        uint256 projectId,
+        uint256 permissionId,
+        bool granted
+    ) external {
+        _permissions[operator][account][projectId][permissionId] = granted;
+    }
+
+    function hasPermission(
+        address operator,
+        address account,
+        uint256 projectId,
+        uint256 permissionId,
+        bool /* includeRoot */,
+        bool /* includeWildcardProjectId */
+    ) external view returns (bool) {
+        return _permissions[operator][account][projectId][permissionId];
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // MockJBDirectory
 // ═══════════════════════════════════════════════════════════════════════
 
 contract MockJBDirectory {
+    address public _projects; // MockJBProjects address
+
     mapping(uint256 projectId => address controller) public _controllers;
     mapping(uint256 projectId => mapping(address token => address terminal)) public _terminals;
     mapping(uint256 projectId => address[]) public _terminalsList;
+
+    function setProjects(address projects) external {
+        _projects = projects;
+    }
 
     function setController(uint256 projectId, address controller) external {
         _controllers[projectId] = controller;
@@ -32,7 +84,7 @@ contract MockJBDirectory {
         _terminalsList[projectId].push(terminal);
     }
 
-    // Fallback handles controllerOf, primaryTerminalOf, terminalsOf
+    // Fallback handles controllerOf, primaryTerminalOf, terminalsOf, PROJECTS
     // because IJBDirectory.controllerOf returns IERC165, not address,
     // so we must use fallback to avoid selector conflicts with mismatched return types.
     fallback() external payable {
@@ -68,6 +120,15 @@ contract MockJBDirectory {
             bytes memory result = abi.encode(terminals);
             assembly {
                 return(add(result, 0x20), mload(result))
+            }
+        }
+
+        // PROJECTS() => 0x293c4999
+        if (sig == 0x293c4999) {
+            address projects = _projects;
+            assembly {
+                mstore(0x00, projects)
+                return(0x00, 0x20)
             }
         }
     }
@@ -432,8 +493,22 @@ contract MockJBTerminalStore {
     function currentReclaimableSurplusOf(
         uint256 projectId,
         uint256 cashOutCount,
-        uint256 /* currency */,
-        uint256 /* decimals */
+        uint256 /* totalSupply */,
+        uint256 /* surplus */
+    ) external view returns (uint256) {
+        uint256 surplus = surplusPerToken[projectId];
+        if (surplus == 0) return 0;
+        return (surplus * cashOutCount) / 1e18;
+    }
+
+    /// @dev Matches IJBTerminalStore.currentReclaimableSurplusOf(uint256,uint256,IJBTerminal[],JBAccountingContext[],uint256,uint256)
+    function currentReclaimableSurplusOf(
+        uint256 projectId,
+        uint256 cashOutCount,
+        IJBTerminal[] calldata /* terminals */,
+        JBAccountingContext[] calldata /* accountingContexts */,
+        uint256 /* decimals */,
+        uint256 /* currency */
     ) external view returns (uint256) {
         uint256 surplus = surplusPerToken[projectId];
         if (surplus == 0) return 0;

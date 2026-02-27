@@ -11,15 +11,15 @@ import {JBSplitHookContext} from "@bananapus/core/structs/JBSplitHookContext.sol
 /// @notice End-to-end lifecycle integration tests for UniV3DeploymentSplitHook.
 /// @dev Exercises the full protocol flow: accumulate -> deploy -> collect fees -> rebalance -> claim.
 contract IntegrationLifecycle is LPSplitHookTestBase {
-    // ─── Helpers ─────────────────────────────────────────────────────────
+    // --- Helpers -----------------------------------------------------------
 
     function _sortTokens(address tokenA, address tokenB) internal pure returns (address token0, address token1) {
         return tokenA < tokenB ? (tokenA, tokenB) : (tokenB, tokenA);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
     // 1. Full lifecycle: accumulate three times, then manually deploy
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
 
     /// @notice Accumulate project tokens across 3 separate splits, verify total tracked,
     ///         then manually deploy the pool and verify all state is updated.
@@ -36,8 +36,9 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
         terminalToken.approve(address(nfpm), type(uint256).max);
         vm.stopPrank();
 
-        // Deploy pool manually (allowed in accumulation stage)
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0);
+        // Deploy pool manually (owner required)
+        vm.prank(owner);
+        hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0, 0);
 
         // Verify pool was created
         address pool = hook.poolOf(PROJECT_ID, address(terminalToken));
@@ -49,46 +50,19 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
         // Verify tokenId was set for the pool
         uint256 tokenId = hook.tokenIdForPool(pool);
         assertTrue(tokenId != 0, "tokenIdForPool should be nonzero after deploy");
+
+        // Verify projectDeployed is set
+        assertTrue(hook.projectDeployed(PROJECT_ID), "projectDeployed should be true after deploy");
+
+        // Verify isPoolDeployed returns true
+        assertTrue(hook.isPoolDeployed(PROJECT_ID, address(terminalToken)), "isPoolDeployed should be true after deploy");
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 2. Full lifecycle: accumulate then auto-deploy via processSplitWith
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 2. Full lifecycle: deploy pool then collect and route LP fees
+    // -----------------------------------------------------------------------
 
-    /// @notice Accumulate tokens in accumulation stage, transition to deployment stage,
-    ///         then trigger auto-deploy by calling processSplitWith with new tokens.
-    function test_FullLifecycle_AutoDeploy() public {
-        // Accumulate in accumulation stage
-        _accumulateTokens(PROJECT_ID, 100e18);
-
-        // Approve tokens for NFPM
-        vm.startPrank(address(hook));
-        projectToken.approve(address(nfpm), type(uint256).max);
-        terminalToken.approve(address(nfpm), type(uint256).max);
-        vm.stopPrank();
-
-        // Enter deployment stage (weight below 10% threshold)
-        _enterDeploymentStage(PROJECT_ID);
-
-        // processSplitWith should auto-deploy the pool
-        projectToken.mint(address(hook), 10e18);
-        JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, 10e18);
-        vm.prank(address(controller));
-        hook.processSplitWith(context);
-
-        // Verify pool was created
-        address pool = hook.poolOf(PROJECT_ID, address(terminalToken));
-        assertTrue(pool != address(0), "poolOf should be nonzero after auto-deploy");
-
-        // Verify accumulated tokens were cleared (used for pool deployment)
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "accumulated should be 0 after auto-deploy");
-    }
-
-    // ─────────────────────────────────────────────────────────────────────
-    // 3. Full lifecycle: deploy pool then collect and route LP fees
-    // ─────────────────────────────────────────────────────────────────────
-
-    /// @notice Deploy a pool, enter deployment stage, configure collectable fees,
+    /// @notice Deploy a pool, configure collectable fees,
     ///         then collect and route them. Verify terminal token fees are routed via pay
     ///         and project token fees are burned.
     function test_FullLifecycle_DeployThenCollectFees() public {
@@ -96,9 +70,6 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
         address pool = hook.poolOf(PROJECT_ID, address(terminalToken));
         uint256 poolTokenId = hook.tokenIdForPool(pool);
-
-        // Enter deployment stage
-        _enterDeploymentStage(PROJECT_ID);
 
         // Determine token ordering for this pool
         bool terminalTokenIsToken0 = address(terminalToken) < address(projectToken);
@@ -127,11 +98,11 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
         assertGt(controller.burnCallCount(), burnCountBefore, "controller.burnTokensOf should be called for project token fees");
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 4. Full lifecycle: deploy pool then rebalance liquidity
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 3. Full lifecycle: deploy pool then rebalance liquidity
+    // -----------------------------------------------------------------------
 
-    /// @notice Deploy a pool, enter deployment stage, then rebalance liquidity.
+    /// @notice Deploy a pool, then rebalance liquidity.
     ///         Verify old position is burned and a new position is minted with a different tokenId.
     function test_FullLifecycle_DeployThenRebalance() public {
         // Deploy pool
@@ -139,9 +110,6 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
         address pool = hook.poolOf(PROJECT_ID, address(terminalToken));
         uint256 originalTokenId = hook.tokenIdForPool(pool);
         assertTrue(originalTokenId != 0, "original tokenId should be nonzero");
-
-        // Enter deployment stage
-        _enterDeploymentStage(PROJECT_ID);
 
         // Mint tokens to NFPM so decreaseLiquidity -> collect has tokens to give back
         projectToken.mint(address(nfpm), 50e18);
@@ -169,9 +137,9 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
         assertTrue(newTokenId != originalTokenId, "tokenIdForPool should change after rebalance");
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 5. Full lifecycle: deploy, collect fees, then claim fee tokens
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 4. Full lifecycle: deploy, collect fees, then claim fee tokens
+    // -----------------------------------------------------------------------
 
     /// @notice Deploy a pool, collect terminal token fees to generate claimable fee project tokens,
     ///         set operator, then claim fee tokens and verify beneficiary receives them.
@@ -180,9 +148,6 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
         address pool = hook.poolOf(PROJECT_ID, address(terminalToken));
         uint256 poolTokenId = hook.tokenIdForPool(pool);
-
-        // Enter deployment stage
-        _enterDeploymentStage(PROJECT_ID);
 
         // Determine token ordering
         bool terminalTokenIsToken0 = address(terminalToken) < address(projectToken);
@@ -236,9 +201,9 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
         assertEq(hook.claimableFeeTokens(PROJECT_ID), 0, "claimableFeeTokens should be 0 after claim");
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 6. Full lifecycle: multiple independent projects
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 5. Full lifecycle: multiple independent projects
+    // -----------------------------------------------------------------------
 
     /// @notice Set up two independent projects, accumulate and deploy pools for each,
     ///         verify they have independent pool addresses and token IDs.
@@ -277,6 +242,9 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
         );
         store.setSurplus(PROJECT_3, 0.5e18);
 
+        // Set project 3 ownership
+        jbProjects.setOwner(PROJECT_3, owner);
+
         // --- Accumulate for both projects ---
         _accumulateTokens(PROJECT_ID, 50e18);
 
@@ -296,9 +264,11 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
         terminalToken.approve(address(nfpm), type(uint256).max);
         vm.stopPrank();
 
-        // --- Deploy both pools ---
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0);
-        hook.deployPool(PROJECT_3, address(terminalToken), 0, 0);
+        // --- Deploy both pools (owner required) ---
+        vm.prank(owner);
+        hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0, 0);
+        vm.prank(owner);
+        hook.deployPool(PROJECT_3, address(terminalToken), 0, 0, 0);
 
         // --- Verify independent pools ---
         address pool1 = hook.poolOf(PROJECT_ID, address(terminalToken));
@@ -318,25 +288,27 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
         // Verify accumulated tokens were cleared for both
         assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "PROJECT_ID accumulated should be 0 after deploy");
         assertEq(hook.accumulatedProjectTokens(PROJECT_3), 0, "PROJECT_3 accumulated should be 0 after deploy");
+
+        // Verify both projects are marked as deployed
+        assertTrue(hook.projectDeployed(PROJECT_ID), "PROJECT_ID should be deployed");
+        assertTrue(hook.projectDeployed(PROJECT_3), "PROJECT_3 should be deployed");
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 7. Full lifecycle: tokens are burned after pool is deployed
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 6. Full lifecycle: tokens are burned after pool is deployed
+    // -----------------------------------------------------------------------
 
-    /// @notice After pool deployment, calling processSplitWith with new tokens in deployment
-    ///         stage should burn them rather than accumulate. Accumulated balance stays 0.
+    /// @notice After pool deployment, calling processSplitWith with new tokens should
+    ///         burn them rather than accumulate. Accumulated balance stays 0.
     function test_FullLifecycle_BurnAfterDeploy() public {
-        // Deploy pool
+        // Deploy pool (this sets projectDeployed[PROJECT_ID] = true)
         _accumulateAndDeploy(PROJECT_ID, 100e18);
 
         // Record burn count after deploy (deploy may burn leftovers)
         uint256 burnCountAfterDeploy = controller.burnCallCount();
 
-        // Enter deployment stage
-        _enterDeploymentStage(PROJECT_ID);
-
         // Send new tokens to hook and call processSplitWith
+        // Since projectDeployed is true, tokens should be burned
         uint256 newAmount = 50e18;
         projectToken.mint(address(hook), newAmount);
         JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, newAmount);
@@ -348,7 +320,7 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
         assertGt(
             controller.burnCallCount(),
             burnCountAfterDeploy,
-            "controller.burnTokensOf should be called in deployment stage"
+            "controller.burnTokensOf should be called after pool deployment"
         );
         assertEq(controller.lastBurnProjectId(), PROJECT_ID, "burn should target PROJECT_ID");
         assertEq(controller.lastBurnHolder(), address(hook), "burn holder should be the hook");
@@ -357,13 +329,13 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
         assertEq(
             hook.accumulatedProjectTokens(PROJECT_ID),
             0,
-            "accumulatedProjectTokens should remain 0 after burn in deployment stage"
+            "accumulatedProjectTokens should remain 0 after burn"
         );
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 8. Fuzz lifecycle: various accumulation amounts deploy correctly
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 7. Fuzz lifecycle: various accumulation amounts deploy correctly
+    // -----------------------------------------------------------------------
 
     /// @notice Fuzz the accumulation amount. For any amount in [1e18, 1000e18], the hook should
     ///         accumulate correctly and deploy a pool that clears the accumulated balance.
@@ -384,8 +356,9 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
         terminalToken.approve(address(nfpm), type(uint256).max);
         vm.stopPrank();
 
-        // Deploy pool
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0);
+        // Deploy pool (owner required)
+        vm.prank(owner);
+        hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0, 0);
 
         // Verify pool was created
         address pool = hook.poolOf(PROJECT_ID, address(terminalToken));
@@ -401,5 +374,8 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
         // Verify tokenId was set
         uint256 tokenId = hook.tokenIdForPool(pool);
         assertTrue(tokenId != 0, "tokenIdForPool should be nonzero after deploy");
+
+        // Verify project is marked deployed
+        assertTrue(hook.projectDeployed(PROJECT_ID), "projectDeployed should be true");
     }
 }

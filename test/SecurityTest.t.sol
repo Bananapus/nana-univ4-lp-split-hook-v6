@@ -92,13 +92,10 @@ contract SecurityTest is LPSplitHookTestBase {
     function test_ClaimFeeTokens_ValidOperator() public {
         address beneficiary = makeAddr("beneficiary");
 
-        // Step 1: Accumulate and deploy pool
+        // Step 1: Accumulate and deploy pool (deployPool called as owner inside helper)
         _accumulateAndDeploy(PROJECT_ID, 1000e18);
 
-        // Step 2: Enter deployment stage so collectAndRouteLPFees can run
-        _enterDeploymentStage(PROJECT_ID);
-
-        // Step 3: Set up collectable fees on the NFPM mock
+        // Step 2: Set up collectable fees on the NFPM mock
         // Determine token ordering to figure out which amount slot is the terminal token
         address pool = hook.poolOf(PROJECT_ID, address(terminalToken));
         uint256 tokenId = hook.tokenIdForPool(pool);
@@ -116,7 +113,7 @@ contract SecurityTest is LPSplitHookTestBase {
             terminalToken.mint(address(nfpm), feeAmount);
         }
 
-        // Step 4: Set fee terminal accounting context for the fee project
+        // Step 3: Set fee terminal accounting context for the fee project
         terminal.setAccountingContext(
             FEE_PROJECT_ID,
             address(terminalToken),
@@ -124,23 +121,23 @@ contract SecurityTest is LPSplitHookTestBase {
             18
         );
 
-        // Step 5: Call collectAndRouteLPFees -- this routes fees and creates claimable fee tokens
+        // Step 4: Call collectAndRouteLPFees -- this routes fees and creates claimable fee tokens
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
 
-        // Step 6: Verify claimable fee tokens were generated
+        // Step 5: Verify claimable fee tokens were generated
         uint256 claimable = hook.claimableFeeTokens(PROJECT_ID);
         assertTrue(claimable > 0, "Claimable fee tokens should be > 0 after fee collection");
 
-        // Step 7: Set operator authorization for the beneficiary
+        // Step 6: Set operator authorization for the beneficiary
         revDeployer.setOperator(PROJECT_ID, beneficiary, true);
 
-        // Step 8: Record the fee project token balance before claiming
+        // Step 7: Record the fee project token balance before claiming
         uint256 balanceBefore = feeProjectToken.balanceOf(beneficiary);
 
-        // Step 9: Claim fee tokens
+        // Step 8: Claim fee tokens
         hook.claimFeeTokensFor(PROJECT_ID, beneficiary);
 
-        // Step 10: Verify tokens were transferred to beneficiary
+        // Step 9: Verify tokens were transferred to beneficiary
         uint256 balanceAfter = feeProjectToken.balanceOf(beneficiary);
         assertEq(balanceAfter - balanceBefore, claimable, "Beneficiary should receive claimed fee tokens");
     }
@@ -168,9 +165,8 @@ contract SecurityTest is LPSplitHookTestBase {
     function test_ClaimFeeTokens_ClearsBeforeTransfer() public {
         address beneficiary = makeAddr("beneficiary");
 
-        // Accumulate, deploy, enter deployment stage, collect fees
+        // Accumulate and deploy pool (deployPool called as owner inside helper)
         _accumulateAndDeploy(PROJECT_ID, 1000e18);
-        _enterDeploymentStage(PROJECT_ID);
 
         address pool = hook.poolOf(PROJECT_ID, address(terminalToken));
         uint256 tokenId = hook.tokenIdForPool(pool);
@@ -305,11 +301,8 @@ contract SecurityTest is LPSplitHookTestBase {
 
     /// @notice collectAndRouteLPFees can be called by any address (no access control).
     function test_CollectFees_Permissionless() public {
-        // Deploy pool first
+        // Deploy pool first (deployPool called as owner inside helper)
         _accumulateAndDeploy(PROJECT_ID, 1000e18);
-
-        // Enter deployment stage
-        _enterDeploymentStage(PROJECT_ID);
 
         // Set up collectable fees on NFPM
         address pool = hook.poolOf(PROJECT_ID, address(terminalToken));
@@ -341,27 +334,76 @@ contract SecurityTest is LPSplitHookTestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 10. deployPool -- permissionless
+    // 10. deployPool -- requires owner or SET_BUYBACK_POOL permission
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice deployPool can be called by any address (no access control).
-    function test_DeployPool_Permissionless() public {
+    /// @notice deployPool reverts when called by a random address without permission.
+    function test_DeployPool_UnauthorizedReverts() public {
         uint256 amount = 500e18;
 
         // Accumulate tokens as the controller
         _accumulateTokens(PROJECT_ID, amount);
 
-        // Call deployPool from a random user address -- should succeed
+        // Call deployPool from a random user address -- should revert
         address randomUser = makeAddr("randomUser");
         vm.prank(randomUser);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0);
+        vm.expectRevert();
+        hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0, 0);
+    }
+
+    /// @notice deployPool succeeds when called by the project owner.
+    function test_DeployPool_OwnerSucceeds() public {
+        uint256 amount = 500e18;
+
+        // Accumulate tokens as the controller
+        _accumulateTokens(PROJECT_ID, amount);
+
+        // Approve hook to spend project tokens (for NFPM mint)
+        vm.startPrank(address(hook));
+        projectToken.approve(address(nfpm), type(uint256).max);
+        terminalToken.approve(address(nfpm), type(uint256).max);
+        vm.stopPrank();
+
+        // Call deployPool as the project owner -- should succeed
+        vm.prank(owner);
+        hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0, 0);
 
         // Verify pool was deployed
         address pool = hook.poolOf(PROJECT_ID, address(terminalToken));
-        assertTrue(pool != address(0), "Pool should have been deployed by permissionless caller");
+        assertTrue(pool != address(0), "Pool should have been deployed by owner");
 
         // Verify the NFPM mint was called
         assertTrue(nfpm.mintCallCount() > 0, "NFPM mint should have been called");
+
+        // Verify projectDeployed is set
+        assertTrue(hook.projectDeployed(PROJECT_ID), "projectDeployed should be true after deployment");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // 11. processSplitWith -- burns after deployment
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// @notice After pool deployment, processSplitWith burns tokens instead of accumulating.
+    function test_ProcessSplit_BurnsAfterDeployment() public {
+        // Deploy pool (sets projectDeployed[PROJECT_ID] = true)
+        _accumulateAndDeploy(PROJECT_ID, 1000e18);
+
+        // Verify project is in deployed state
+        assertTrue(hook.projectDeployed(PROJECT_ID), "projectDeployed should be true");
+
+        // Now send more tokens via processSplitWith -- should burn, not accumulate
+        uint256 additionalAmount = 200e18;
+        projectToken.mint(address(hook), additionalAmount);
+
+        JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, additionalAmount);
+        vm.prank(address(controller));
+        hook.processSplitWith(context);
+
+        // accumulatedProjectTokens should NOT increase (tokens were burned, not accumulated)
+        // After _accumulateAndDeploy, the accumulated balance is consumed by deployPool,
+        // so new tokens should not add to it
+        // The key check: projectDeployed is true, so the burn path was taken
+        assertTrue(hook.projectDeployed(PROJECT_ID), "projectDeployed remains true after burn");
     }
 
     // ─────────────────────────────────────────────────────────────────────

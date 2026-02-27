@@ -3,12 +3,13 @@ pragma solidity 0.8.23;
 
 import {LPSplitHookTestBase} from "./TestBase.sol";
 import {UniV3DeploymentSplitHook} from "../src/UniV3DeploymentSplitHook.sol";
+import {IJBPermissions} from "@bananapus/core/interfaces/IJBPermissions.sol";
 
 /// @notice Tests for UniV3DeploymentSplitHook constructor behavior.
 /// @dev Verifies all immutables are set correctly, zero-address checks revert,
 ///      fee percent validation works, and feeProjectId=0 skips the controllerOf check.
 contract ConstructorTest is LPSplitHookTestBase {
-    /// @notice Verify all 7 immutables are correctly set after construction.
+    /// @notice Verify all immutables are correctly set after construction.
     function test_Constructor_SetsAllImmutables() public view {
         assertEq(hook.DIRECTORY(), address(directory), "DIRECTORY mismatch");
         assertEq(hook.TOKENS(), address(jbTokens), "TOKENS mismatch");
@@ -30,6 +31,7 @@ contract ConstructorTest is LPSplitHookTestBase {
         new UniV3DeploymentSplitHook(
             owner,
             address(0), // directory = zero
+            IJBPermissions(address(permissions)),
             address(jbTokens),
             address(v3Factory),
             address(nfpm),
@@ -45,6 +47,7 @@ contract ConstructorTest is LPSplitHookTestBase {
         new UniV3DeploymentSplitHook(
             owner,
             address(directory),
+            IJBPermissions(address(permissions)),
             address(0), // tokens = zero
             address(v3Factory),
             address(nfpm),
@@ -60,6 +63,7 @@ contract ConstructorTest is LPSplitHookTestBase {
         new UniV3DeploymentSplitHook(
             owner,
             address(directory),
+            IJBPermissions(address(permissions)),
             address(jbTokens),
             address(0), // uniswapV3Factory = zero
             address(nfpm),
@@ -75,6 +79,7 @@ contract ConstructorTest is LPSplitHookTestBase {
         new UniV3DeploymentSplitHook(
             owner,
             address(directory),
+            IJBPermissions(address(permissions)),
             address(jbTokens),
             address(v3Factory),
             address(0), // nfpm = zero
@@ -90,6 +95,7 @@ contract ConstructorTest is LPSplitHookTestBase {
         new UniV3DeploymentSplitHook(
             owner,
             address(directory),
+            IJBPermissions(address(permissions)),
             address(jbTokens),
             address(v3Factory),
             address(nfpm),
@@ -105,6 +111,7 @@ contract ConstructorTest is LPSplitHookTestBase {
         new UniV3DeploymentSplitHook(
             owner,
             address(directory),
+            IJBPermissions(address(permissions)),
             address(jbTokens),
             address(v3Factory),
             address(nfpm),
@@ -120,6 +127,7 @@ contract ConstructorTest is LPSplitHookTestBase {
         UniV3DeploymentSplitHook noFeeHook = new UniV3DeploymentSplitHook(
             owner,
             address(directory),
+            IJBPermissions(address(permissions)),
             address(jbTokens),
             address(v3Factory),
             address(nfpm),

@@ -9,7 +9,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 /// @notice Tests for UniV3DeploymentSplitHook fee routing logic.
 /// @dev Covers collectAndRouteLPFees, _routeFeesToProject, _routeCollectedFees, and claimFeeTokensFor.
 contract FeeRoutingTest is LPSplitHookTestBase {
-    // ─── Test State ──────────────────────────────────────────────────────
+    // --- Test State --------------------------------------------------------
 
     uint256 public poolTokenId;
     address public pool;
@@ -25,14 +25,11 @@ contract FeeRoutingTest is LPSplitHookTestBase {
         pool = hook.poolOf(PROJECT_ID, address(terminalToken));
         poolTokenId = hook.tokenIdForPool(pool);
 
-        // Enter deployment stage so collectAndRouteLPFees works
-        _enterDeploymentStage(PROJECT_ID);
-
         // Determine token ordering for this pool
         terminalTokenIsToken0 = address(terminalToken) < address(projectToken);
     }
 
-    // ─── Helpers ─────────────────────────────────────────────────────────
+    // --- Helpers -----------------------------------------------------------
 
     /// @notice Set collectable fees on the terminal token side of the pool and fund the NFPM.
     function _setTerminalTokenFees(uint256 amount) internal {
@@ -69,9 +66,9 @@ contract FeeRoutingTest is LPSplitHookTestBase {
         projectToken.mint(address(nfpm), projectAmount);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
     // 1. collectAndRouteLPFees collects from NFPM
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
 
     /// @notice Verifies that collectAndRouteLPFees calls NFPM.collect.
     function test_CollectFees_CollectsFromNFPM() public {
@@ -85,9 +82,9 @@ contract FeeRoutingTest is LPSplitHookTestBase {
         assertGt(collectCountAfter, collectCountBefore, "NFPM collect should have been called");
     }
 
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
     // 2. Terminal token fees are routed via pay and addToBalance
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
 
     /// @notice When terminal token fees are collected, they should be routed:
     /// fee portion via terminal.pay (to fee project) and remainder via terminal.addToBalanceOf (to project).
@@ -108,9 +105,9 @@ contract FeeRoutingTest is LPSplitHookTestBase {
         );
     }
 
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
     // 3. Project token fees are burned
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
 
     /// @notice When project token fees are collected, they should be burned via the controller.
     function test_CollectFees_BurnsProjectTokenFees() public {
@@ -126,13 +123,13 @@ contract FeeRoutingTest is LPSplitHookTestBase {
         assertEq(controller.lastBurnHolder(), address(hook), "Burn holder should be the hook");
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 4. collectAndRouteLPFees reverts during accumulation stage
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 4. collectAndRouteLPFees reverts when no pool deployed
+    // -----------------------------------------------------------------------
 
-    /// @notice collectAndRouteLPFees should revert if the project is still in accumulation stage.
-    function test_CollectFees_RevertsInAccumulation() public {
-        // Use a fresh project that is still in accumulation stage
+    /// @notice collectAndRouteLPFees should revert if no pool has been deployed for the project.
+    function test_CollectFees_RevertsIfNoPoolDeployed() public {
+        // Use a fresh project that has no pool deployed
         uint256 freshProjectId = 3;
         controller.setWeight(freshProjectId, DEFAULT_WEIGHT);
         controller.setFirstWeight(freshProjectId, DEFAULT_FIRST_WEIGHT);
@@ -142,15 +139,15 @@ contract FeeRoutingTest is LPSplitHookTestBase {
         hook.collectAndRouteLPFees(freshProjectId, address(terminalToken));
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 5. collectAndRouteLPFees reverts if no pool exists
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 5. collectAndRouteLPFees reverts if no pool exists for token pair
+    // -----------------------------------------------------------------------
 
-    /// @notice collectAndRouteLPFees should revert for a project in deployment stage but without a pool.
+    /// @notice collectAndRouteLPFees should revert for a deployed project but without a pool for the given token.
     function test_CollectFees_RevertsIfNoPool() public {
-        // Create a project in deployment stage but without a deployed pool
+        // Create a project without a deployed pool for a specific token
         uint256 noPoolProjectId = 4;
-        controller.setWeight(noPoolProjectId, 1); // below threshold
+        controller.setWeight(noPoolProjectId, 1);
         controller.setFirstWeight(noPoolProjectId, DEFAULT_FIRST_WEIGHT);
         _setDirectoryController(noPoolProjectId, address(controller));
 
@@ -158,9 +155,9 @@ contract FeeRoutingTest is LPSplitHookTestBase {
         hook.collectAndRouteLPFees(noPoolProjectId, address(terminalToken));
     }
 
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
     // 6. collectAndRouteLPFees reverts if pool exists but tokenId is 0
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
 
     /// @notice collectAndRouteLPFees should revert when pool is set but tokenId mapping is cleared.
     function test_CollectFees_RevertsIfNoTokenId() public {
@@ -176,9 +173,9 @@ contract FeeRoutingTest is LPSplitHookTestBase {
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
     }
 
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
     // 7. Fee split arithmetic: 38% to fee project, 62% to original project
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
 
     /// @notice Terminal token fees should be split: 38% paid to fee project, 62% added to project balance.
     function test_RouteFees_SplitsBetweenFeeAndOriginal() public {
@@ -199,9 +196,9 @@ contract FeeRoutingTest is LPSplitHookTestBase {
         assertGt(terminal.addToBalanceCallCount(), 0, "addToBalance should have been called for remainder");
     }
 
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
     // 8. Zero collectable fees result in no routing
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
 
     /// @notice When there are zero collectable fees, no pay or addToBalance calls should occur.
     function test_RouteFees_ZeroAmount_NoOp() public {
@@ -219,9 +216,9 @@ contract FeeRoutingTest is LPSplitHookTestBase {
         );
     }
 
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
     // 9. Fee routing tracks claimable fee tokens
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
 
     /// @notice After routing fees, claimableFeeTokens[PROJECT_ID] should be updated with minted fee tokens.
     function test_RouteFees_TracksFeeTokens() public {
@@ -244,9 +241,9 @@ contract FeeRoutingTest is LPSplitHookTestBase {
         );
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 10. claimFeeTokensFor — valid operator receives tokens
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 10. claimFeeTokensFor -- valid operator receives tokens
+    // -----------------------------------------------------------------------
 
     /// @notice A valid revnet operator can claim accumulated fee tokens.
     function test_ClaimFeeTokens_ValidOperator() public {
@@ -273,9 +270,9 @@ contract FeeRoutingTest is LPSplitHookTestBase {
         );
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 11. claimFeeTokensFor — reverts for non-operator
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 11. claimFeeTokensFor -- reverts for non-operator
+    // -----------------------------------------------------------------------
 
     /// @notice claimFeeTokensFor should revert when beneficiary is not a valid revnet operator.
     function test_ClaimFeeTokens_InvalidOperator_Reverts() public {
@@ -289,9 +286,9 @@ contract FeeRoutingTest is LPSplitHookTestBase {
         hook.claimFeeTokensFor(PROJECT_ID, user);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // 12. claimFeeTokensFor — clears balance after claim
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
+    // 12. claimFeeTokensFor -- clears balance after claim
+    // -----------------------------------------------------------------------
 
     /// @notice After claiming, claimableFeeTokens for the project should be zero.
     function test_ClaimFeeTokens_ClearsBalance() public {
@@ -309,9 +306,9 @@ contract FeeRoutingTest is LPSplitHookTestBase {
         assertEq(hook.claimableFeeTokens(PROJECT_ID), 0, "claimableFeeTokens should be zero after claim");
     }
 
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
     // 13. collectAndRouteLPFees emits LPFeesRouted event
-    // ─────────────────────────────────────────────────────────────────────
+    // -----------------------------------------------------------------------
 
     /// @notice collectAndRouteLPFees should emit the LPFeesRouted event with correct parameters.
     function test_CollectFees_EmitsLPFeesRouted() public {

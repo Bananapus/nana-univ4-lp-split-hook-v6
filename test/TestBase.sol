@@ -4,6 +4,7 @@ pragma solidity 0.8.23;
 import "forge-std/Test.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IJBPermissions} from "@bananapus/core/interfaces/IJBPermissions.sol";
 import {JBSplit} from "@bananapus/core/structs/JBSplit.sol";
 import {JBSplitHookContext} from "@bananapus/core/structs/JBSplitHookContext.sol";
 import {JBAccountingContext} from "@bananapus/core/structs/JBAccountingContext.sol";
@@ -22,7 +23,9 @@ import {
     MockJBPrices,
     MockJBTerminalStore,
     MockREVDeployer,
-    MockUniswapV3Factory
+    MockUniswapV3Factory,
+    MockJBProjects,
+    MockJBPermissions
 } from "./mock/MockJBContracts.sol";
 
 /// @notice Shared test harness for UniV3DeploymentSplitHook tests
@@ -42,6 +45,8 @@ contract LPSplitHookTestBase is Test {
     MockUniswapV3Factory public v3Factory;
     MockNFPM public nfpm;
     MockWETH public weth;
+    MockJBProjects public jbProjects;
+    MockJBPermissions public permissions;
 
     // ─── Test Tokens ────────────────────────────────────────────────────
     MockERC20 public projectToken;
@@ -80,6 +85,8 @@ contract LPSplitHookTestBase is Test {
         prices = new MockJBPrices();
         store = new MockJBTerminalStore();
         revDeployer = new MockREVDeployer();
+        jbProjects = new MockJBProjects();
+        permissions = new MockJBPermissions();
 
         // Deploy mock Uniswap contracts
         v3Factory = new MockUniswapV3Factory();
@@ -97,11 +104,15 @@ contract LPSplitHookTestBase is Test {
         controller.setFirstWeight(FEE_PROJECT_ID, 100e18);
 
         // Wire directory
-        // Using fallback-based mock, we set the storage directly
+        directory.setProjects(address(jbProjects));
         _setDirectoryController(PROJECT_ID, address(controller));
         _setDirectoryController(FEE_PROJECT_ID, address(controller));
         _setDirectoryTerminal(PROJECT_ID, address(terminalToken), address(terminal));
         _setDirectoryTerminal(FEE_PROJECT_ID, address(terminalToken), address(terminal));
+
+        // Wire project ownership
+        jbProjects.setOwner(PROJECT_ID, owner);
+        jbProjects.setOwner(FEE_PROJECT_ID, owner);
 
         // Wire terminal
         terminal.setStore(address(store));
@@ -138,6 +149,7 @@ contract LPSplitHookTestBase is Test {
         hook = new UniV3DeploymentSplitHook(
             owner,
             address(directory),
+            IJBPermissions(address(permissions)),
             address(jbTokens),
             address(v3Factory),
             address(nfpm),
@@ -151,21 +163,21 @@ contract LPSplitHookTestBase is Test {
 
     function _setDirectoryController(uint256 projectId, address ctrl) internal {
         directory._controllers(projectId); // Ensure storage slot exists
-        // Use vm.store to set the mapping
-        bytes32 slot = keccak256(abi.encode(projectId, uint256(0))); // slot 0 = _controllers
+        // Use vm.store to set the mapping — slot 1 now (_projects at slot 0, _controllers at slot 1)
+        bytes32 slot = keccak256(abi.encode(projectId, uint256(1)));
         vm.store(address(directory), slot, bytes32(uint256(uint160(ctrl))));
     }
 
     function _setDirectoryTerminal(uint256 projectId, address token, address term) internal {
-        // _terminals is at slot 1 (after _controllers at slot 0)
-        bytes32 innerSlot = keccak256(abi.encode(projectId, uint256(1)));
+        // _terminals is at slot 2 (after _projects at slot 0, _controllers at slot 1)
+        bytes32 innerSlot = keccak256(abi.encode(projectId, uint256(2)));
         bytes32 slot = keccak256(abi.encode(token, innerSlot));
         vm.store(address(directory), slot, bytes32(uint256(uint160(term))));
     }
 
     function _addDirectoryTerminal(uint256 projectId, address term) internal {
-        // _terminalsList is at slot 2
-        bytes32 arraySlot = keccak256(abi.encode(projectId, uint256(2)));
+        // _terminalsList is at slot 3
+        bytes32 arraySlot = keccak256(abi.encode(projectId, uint256(3)));
         // Read current length
         uint256 currentLen = uint256(vm.load(address(directory), arraySlot));
         // Set new length
@@ -209,13 +221,7 @@ contract LPSplitHookTestBase is Test {
         return _buildContext(projectId, address(projectToken), amount, 1);
     }
 
-    // ─── Stage Transition Helper ────────────────────────────────────────
-
-    /// @notice Set weight below 10% threshold to enter deployment stage
-    function _enterDeploymentStage(uint256 projectId) internal {
-        uint256 threshold = DEFAULT_FIRST_WEIGHT / 10;
-        controller.setWeight(projectId, threshold - 1);
-    }
+    // ─── Accumulation & Deployment Helpers ───────────────────────────────
 
     /// @notice Accumulate tokens by calling processSplitWith from controller
     function _accumulateTokens(uint256 projectId, uint256 amount) internal {
@@ -230,9 +236,9 @@ contract LPSplitHookTestBase is Test {
         hook.processSplitWith(context);
     }
 
-    /// @notice Accumulate and deploy pool for a project
+    /// @notice Accumulate and deploy pool for a project (called as owner)
     function _accumulateAndDeploy(uint256 projectId, uint256 amount) internal {
-        // Accumulate tokens in accumulation stage
+        // Accumulate tokens
         _accumulateTokens(projectId, amount);
 
         // Approve hook to spend project tokens (for NFPM mint)
@@ -241,7 +247,8 @@ contract LPSplitHookTestBase is Test {
         terminalToken.approve(address(nfpm), type(uint256).max);
         vm.stopPrank();
 
-        // Deploy pool manually
-        hook.deployPool(projectId, address(terminalToken), 0, 0);
+        // Deploy pool as owner
+        vm.prank(owner);
+        hook.deployPool(projectId, address(terminalToken), 0, 0, 0);
     }
 }
