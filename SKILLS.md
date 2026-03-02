@@ -35,8 +35,8 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 
 | Dependency | Import | Used For |
 |------------|--------|----------|
-| `@bananapus/core-v5` | `IJBController`, `IJBDirectory`, `IJBMultiTerminal`, `IJBPermissions`, `IJBSplitHook`, `IJBTerminal`, `IJBTerminalStore`, `IJBTokens`, `JBPermissioned`, `JBSplitHookContext`, `JBRuleset`, `JBRulesetMetadata`, `JBRulesetMetadataResolver`, `JBAccountingContext`, `JBConstants` | Full Juicebox protocol interaction: controller queries, terminal pay/cashOut/addToBalance, permission checks, ruleset weight and pricing |
-| `@bananapus/permission-ids-v5` | `JBPermissionIds` | `SET_BUYBACK_POOL` permission ID for `deployPool` access control |
+| `@bananapus/core-v6` | `IJBController`, `IJBDirectory`, `IJBMultiTerminal`, `IJBPermissions`, `IJBSplitHook`, `IJBTerminal`, `IJBTerminalStore`, `IJBTokens`, `JBPermissioned`, `JBSplitHookContext`, `JBRuleset`, `JBRulesetMetadata`, `JBRulesetMetadataResolver`, `JBAccountingContext`, `JBConstants` | Full Juicebox protocol interaction: controller queries, terminal pay/cashOut/addToBalance, permission checks, ruleset weight and pricing |
+| `@bananapus/permission-ids-v6` | `JBPermissionIds` | `SET_BUYBACK_POOL` permission ID for `deployPool` access control |
 | `@openzeppelin/contracts` | `IERC20`, `IERC20Metadata`, `SafeERC20`, `Ownable`, `ERC2771Context`, `Context` | Token operations, ownership, meta-transactions |
 | `@prb/math` | `mulDiv`, `sqrt` | Overflow-safe multiplication and square root for sqrtPriceX96 calculations |
 | `@uniswap/v3-periphery-flattened` | `INonfungiblePositionManager` | V3 position management: `createAndInitializePoolIfNecessary`, `mint`, `collect`, `decreaseLiquidity`, `burn`, `unwrapWETH9` |
@@ -70,12 +70,12 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 - **Cash-out fraction is geometrically optimized, not 50/50.** `_computeOptimalCashOutAmount` uses V3 concentrated liquidity math to compute the exact ratio needed, typically 15-30%. Safety-capped at 50%.
 - **Pool initialization price is the geometric mean of [cashOutRate, issuanceRate] in tick space.** This centers the initial price in the LP range, creating a balanced position. Falls back to issuance rate if cash-out rate is 0 or ticks are equal.
 - **One LP position per pool.** The contract manages a single NFT position per V3 pool. Rebalancing burns the old NFT and mints a new one.
-- **Pragma is `0.8.23`** (not ^0.8.24 like the V4 hook repo), matching nana-core-v5.
+- **Pragma is `0.8.23`** (not ^0.8.24 like the V4 hook repo), matching nana-core-v6.
 
 ## Example Integration
 
 ```solidity
-import {UniV3DeploymentSplitHook} from "nana-lp-split-hook-v5/src/UniV3DeploymentSplitHook.sol";
+import {UniV3DeploymentSplitHook} from "nana-lp-split-hook-v6/src/UniV3DeploymentSplitHook.sol";
 
 // Deploy the split hook
 UniV3DeploymentSplitHook hook = new UniV3DeploymentSplitHook(
