@@ -9,13 +9,13 @@ remappings = [
     "@sphinx-labs/contracts/=lib/nana-core/lib/sphinx/packages/contracts/contracts/foundry/",
     "@bananapus/permission-ids/=node_modules/@bananapus/permission-ids/",
     "@bananapus/permission-ids-v5/=node_modules/@bananapus/permission-ids/",
-    "@uniswap/v3-core=lib/v3-core/contracts",
-    "@uniswap/v3-core-patched=lib/v3-core-patched",
-    "@uniswap/v3-periphery-flattened=lib/v3-periphery-flattened",
-    "@uniswap/permit2=lib/permit2",
+    "@uniswap/v4-core/=lib/v4-core/",
+    "@uniswap/v4-periphery/=lib/v4-periphery/",
+    "@uniswap/permit2/=lib/permit2/",
     "@prb/math=lib/prb-math",
 ]
-# Required to avoid stack too deep for invoking INonfungiblePositionManager.position() as per https://github.com/Uniswap/v3-periphery/issues/273
+solc = '0.8.26'
+evm_version = 'cancun'
 optimizer_runs=1000
 via_ir=true
 

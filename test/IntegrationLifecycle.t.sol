@@ -1,16 +1,20 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.23;
+pragma solidity 0.8.26;
 
 import {LPSplitHookTestBase} from "./TestBase.sol";
-import {UniV3DeploymentSplitHook} from "../src/UniV3DeploymentSplitHook.sol";
-import {IUniV3DeploymentSplitHook} from "../src/interfaces/IUniV3DeploymentSplitHook.sol";
+import {UniV4DeploymentSplitHook} from "../src/UniV4DeploymentSplitHook.sol";
+import {IUniV4DeploymentSplitHook} from "../src/interfaces/IUniV4DeploymentSplitHook.sol";
 import {MockERC20} from "./mock/MockERC20.sol";
-import {JBAccountingContext} from "@bananapus/core/structs/JBAccountingContext.sol";
-import {JBSplitHookContext} from "@bananapus/core/structs/JBSplitHookContext.sol";
+import {JBAccountingContext} from "@bananapus/core-v5/src/structs/JBAccountingContext.sol";
+import {JBSplitHookContext} from "@bananapus/core-v5/src/structs/JBSplitHookContext.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 
-/// @notice End-to-end lifecycle integration tests for UniV3DeploymentSplitHook.
+/// @notice End-to-end lifecycle integration tests for UniV4DeploymentSplitHook.
 /// @dev Exercises the full protocol flow: accumulate -> deploy -> collect fees -> rebalance -> claim.
 contract IntegrationLifecycle is LPSplitHookTestBase {
+    using PoolIdLibrary for PoolKey;
+
     // --- Helpers -----------------------------------------------------------
 
     function _sortTokens(address tokenA, address tokenB) internal pure returns (address token0, address token1) {
@@ -30,10 +34,10 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
         _accumulateTokens(PROJECT_ID, 30e18);
         assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 90e18, "accumulated should be 90e18 after 3 deposits");
 
-        // Approve tokens for NFPM (needed for mint transferFrom)
+        // Approve tokens for PositionManager via Permit2 path
         vm.startPrank(address(hook));
-        projectToken.approve(address(nfpm), type(uint256).max);
-        terminalToken.approve(address(nfpm), type(uint256).max);
+        projectToken.approve(address(permit2), type(uint256).max);
+        terminalToken.approve(address(permit2), type(uint256).max);
         vm.stopPrank();
 
         // Deploy pool manually (owner required)
@@ -41,14 +45,15 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
         hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0, 0);
 
         // Verify pool was created
-        address pool = hook.poolOf(PROJECT_ID, address(terminalToken));
-        assertTrue(pool != address(0), "poolOf should be nonzero after deploy");
+        assertTrue(hook.isPoolDeployed(PROJECT_ID, address(terminalToken)), "isPoolDeployed should be true after deploy");
 
         // Verify accumulated tokens were cleared
         assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "accumulated should be 0 after deploy");
 
         // Verify tokenId was set for the pool
-        uint256 tokenId = hook.tokenIdForPool(pool);
+        PoolKey memory poolKey = hook.poolKeyOf(PROJECT_ID, address(terminalToken));
+        PoolId poolId = poolKey.toId();
+        uint256 tokenId = hook.tokenIdForPool(poolId);
         assertTrue(tokenId != 0, "tokenIdForPool should be nonzero after deploy");
 
         // Verify projectDeployed is set
@@ -68,22 +73,23 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
     function test_FullLifecycle_DeployThenCollectFees() public {
         // Deploy pool
         _accumulateAndDeploy(PROJECT_ID, 100e18);
-        address pool = hook.poolOf(PROJECT_ID, address(terminalToken));
-        uint256 poolTokenId = hook.tokenIdForPool(pool);
+        PoolKey memory poolKey = hook.poolKeyOf(PROJECT_ID, address(terminalToken));
+        PoolId poolId = poolKey.toId();
+        uint256 poolTokenId = hook.tokenIdForPool(poolId);
 
         // Determine token ordering for this pool
         bool terminalTokenIsToken0 = address(terminalToken) < address(projectToken);
 
-        // Set collectable terminal token fees on NFPM and fund it
+        // Set collectable terminal token fees on PositionManager and fund it
         uint256 terminalFeeAmount = 10e18;
         uint256 projectFeeAmount = 5e18;
         if (terminalTokenIsToken0) {
-            nfpm.setCollectableFees(poolTokenId, terminalFeeAmount, projectFeeAmount);
+            positionManager.setCollectableFees(poolTokenId, terminalFeeAmount, projectFeeAmount);
         } else {
-            nfpm.setCollectableFees(poolTokenId, projectFeeAmount, terminalFeeAmount);
+            positionManager.setCollectableFees(poolTokenId, projectFeeAmount, terminalFeeAmount);
         }
-        terminalToken.mint(address(nfpm), terminalFeeAmount);
-        projectToken.mint(address(nfpm), projectFeeAmount);
+        terminalToken.mint(address(positionManager), terminalFeeAmount);
+        projectToken.mint(address(positionManager), projectFeeAmount);
 
         uint256 payCountBefore = terminal.payCallCount();
         uint256 burnCountBefore = controller.burnCallCount();
@@ -107,32 +113,33 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
     function test_FullLifecycle_DeployThenRebalance() public {
         // Deploy pool
         _accumulateAndDeploy(PROJECT_ID, 100e18);
-        address pool = hook.poolOf(PROJECT_ID, address(terminalToken));
-        uint256 originalTokenId = hook.tokenIdForPool(pool);
+        PoolKey memory poolKey = hook.poolKeyOf(PROJECT_ID, address(terminalToken));
+        PoolId poolId = poolKey.toId();
+        uint256 originalTokenId = hook.tokenIdForPool(poolId);
         assertTrue(originalTokenId != 0, "original tokenId should be nonzero");
 
-        // Mint tokens to NFPM so decreaseLiquidity -> collect has tokens to give back
-        projectToken.mint(address(nfpm), 50e18);
-        terminalToken.mint(address(nfpm), 50e18);
+        // Mint tokens to PositionManager so decreaseLiquidity -> collect has tokens to give back
+        projectToken.mint(address(positionManager), 50e18);
+        terminalToken.mint(address(positionManager), 50e18);
 
-        // Approve tokens from hook for new NFPM mint
+        // Approve tokens from hook for new PositionManager mint via Permit2
         vm.startPrank(address(hook));
-        projectToken.approve(address(nfpm), type(uint256).max);
-        terminalToken.approve(address(nfpm), type(uint256).max);
+        projectToken.approve(address(permit2), type(uint256).max);
+        terminalToken.approve(address(permit2), type(uint256).max);
         vm.stopPrank();
 
-        uint256 mintCountBefore = nfpm.mintCallCount();
-        uint256 burnCountBefore = nfpm.burnCallCount();
+        uint256 mintCountBefore = positionManager.mintCallCount();
+        uint256 burnCountBefore = positionManager.burnCallCount();
 
         // Rebalance
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
 
         // Verify old position was burned and new one minted
-        assertEq(nfpm.burnCallCount(), burnCountBefore + 1, "NFPM burn should be called once for old position");
-        assertEq(nfpm.mintCallCount(), mintCountBefore + 1, "NFPM mint should be called once for new position");
+        assertEq(positionManager.burnCallCount(), burnCountBefore + 1, "PositionManager burn should be called once for old position");
+        assertEq(positionManager.mintCallCount(), mintCountBefore + 1, "PositionManager mint should be called once for new position");
 
         // Verify new tokenId differs from original
-        uint256 newTokenId = hook.tokenIdForPool(pool);
+        uint256 newTokenId = hook.tokenIdForPool(poolId);
         assertTrue(newTokenId != 0, "new tokenId should be nonzero");
         assertTrue(newTokenId != originalTokenId, "tokenIdForPool should change after rebalance");
     }
@@ -146,20 +153,21 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
     function test_FullLifecycle_DeployThenClaimFees() public {
         // Deploy pool
         _accumulateAndDeploy(PROJECT_ID, 100e18);
-        address pool = hook.poolOf(PROJECT_ID, address(terminalToken));
-        uint256 poolTokenId = hook.tokenIdForPool(pool);
+        PoolKey memory poolKey = hook.poolKeyOf(PROJECT_ID, address(terminalToken));
+        PoolId poolId = poolKey.toId();
+        uint256 poolTokenId = hook.tokenIdForPool(poolId);
 
         // Determine token ordering
         bool terminalTokenIsToken0 = address(terminalToken) < address(projectToken);
 
-        // Set collectable terminal token fees on NFPM and fund it
+        // Set collectable terminal token fees on PositionManager and fund it
         uint256 feeAmount = 100e18;
         if (terminalTokenIsToken0) {
-            nfpm.setCollectableFees(poolTokenId, feeAmount, 0);
+            positionManager.setCollectableFees(poolTokenId, feeAmount, 0);
         } else {
-            nfpm.setCollectableFees(poolTokenId, 0, feeAmount);
+            positionManager.setCollectableFees(poolTokenId, 0, feeAmount);
         }
-        terminalToken.mint(address(nfpm), feeAmount);
+        terminalToken.mint(address(positionManager), feeAmount);
 
         // Set up fee project terminal accounting context for the terminal token
         _setDirectoryTerminal(FEE_PROJECT_ID, address(terminalToken), address(terminal));
@@ -206,7 +214,7 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
     // -----------------------------------------------------------------------
 
     /// @notice Set up two independent projects, accumulate and deploy pools for each,
-    ///         verify they have independent pool addresses and token IDs.
+    ///         verify they have independent pool states and token IDs.
     function test_FullLifecycle_MultipleProjects() public {
         // --- Set up project 3 ---
         uint256 PROJECT_3 = 3;
@@ -257,11 +265,11 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
         assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 50e18, "PROJECT_ID accumulated should be 50e18");
         assertEq(hook.accumulatedProjectTokens(PROJECT_3), 50e18, "PROJECT_3 accumulated should be 50e18");
 
-        // --- Approve tokens for NFPM ---
+        // --- Approve tokens for PositionManager via Permit2 ---
         vm.startPrank(address(hook));
-        projectToken.approve(address(nfpm), type(uint256).max);
-        projectToken3.approve(address(nfpm), type(uint256).max);
-        terminalToken.approve(address(nfpm), type(uint256).max);
+        projectToken.approve(address(permit2), type(uint256).max);
+        projectToken3.approve(address(permit2), type(uint256).max);
+        terminalToken.approve(address(permit2), type(uint256).max);
         vm.stopPrank();
 
         // --- Deploy both pools (owner required) ---
@@ -271,16 +279,17 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
         hook.deployPool(PROJECT_3, address(terminalToken), 0, 0, 0);
 
         // --- Verify independent pools ---
-        address pool1 = hook.poolOf(PROJECT_ID, address(terminalToken));
-        address pool3 = hook.poolOf(PROJECT_3, address(terminalToken));
-
-        assertTrue(pool1 != address(0), "PROJECT_ID pool should be nonzero");
-        assertTrue(pool3 != address(0), "PROJECT_3 pool should be nonzero");
-        assertTrue(pool1 != pool3, "pools should be different addresses (different project tokens)");
+        assertTrue(hook.isPoolDeployed(PROJECT_ID, address(terminalToken)), "PROJECT_ID pool should be deployed");
+        assertTrue(hook.isPoolDeployed(PROJECT_3, address(terminalToken)), "PROJECT_3 pool should be deployed");
 
         // Verify independent token IDs
-        uint256 tokenId1 = hook.tokenIdForPool(pool1);
-        uint256 tokenId3 = hook.tokenIdForPool(pool3);
+        PoolKey memory poolKey1 = hook.poolKeyOf(PROJECT_ID, address(terminalToken));
+        PoolKey memory poolKey3 = hook.poolKeyOf(PROJECT_3, address(terminalToken));
+        PoolId poolId1 = poolKey1.toId();
+        PoolId poolId3 = poolKey3.toId();
+
+        uint256 tokenId1 = hook.tokenIdForPool(poolId1);
+        uint256 tokenId3 = hook.tokenIdForPool(poolId3);
         assertTrue(tokenId1 != 0, "PROJECT_ID tokenId should be nonzero");
         assertTrue(tokenId3 != 0, "PROJECT_3 tokenId should be nonzero");
         assertTrue(tokenId1 != tokenId3, "tokenIds should differ between projects");
@@ -350,10 +359,10 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
             "accumulated should match deposited amount"
         );
 
-        // Approve tokens for NFPM
+        // Approve tokens for PositionManager via Permit2
         vm.startPrank(address(hook));
-        projectToken.approve(address(nfpm), type(uint256).max);
-        terminalToken.approve(address(nfpm), type(uint256).max);
+        projectToken.approve(address(permit2), type(uint256).max);
+        terminalToken.approve(address(permit2), type(uint256).max);
         vm.stopPrank();
 
         // Deploy pool (owner required)
@@ -361,8 +370,7 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
         hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0, 0);
 
         // Verify pool was created
-        address pool = hook.poolOf(PROJECT_ID, address(terminalToken));
-        assertTrue(pool != address(0), "poolOf should be nonzero after deploy");
+        assertTrue(hook.isPoolDeployed(PROJECT_ID, address(terminalToken)), "isPoolDeployed should be true after deploy");
 
         // Verify accumulated tokens were cleared
         assertEq(
@@ -372,7 +380,9 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
         );
 
         // Verify tokenId was set
-        uint256 tokenId = hook.tokenIdForPool(pool);
+        PoolKey memory poolKey = hook.poolKeyOf(PROJECT_ID, address(terminalToken));
+        PoolId poolId = poolKey.toId();
+        uint256 tokenId = hook.tokenIdForPool(poolId);
         assertTrue(tokenId != 0, "tokenIdForPool should be nonzero after deploy");
 
         // Verify project is marked deployed

@@ -1,27 +1,32 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.23;
+pragma solidity 0.8.26;
 
 import {LPSplitHookTestBase} from "./TestBase.sol";
-import {UniV3DeploymentSplitHook} from "../src/UniV3DeploymentSplitHook.sol";
-import {IJBPermissions} from "@bananapus/core/interfaces/IJBPermissions.sol";
-import {JBConstants} from "@bananapus/core/libraries/JBConstants.sol";
-import {JBAccountingContext} from "@bananapus/core/structs/JBAccountingContext.sol";
+import {UniV4DeploymentSplitHook} from "../src/UniV4DeploymentSplitHook.sol";
+import {IJBPermissions} from "@bananapus/core-v5/src/interfaces/IJBPermissions.sol";
+import {JBConstants} from "@bananapus/core-v5/src/libraries/JBConstants.sol";
+import {JBAccountingContext} from "@bananapus/core-v5/src/structs/JBAccountingContext.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 
 /// @notice Wrapper contract that exposes internal native-ETH helper functions for testing.
-contract TestableHookForETH is UniV3DeploymentSplitHook {
+contract TestableHookForETH is UniV4DeploymentSplitHook {
     constructor(
         address _owner,
         address _directory,
         IJBPermissions _permissions,
         address _tokens,
-        address _factory,
-        address _nfpm,
+        address _poolManager,
+        address _positionManager,
+        address _permit2,
+        address _weth,
         uint256 _feeProjectId,
         uint256 _feePercent,
-        address _revDeployer
+        address _revDeployer,
+        address _trustedForwarder
     )
-        UniV3DeploymentSplitHook(
-            _owner, _directory, _permissions, _tokens, _factory, _nfpm, _feeProjectId, _feePercent, _revDeployer
+        UniV4DeploymentSplitHook(
+            _owner, _directory, _permissions, _tokens, _poolManager, _positionManager, _permit2, _weth, _feeProjectId, _feePercent, _revDeployer, _trustedForwarder
         )
     {}
 
@@ -34,11 +39,11 @@ contract TestableHookForETH is UniV3DeploymentSplitHook {
     }
 
     function exposed_getWETH() external view returns (address) {
-        return _getWETH();
+        return WETH;
     }
 }
 
-/// @notice Tests for native ETH handling in UniV3DeploymentSplitHook.
+/// @notice Tests for native ETH handling in UniV4DeploymentSplitHook.
 /// @dev Covers _isNativeToken, _toUniswapToken, receive(), WETH plumbing,
 ///      and native-ETH deployment setup through the accounting pipeline.
 contract NativeETHTest is LPSplitHookTestBase {
@@ -53,11 +58,14 @@ contract NativeETHTest is LPSplitHookTestBase {
             address(directory),
             IJBPermissions(address(permissions)),
             address(jbTokens),
-            address(v3Factory),
-            address(nfpm),
+            address(positionManager), // poolManager
+            address(positionManager),
+            address(permit2),
+            address(weth),
             FEE_PROJECT_ID,
             FEE_PERCENT,
-            address(revDeployer)
+            address(revDeployer),
+            address(0)
         );
     }
 
@@ -102,7 +110,7 @@ contract NativeETHTest is LPSplitHookTestBase {
     // -----------------------------------------------------------------------
 
     /// @notice When the terminal token is NATIVE_TOKEN, Uniswap operations
-    ///         must use WETH instead (obtained from NFPM.WETH9()).
+    ///         must use WETH instead.
     function test_ToUniswapToken_NativeETH_ReturnsWETH() public view {
         address result = testableHook.exposed_toUniswapToken(NATIVE_TOKEN);
         assertEq(result, address(weth), "NATIVE_TOKEN should convert to WETH for Uniswap");
@@ -211,7 +219,7 @@ contract NativeETHTest is LPSplitHookTestBase {
 
     /// @notice Full e2e: accumulate project tokens, then deployPool with NATIVE_TOKEN
     ///         as the terminal token. Verifies the pool is created using WETH (not
-    ///         the native sentinel), NFPM.mint is called, and the pool/tokenId are set.
+    ///         the native sentinel), PositionManager.mint is called, and the pool/tokenId are set.
     function test_DeployPool_NativeETH_EndToEnd() public {
         // Wire directory for NATIVE_TOKEN
         _setDirectoryTerminal(PROJECT_ID, NATIVE_TOKEN, address(terminal));
@@ -255,14 +263,15 @@ contract NativeETHTest is LPSplitHookTestBase {
         hook.deployPool(PROJECT_ID, NATIVE_TOKEN, 0, 0, 0);
 
         // Verify pool was created
-        address pool = hook.poolOf(PROJECT_ID, NATIVE_TOKEN);
-        assertTrue(pool != address(0), "Pool should be created for NATIVE_TOKEN");
+        assertTrue(hook.isPoolDeployed(PROJECT_ID, NATIVE_TOKEN), "Pool should be created for NATIVE_TOKEN");
 
-        // Verify NFPM was called
-        assertEq(nfpm.mintCallCount(), 1, "NFPM.mint should be called once");
+        // Verify PositionManager was called
+        assertEq(positionManager.mintCallCount(), 1, "PositionManager.mint should be called once");
 
         // Verify tokenId was set
-        uint256 tokenId = hook.tokenIdForPool(pool);
+        PoolKey memory poolKey = hook.poolKeyOf(PROJECT_ID, NATIVE_TOKEN);
+        PoolId poolId = PoolIdLibrary.toId(poolKey);
+        uint256 tokenId = hook.tokenIdForPool(poolId);
         assertTrue(tokenId != 0, "tokenIdForPool should be nonzero");
 
         // Verify accumulated tokens were cleared
@@ -273,24 +282,17 @@ contract NativeETHTest is LPSplitHookTestBase {
     }
 
     // -----------------------------------------------------------------------
-    // 9. WETH address sourced correctly from NFPM
+    // 9. WETH address sourced correctly
     // -----------------------------------------------------------------------
 
-    /// @notice The internal _getWETH() must return the WETH9 address
-    ///         configured on the NonfungiblePositionManager mock.
-    function test_WETH_AddressFromNFPM() public view {
-        // Verify the mock NFPM returns the correct WETH address
-        assertEq(
-            nfpm.WETH9(),
-            address(weth),
-            "NFPM WETH9() must equal the MockWETH address"
-        );
-
+    /// @notice The WETH immutable must return the WETH address
+    ///         configured in the constructor.
+    function test_WETH_Address() public view {
         // Verify the exposed helper agrees
         assertEq(
             testableHook.exposed_getWETH(),
             address(weth),
-            "_getWETH() must return the same WETH address as NFPM"
+            "WETH must return the same WETH address as configured"
         );
     }
 }

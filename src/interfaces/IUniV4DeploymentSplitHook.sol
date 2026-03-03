@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
-pragma solidity ^0.8.0;
+pragma solidity ^0.8.24;
+
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {PoolId} from "@uniswap/v4-core/src/types/PoolId.sol";
 
 /**
- * @title IUniV3DeploymentSplitHook
+ * @title IUniV4DeploymentSplitHook
  * @notice JuiceBox v4 Split Hook contract that manages a two-stage deployment process:
- * Stage 1: Accumulate project tokens without deploying Uniswap V3 pool
+ * Stage 1: Accumulate project tokens without deploying Uniswap V4 pool
  * Stage 2: Deploy pool with accumulated tokens (triggered manually by project owner or operator)
  * After deployment: Route LP fees back to project, burn newly received project tokens
  */
-interface IUniV3DeploymentSplitHook {
+interface IUniV4DeploymentSplitHook {
 
     /// @dev Emitted when a project transitions from Stage 1 to Stage 2
-    event ProjectDeployed(uint256 indexed projectId, address indexed terminalToken, address indexed pool);
+    event ProjectDeployed(uint256 indexed projectId, address indexed terminalToken, PoolId indexed poolId);
 
     /// @dev Emitted when LP fees are routed back to the project
     /// @param feeAmount Amount sent to fee project
@@ -41,7 +44,15 @@ interface IUniV3DeploymentSplitHook {
     function isPoolDeployed(uint256 _projectId, address _terminalToken) external view returns (bool deployed);
 
     /**
-     * @notice Deploy a UniswapV3 pool using accumulated project tokens
+     * @notice Get the PoolKey for a project/terminal token pair
+     * @param _projectId The Juicebox project ID
+     * @param _terminalToken The terminal token address
+     * @return poolKey The Uniswap V4 PoolKey
+     */
+    function poolKeyOf(uint256 _projectId, address _terminalToken) external view returns (PoolKey memory poolKey);
+
+    /**
+     * @notice Deploy a Uniswap V4 pool using accumulated project tokens
      * @dev Only callable by the project owner or an operator with SET_BUYBACK_POOL permission
      * @param _projectId The Juicebox project ID
      * @param _terminalToken The terminal token address

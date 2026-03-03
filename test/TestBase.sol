@@ -1,20 +1,24 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.23;
+pragma solidity 0.8.26;
 
 import "forge-std/Test.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IJBPermissions} from "@bananapus/core/interfaces/IJBPermissions.sol";
-import {JBSplit} from "@bananapus/core/structs/JBSplit.sol";
-import {JBSplitHookContext} from "@bananapus/core/structs/JBSplitHookContext.sol";
-import {JBAccountingContext} from "@bananapus/core/structs/JBAccountingContext.sol";
-import {IJBSplitHook} from "@bananapus/core/interfaces/IJBSplitHook.sol";
-import {JBConstants} from "@bananapus/core/libraries/JBConstants.sol";
+import {IJBPermissions} from "@bananapus/core-v5/src/interfaces/IJBPermissions.sol";
+import {JBSplit} from "@bananapus/core-v5/src/structs/JBSplit.sol";
+import {JBSplitHookContext} from "@bananapus/core-v5/src/structs/JBSplitHookContext.sol";
+import {JBAccountingContext} from "@bananapus/core-v5/src/structs/JBAccountingContext.sol";
+import {IJBSplitHook} from "@bananapus/core-v5/src/interfaces/IJBSplitHook.sol";
+import {JBConstants} from "@bananapus/core-v5/src/libraries/JBConstants.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 
-import {UniV3DeploymentSplitHook} from "../src/UniV3DeploymentSplitHook.sol";
+import {UniV4DeploymentSplitHook} from "../src/UniV4DeploymentSplitHook.sol";
 import {MockERC20} from "./mock/MockERC20.sol";
 import {MockWETH} from "./mock/MockWETH.sol";
-import {MockNFPM} from "./mock/MockNFPM.sol";
+import {MockPositionManager} from "./mock/MockPositionManager.sol";
+import {MockPermit2} from "./mock/MockPermit2.sol";
 import {
     MockJBDirectory,
     MockJBController,
@@ -23,16 +27,17 @@ import {
     MockJBPrices,
     MockJBTerminalStore,
     MockREVDeployer,
-    MockUniswapV3Factory,
     MockJBProjects,
     MockJBPermissions
 } from "./mock/MockJBContracts.sol";
 
-/// @notice Shared test harness for UniV3DeploymentSplitHook tests
+/// @notice Shared test harness for UniV4DeploymentSplitHook tests
 /// @dev Deploys all mocks, creates default project, and provides helpers
 contract LPSplitHookTestBase is Test {
+    using PoolIdLibrary for PoolKey;
+
     // ─── Contracts Under Test ───────────────────────────────────────────
-    UniV3DeploymentSplitHook public hook;
+    UniV4DeploymentSplitHook public hook;
 
     // ─── Mock Infrastructure ────────────────────────────────────────────
     MockJBDirectory public directory;
@@ -42,8 +47,8 @@ contract LPSplitHookTestBase is Test {
     MockJBPrices public prices;
     MockJBTerminalStore public store;
     MockREVDeployer public revDeployer;
-    MockUniswapV3Factory public v3Factory;
-    MockNFPM public nfpm;
+    MockPositionManager public positionManager;
+    MockPermit2 public permit2;
     MockWETH public weth;
     MockJBProjects public jbProjects;
     MockJBPermissions public permissions;
@@ -88,9 +93,9 @@ contract LPSplitHookTestBase is Test {
         jbProjects = new MockJBProjects();
         permissions = new MockJBPermissions();
 
-        // Deploy mock Uniswap contracts
-        v3Factory = new MockUniswapV3Factory();
-        nfpm = new MockNFPM(address(weth), address(v3Factory));
+        // Deploy mock V4 contracts
+        positionManager = new MockPositionManager();
+        permit2 = new MockPermit2();
 
         // Wire JB contracts
         controller.setPrices(address(prices));
@@ -146,16 +151,19 @@ contract LPSplitHookTestBase is Test {
         _addDirectoryTerminal(PROJECT_ID, address(terminal));
 
         // Deploy the hook
-        hook = new UniV3DeploymentSplitHook(
+        hook = new UniV4DeploymentSplitHook(
             owner,
             address(directory),
             IJBPermissions(address(permissions)),
             address(jbTokens),
-            address(v3Factory),
-            address(nfpm),
+            address(positionManager), // poolManager (mock shares address for simplicity)
+            address(positionManager),
+            address(permit2),
+            address(weth),
             FEE_PROJECT_ID,
             FEE_PERCENT,
-            address(revDeployer)
+            address(revDeployer),
+            address(0)
         );
     }
 
@@ -241,10 +249,11 @@ contract LPSplitHookTestBase is Test {
         // Accumulate tokens
         _accumulateTokens(projectId, amount);
 
-        // Approve hook to spend project tokens (for NFPM mint)
+        // Approve hook to spend project tokens via Permit2 path
+        // (MockPermit2 uses transferFrom under the hood, so we need the hook to approve Permit2)
         vm.startPrank(address(hook));
-        projectToken.approve(address(nfpm), type(uint256).max);
-        terminalToken.approve(address(nfpm), type(uint256).max);
+        projectToken.approve(address(permit2), type(uint256).max);
+        terminalToken.approve(address(permit2), type(uint256).max);
         vm.stopPrank();
 
         // Deploy pool as owner
