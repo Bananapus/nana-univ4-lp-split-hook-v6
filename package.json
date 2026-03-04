@@ -4,7 +4,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Bananapus/nana-lp-split-hook-v5"
+    "url": "git+https://github.com/Bananapus/nana-lp-split-hook-v6.git"
   },
   "engines": {
     "node": ">=20.0.0"
