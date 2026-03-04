@@ -34,40 +34,40 @@ interface IUniV3DeploymentSplitHook {
 
     /**
      * @notice Check if a pool has been deployed for a project/terminal token pair
-     * @param _projectId The Juicebox project ID
-     * @param _terminalToken The terminal token address
+     * @param projectId The Juicebox project ID
+     * @param terminalToken The terminal token address
      * @return deployed True if pool exists
      */
-    function isPoolDeployed(uint256 _projectId, address _terminalToken) external view returns (bool deployed);
+    function isPoolDeployed(uint256 projectId, address terminalToken) external view returns (bool deployed);
 
     /**
      * @notice Deploy a UniswapV3 pool using accumulated project tokens
      * @dev Only callable by the project owner or an operator with SET_BUYBACK_POOL permission
-     * @param _projectId The Juicebox project ID
-     * @param _terminalToken The terminal token address
-     * @param _amount0Min Minimum amount of token0 to add (slippage protection, defaults to 0)
-     * @param _amount1Min Minimum amount of token1 to add (slippage protection, defaults to 0)
-     * @param _minCashOutReturn Minimum terminal tokens from cash-out (slippage protection, 0 = auto 1% tolerance)
+     * @param projectId The Juicebox project ID
+     * @param terminalToken The terminal token address
+     * @param amount0Min Minimum amount of token0 to add (slippage protection, defaults to 0)
+     * @param amount1Min Minimum amount of token1 to add (slippage protection, defaults to 0)
+     * @param minCashOutReturn Minimum terminal tokens from cash-out (slippage protection, 0 = auto 1% tolerance)
      */
     function deployPool(
-        uint256 _projectId,
-        address _terminalToken,
-        uint256 _amount0Min,
-        uint256 _amount1Min,
-        uint256 _minCashOutReturn
+        uint256 projectId,
+        address terminalToken,
+        uint256 amount0Min,
+        uint256 amount1Min,
+        uint256 minCashOutReturn
     ) external;
 
     /**
      * @notice Collect LP fees and route them back to the project
-     * @param _projectId The Juicebox project ID
-     * @param _terminalToken The terminal token address
+     * @param projectId The Juicebox project ID
+     * @param terminalToken The terminal token address
      */
-    function collectAndRouteLPFees(uint256 _projectId, address _terminalToken) external;
+    function collectAndRouteLPFees(uint256 projectId, address terminalToken) external;
 
     /**
      * @notice Claim fee tokens for a beneficiary (must be the project's revnet operator)
-     * @param _projectId The Juicebox project ID
-     * @param _beneficiary The beneficiary address to claim tokens for
+     * @param projectId The Juicebox project ID
+     * @param beneficiary The beneficiary address to claim tokens for
      */
-    function claimFeeTokensFor(uint256 _projectId, address _beneficiary) external;
+    function claimFeeTokensFor(uint256 projectId, address beneficiary) external;
 }
