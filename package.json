@@ -1,28 +1,23 @@
 {
-  "name": "nana-lp-split-hook-v5",
-  "version": "1.0.0",
-  "description": "Use flattened versions (`npx hardhat flatten`) of UniswapV3 Periphery contracts because they unfortunately depend on OpenZeppelin Contracts 3.X, and we want to avoid version skew with the rest of this repo depending on OpenZeppelin Contracts 4.X",
-  "main": "index.js",
-  "directories": {
-    "lib": "lib",
-    "test": "test"
-  },
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
+  "name": "@bananapus/lp-split-hook-v6",
+  "version": "0.0.1",
+  "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kyzooghost/uniswapv3-lp-split-hook.git"
+    "url": "git+https://github.com/Bananapus/nana-lp-split-hook-v5"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
-  "bugs": {
-    "url": "https://github.com/kyzooghost/uniswapv3-lp-split-hook/issues"
+  "engines": {
+    "node": ">=20.0.0"
   },
-  "homepage": "https://github.com/kyzooghost/uniswapv3-lp-split-hook#readme",
+  "scripts": {
+    "test": "forge test",
+    "test:fork": "FOUNDRY_PROFILE=CI forge test",
+    "coverage": "forge coverage --report lcov --report summary"
+  },
   "dependencies": {
-    "@bananapus/permission-ids": "^0.0.17"
+    "@bananapus/core-v6": "npm:@bananapus/core-v5@*",
+    "@bananapus/permission-ids-v6": "npm:@bananapus/permission-ids-v5@*",
+    "@openzeppelin/contracts": "^5.2.0",
+    "@prb/math": "^4.1.0"
   }
 }
