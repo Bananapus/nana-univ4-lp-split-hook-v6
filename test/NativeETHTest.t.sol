@@ -67,10 +67,7 @@ contract NativeETHTest is LPSplitHookTestBase {
 
     /// @notice NATIVE_TOKEN sentinel value must be recognized as native.
     function test_IsNativeToken_Correct() public view {
-        assertTrue(
-            testableHook.exposed_isNativeToken(NATIVE_TOKEN),
-            "NATIVE_TOKEN should be identified as native"
-        );
+        assertTrue(testableHook.exposed_isNativeToken(NATIVE_TOKEN), "NATIVE_TOKEN should be identified as native");
     }
 
     // -----------------------------------------------------------------------
@@ -79,22 +76,10 @@ contract NativeETHTest is LPSplitHookTestBase {
 
     /// @notice Non-native addresses (including address(0), address(1), and real ERC20s) must return false.
     function test_IsNativeToken_OtherAddress() public view {
-        assertFalse(
-            testableHook.exposed_isNativeToken(address(terminalToken)),
-            "ERC20 address should not be native"
-        );
-        assertFalse(
-            testableHook.exposed_isNativeToken(address(0)),
-            "address(0) should not be native"
-        );
-        assertFalse(
-            testableHook.exposed_isNativeToken(address(1)),
-            "address(1) should not be native"
-        );
-        assertFalse(
-            testableHook.exposed_isNativeToken(address(weth)),
-            "WETH address should not be native"
-        );
+        assertFalse(testableHook.exposed_isNativeToken(address(terminalToken)), "ERC20 address should not be native");
+        assertFalse(testableHook.exposed_isNativeToken(address(0)), "address(0) should not be native");
+        assertFalse(testableHook.exposed_isNativeToken(address(1)), "address(1) should not be native");
+        assertFalse(testableHook.exposed_isNativeToken(address(weth)), "WETH address should not be native");
     }
 
     // -----------------------------------------------------------------------
@@ -115,11 +100,7 @@ contract NativeETHTest is LPSplitHookTestBase {
     /// @notice For ordinary ERC20 terminal tokens the address must be returned as-is.
     function test_ToUniswapToken_ERC20_Unchanged() public view {
         address result = testableHook.exposed_toUniswapToken(address(terminalToken));
-        assertEq(
-            result,
-            address(terminalToken),
-            "ERC20 address should pass through unchanged"
-        );
+        assertEq(result, address(terminalToken), "ERC20 address should pass through unchanged");
     }
 
     // -----------------------------------------------------------------------
@@ -161,19 +142,10 @@ contract NativeETHTest is LPSplitHookTestBase {
         _setDirectoryTerminal(PROJECT_ID, NATIVE_TOKEN, address(terminal));
 
         // --- Add an accounting context for NATIVE_TOKEN (18 decimals, currency = sentinel) ---
-        terminal.setAccountingContext(
-            PROJECT_ID,
-            NATIVE_TOKEN,
-            uint32(uint160(NATIVE_TOKEN)),
-            18
-        );
+        terminal.setAccountingContext(PROJECT_ID, NATIVE_TOKEN, uint32(uint160(NATIVE_TOKEN)), 18);
         terminal.addAccountingContext(
             PROJECT_ID,
-            JBAccountingContext({
-                token: NATIVE_TOKEN,
-                decimals: 18,
-                currency: uint32(uint160(NATIVE_TOKEN))
-            })
+            JBAccountingContext({token: NATIVE_TOKEN, decimals: 18, currency: uint32(uint160(NATIVE_TOKEN))})
         );
 
         // --- Accumulate project tokens (simulates reserved-token split) ---
@@ -183,26 +155,14 @@ contract NativeETHTest is LPSplitHookTestBase {
         // Build a split-hook context for reserved tokens (groupId = 1)
         // with the project token as the token field.
         vm.prank(address(controller));
-        hook.processSplitWith(
-            _buildReservedContext(PROJECT_ID, accAmount)
-        );
+        hook.processSplitWith(_buildReservedContext(PROJECT_ID, accAmount));
 
         // Verify accumulation was recorded
-        assertEq(
-            hook.accumulatedProjectTokens(PROJECT_ID),
-            accAmount,
-            "Accumulated tokens should match minted amount"
-        );
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), accAmount, "Accumulated tokens should match minted amount");
 
         // Verify the project has not been deployed yet (no pool exists)
-        assertFalse(
-            hook.projectDeployed(PROJECT_ID),
-            "Project should not be deployed yet (no deployPool called)"
-        );
-        assertFalse(
-            hook.isPoolDeployed(PROJECT_ID, NATIVE_TOKEN),
-            "No pool should exist for NATIVE_TOKEN yet"
-        );
+        assertFalse(hook.projectDeployed(PROJECT_ID), "Project should not be deployed yet (no deployPool called)");
+        assertFalse(hook.isPoolDeployed(PROJECT_ID, NATIVE_TOKEN), "No pool should exist for NATIVE_TOKEN yet");
     }
 
     // -----------------------------------------------------------------------
@@ -218,19 +178,10 @@ contract NativeETHTest is LPSplitHookTestBase {
         _addDirectoryTerminal(PROJECT_ID, address(terminal));
 
         // Add accounting context for NATIVE_TOKEN
-        terminal.setAccountingContext(
-            PROJECT_ID,
-            NATIVE_TOKEN,
-            uint32(uint160(NATIVE_TOKEN)),
-            18
-        );
+        terminal.setAccountingContext(PROJECT_ID, NATIVE_TOKEN, uint32(uint160(NATIVE_TOKEN)), 18);
         terminal.addAccountingContext(
             PROJECT_ID,
-            JBAccountingContext({
-                token: NATIVE_TOKEN,
-                decimals: 18,
-                currency: uint32(uint160(NATIVE_TOKEN))
-            })
+            JBAccountingContext({token: NATIVE_TOKEN, decimals: 18, currency: uint32(uint160(NATIVE_TOKEN))})
         );
 
         // Set NATIVE_TOKEN as the terminal token for cash-outs
@@ -280,17 +231,9 @@ contract NativeETHTest is LPSplitHookTestBase {
     ///         configured on the NonfungiblePositionManager mock.
     function test_WETH_AddressFromNFPM() public view {
         // Verify the mock NFPM returns the correct WETH address
-        assertEq(
-            nfpm.WETH9(),
-            address(weth),
-            "NFPM WETH9() must equal the MockWETH address"
-        );
+        assertEq(nfpm.WETH9(), address(weth), "NFPM WETH9() must equal the MockWETH address");
 
         // Verify the exposed helper agrees
-        assertEq(
-            testableHook.exposed_getWETH(),
-            address(weth),
-            "_getWETH() must return the same WETH address as NFPM"
-        );
+        assertEq(testableHook.exposed_getWETH(), address(weth), "_getWETH() must return the same WETH address as NFPM");
     }
 }

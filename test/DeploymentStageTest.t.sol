@@ -10,7 +10,6 @@ import {JBSplitHookContext} from "@bananapus/core/structs/JBSplitHookContext.sol
 /// @notice Tests for UniV3DeploymentSplitHook deployment stage behavior.
 /// @dev Covers deployPool access control, processSplitWith accumulation/burning, leftovers, and revert conditions.
 contract DeploymentStageTest is LPSplitHookTestBase {
-
     function setUp() public override {
         super.setUp();
     }
@@ -91,11 +90,7 @@ contract DeploymentStageTest is LPSplitHookTestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0, 0);
 
-        assertEq(
-            hook.accumulatedProjectTokens(PROJECT_ID),
-            0,
-            "accumulatedProjectTokens should be 0 after deployment"
-        );
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "accumulatedProjectTokens should be 0 after deployment");
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -178,9 +173,7 @@ contract DeploymentStageTest is LPSplitHookTestBase {
 
         // Tokens should be accumulated
         assertEq(
-            hook.accumulatedProjectTokens(PROJECT_ID),
-            amount,
-            "accumulatedProjectTokens should equal the sent amount"
+            hook.accumulatedProjectTokens(PROJECT_ID), amount, "accumulatedProjectTokens should equal the sent amount"
         );
 
         // Pool should NOT exist (no auto-deploy)
@@ -249,11 +242,7 @@ contract DeploymentStageTest is LPSplitHookTestBase {
             controller.burnCallCount() > burnCountAfterDeploy,
             "burn should be called for newly received tokens after pool deployed"
         );
-        assertEq(
-            hook.accumulatedProjectTokens(PROJECT_ID),
-            0,
-            "accumulatedProjectTokens should remain 0 after burning"
-        );
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "accumulatedProjectTokens should remain 0 after burning");
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -329,10 +318,10 @@ contract DeploymentStageTest is LPSplitHookTestBase {
         vm.expectRevert(
             abi.encodeWithSelector(
                 JBPermissioned.JBPermissioned_Unauthorized.selector,
-                owner,          // account (the project owner whose permission is required)
-                randomUser,     // sender (the unauthorized caller)
-                PROJECT_ID,     // projectId
-                25              // permissionId (SET_BUYBACK_POOL_PERMISSION)
+                owner, // account (the project owner whose permission is required)
+                randomUser, // sender (the unauthorized caller)
+                PROJECT_ID, // projectId
+                25 // permissionId (SET_BUYBACK_POOL_PERMISSION)
             )
         );
         vm.prank(randomUser);

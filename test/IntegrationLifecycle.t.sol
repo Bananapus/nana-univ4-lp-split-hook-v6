@@ -55,7 +55,9 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
         assertTrue(hook.projectDeployed(PROJECT_ID), "projectDeployed should be true after deploy");
 
         // Verify isPoolDeployed returns true
-        assertTrue(hook.isPoolDeployed(PROJECT_ID, address(terminalToken)), "isPoolDeployed should be true after deploy");
+        assertTrue(
+            hook.isPoolDeployed(PROJECT_ID, address(terminalToken)), "isPoolDeployed should be true after deploy"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -95,7 +97,11 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
         assertGt(terminal.payCallCount(), payCountBefore, "terminal.pay should be called to route terminal token fees");
 
         // Verify project token fees were burned
-        assertGt(controller.burnCallCount(), burnCountBefore, "controller.burnTokensOf should be called for project token fees");
+        assertGt(
+            controller.burnCallCount(),
+            burnCountBefore,
+            "controller.burnTokensOf should be called for project token fees"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -164,10 +170,7 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
         // Set up fee project terminal accounting context for the terminal token
         _setDirectoryTerminal(FEE_PROJECT_ID, address(terminalToken), address(terminal));
         terminal.setAccountingContext(
-            FEE_PROJECT_ID,
-            address(terminalToken),
-            uint32(uint160(address(terminalToken))),
-            18
+            FEE_PROJECT_ID, address(terminalToken), uint32(uint160(address(terminalToken))), 18
         );
 
         // Collect and route fees -- this generates claimable fee tokens
@@ -192,9 +195,7 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
 
         // Verify user received the fee project tokens
         assertEq(
-            userBalanceAfter - userBalanceBefore,
-            claimable,
-            "user should receive all claimable fee project tokens"
+            userBalanceAfter - userBalanceBefore, claimable, "user should receive all claimable fee project tokens"
         );
 
         // Verify claimable balance is cleared
@@ -226,18 +227,11 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
         // Wire tokens for project 3
         jbTokens.setToken(PROJECT_3, address(projectToken3));
         terminal.setProjectToken(PROJECT_3, address(projectToken3));
-        terminal.setAccountingContext(
-            PROJECT_3,
-            address(terminalToken),
-            uint32(uint160(address(terminalToken))),
-            18
-        );
+        terminal.setAccountingContext(PROJECT_3, address(terminalToken), uint32(uint160(address(terminalToken))), 18);
         terminal.addAccountingContext(
             PROJECT_3,
             JBAccountingContext({
-                token: address(terminalToken),
-                decimals: 18,
-                currency: uint32(uint160(address(terminalToken)))
+                token: address(terminalToken), decimals: 18, currency: uint32(uint160(address(terminalToken)))
             })
         );
         store.setSurplus(PROJECT_3, 0.5e18);
@@ -326,11 +320,7 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
         assertEq(controller.lastBurnHolder(), address(hook), "burn holder should be the hook");
 
         // Verify accumulated stays 0 (tokens were burned, not accumulated)
-        assertEq(
-            hook.accumulatedProjectTokens(PROJECT_ID),
-            0,
-            "accumulatedProjectTokens should remain 0 after burn"
-        );
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "accumulatedProjectTokens should remain 0 after burn");
     }
 
     // -----------------------------------------------------------------------
@@ -344,11 +334,7 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
 
         // Accumulate
         _accumulateTokens(PROJECT_ID, amount);
-        assertEq(
-            hook.accumulatedProjectTokens(PROJECT_ID),
-            amount,
-            "accumulated should match deposited amount"
-        );
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), amount, "accumulated should match deposited amount");
 
         // Approve tokens for NFPM
         vm.startPrank(address(hook));
@@ -365,11 +351,7 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
         assertTrue(pool != address(0), "poolOf should be nonzero after deploy");
 
         // Verify accumulated tokens were cleared
-        assertEq(
-            hook.accumulatedProjectTokens(PROJECT_ID),
-            0,
-            "accumulated should be 0 after deploy"
-        );
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "accumulated should be 0 after deploy");
 
         // Verify tokenId was set
         uint256 tokenId = hook.tokenIdForPool(pool);

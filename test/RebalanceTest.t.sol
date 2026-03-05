@@ -8,7 +8,6 @@ import {MockERC20} from "./mock/MockERC20.sol";
 /// @notice Tests for UniV3DeploymentSplitHook.rebalanceLiquidity function.
 /// @dev Covers revert conditions, NFPM interactions (collect, decrease, burn, mint), and permissionlessness.
 contract RebalanceTest is LPSplitHookTestBase {
-
     uint256 poolTokenId;
     address pool;
 
@@ -56,12 +55,7 @@ contract RebalanceTest is LPSplitHookTestBase {
         _setDirectoryTerminal(PROJECT_ID, address(otherToken), address(terminal));
 
         // Set accounting context for the other token
-        terminal.setAccountingContext(
-            PROJECT_ID,
-            address(otherToken),
-            uint32(uint160(address(otherToken))),
-            18
-        );
+        terminal.setAccountingContext(PROJECT_ID, address(otherToken), uint32(uint160(address(otherToken))), 18);
 
         vm.expectRevert(UniV3DeploymentSplitHook.UniV3DeploymentSplitHook_InvalidStageForAction.selector);
         hook.rebalanceLiquidity(PROJECT_ID, address(otherToken), 0, 0, 0, 0);
@@ -130,11 +124,7 @@ contract RebalanceTest is LPSplitHookTestBase {
 
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
 
-        assertEq(
-            nfpm.burnCallCount(),
-            burnCountBefore + 1,
-            "NFPM burn should be called exactly once"
-        );
+        assertEq(nfpm.burnCallCount(), burnCountBefore + 1, "NFPM burn should be called exactly once");
     }
 
     // -----------------------------------------------------------------------
@@ -149,11 +139,7 @@ contract RebalanceTest is LPSplitHookTestBase {
 
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
 
-        assertEq(
-            nfpm.mintCallCount(),
-            mintCountBefore + 1,
-            "NFPM mint should be called once more for the new position"
-        );
+        assertEq(nfpm.mintCallCount(), mintCountBefore + 1, "NFPM mint should be called once more for the new position");
     }
 
     // -----------------------------------------------------------------------
@@ -170,10 +156,7 @@ contract RebalanceTest is LPSplitHookTestBase {
 
         uint256 newTokenId = hook.tokenIdForPool(pool);
         assertTrue(newTokenId != 0, "new tokenId should be nonzero");
-        assertTrue(
-            newTokenId != originalTokenId,
-            "tokenIdForPool should change after rebalance"
-        );
+        assertTrue(newTokenId != originalTokenId, "tokenIdForPool should change after rebalance");
     }
 
     // -----------------------------------------------------------------------
@@ -191,10 +174,7 @@ contract RebalanceTest is LPSplitHookTestBase {
         // Verify it succeeded by checking the tokenId was updated
         uint256 newTokenId = hook.tokenIdForPool(pool);
         assertTrue(newTokenId != 0, "rebalance should succeed from any caller");
-        assertTrue(
-            newTokenId != poolTokenId,
-            "tokenId should change after permissionless rebalance"
-        );
+        assertTrue(newTokenId != poolTokenId, "tokenId should change after permissionless rebalance");
     }
 
     // -----------------------------------------------------------------------
@@ -226,10 +206,7 @@ contract RebalanceTest is LPSplitHookTestBase {
 
         // Set up fee project terminal
         terminal.setAccountingContext(
-            FEE_PROJECT_ID,
-            address(terminalToken),
-            uint32(uint160(address(terminalToken))),
-            18
+            FEE_PROJECT_ID, address(terminalToken), uint32(uint160(address(terminalToken))), 18
         );
 
         uint256 payCountBefore = terminal.payCallCount();
@@ -238,8 +215,8 @@ contract RebalanceTest is LPSplitHookTestBase {
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
 
         // Fees should have been routed: either pay (for fee project) or addToBalance (for original project)
-        bool feesRouted = (terminal.payCallCount() > payCountBefore)
-            || (terminal.addToBalanceCallCount() > addToBalanceCountBefore);
+        bool feesRouted =
+            (terminal.payCallCount() > payCountBefore) || (terminal.addToBalanceCallCount() > addToBalanceCountBefore);
         assertTrue(feesRouted, "Collected fees should be routed via pay or addToBalance");
     }
 

@@ -18,12 +18,29 @@ contract MockERC20 is IERC20, IERC20Metadata {
         _decimals = decimals_;
     }
 
-    function name() external view override returns (string memory) { return _name; }
-    function symbol() external view override returns (string memory) { return _symbol; }
-    function decimals() external view override returns (uint8) { return _decimals; }
-    function totalSupply() external view override returns (uint256) { return _totalSupply; }
-    function balanceOf(address account) external view override returns (uint256) { return _balances[account]; }
-    function allowance(address owner, address spender) external view override returns (uint256) { return _allowances[owner][spender]; }
+    function name() external view override returns (string memory) {
+        return _name;
+    }
+
+    function symbol() external view override returns (string memory) {
+        return _symbol;
+    }
+
+    function decimals() external view override returns (uint8) {
+        return _decimals;
+    }
+
+    function totalSupply() external view override returns (uint256) {
+        return _totalSupply;
+    }
+
+    function balanceOf(address account) external view override returns (uint256) {
+        return _balances[account];
+    }
+
+    function allowance(address owner, address spender) external view override returns (uint256) {
+        return _allowances[owner][spender];
+    }
 
     function transfer(address to, uint256 amount) external override returns (bool) {
         _balances[msg.sender] -= amount;

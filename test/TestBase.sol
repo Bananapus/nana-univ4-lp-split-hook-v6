@@ -31,10 +31,12 @@ import {
 /// @notice Shared test harness for UniV3DeploymentSplitHook tests
 /// @dev Deploys all mocks, creates default project, and provides helpers
 contract LPSplitHookTestBase is Test {
-    // ─── Contracts Under Test ───────────────────────────────────────────
+    // ─── Contracts Under Test
+    // ───────────────────────────────────────────
     UniV3DeploymentSplitHook public hook;
 
-    // ─── Mock Infrastructure ────────────────────────────────────────────
+    // ─── Mock Infrastructure
+    // ────────────────────────────────────────────
     MockJBDirectory public directory;
     MockJBController public controller;
     MockJBMultiTerminal public terminal;
@@ -48,12 +50,14 @@ contract LPSplitHookTestBase is Test {
     MockJBProjects public jbProjects;
     MockJBPermissions public permissions;
 
-    // ─── Test Tokens ────────────────────────────────────────────────────
+    // ─── Test Tokens
+    // ────────────────────────────────────────────────────
     MockERC20 public projectToken;
     MockERC20 public terminalToken;
     MockERC20 public feeProjectToken;
 
-    // ─── Test Constants ─────────────────────────────────────────────────
+    // ─── Test Constants
+    // ─────────────────────────────────────────────────
     uint256 public constant PROJECT_ID = 1;
     uint256 public constant FEE_PROJECT_ID = 2;
     uint256 public constant FEE_PERCENT = 3800; // 38%
@@ -120,18 +124,11 @@ contract LPSplitHookTestBase is Test {
         terminal.setProjectToken(FEE_PROJECT_ID, address(feeProjectToken));
 
         // Set accounting context
-        terminal.setAccountingContext(
-            PROJECT_ID,
-            address(terminalToken),
-            uint32(uint160(address(terminalToken))),
-            18
-        );
+        terminal.setAccountingContext(PROJECT_ID, address(terminalToken), uint32(uint160(address(terminalToken))), 18);
         terminal.addAccountingContext(
             PROJECT_ID,
             JBAccountingContext({
-                token: address(terminalToken),
-                decimals: 18,
-                currency: uint32(uint160(address(terminalToken)))
+                token: address(terminalToken), decimals: 18, currency: uint32(uint160(address(terminalToken)))
             })
         );
 
@@ -187,14 +184,19 @@ contract LPSplitHookTestBase is Test {
         vm.store(address(directory), elementSlot, bytes32(uint256(uint160(term))));
     }
 
-    // ─── Context Builder ────────────────────────────────────────────────
+    // ─── Context Builder
+    // ────────────────────────────────────────────────
 
     function _buildContext(
         uint256 projectId,
         address token,
         uint256 amount,
         uint256 groupId
-    ) internal view returns (JBSplitHookContext memory) {
+    )
+        internal
+        view
+        returns (JBSplitHookContext memory)
+    {
         return JBSplitHookContext({
             token: token,
             amount: amount,
@@ -202,7 +204,7 @@ contract LPSplitHookTestBase is Test {
             projectId: projectId,
             groupId: groupId,
             split: JBSplit({
-                percent: 1000000, // 100%
+                percent: 1_000_000, // 100%
                 projectId: 0,
                 beneficiary: payable(address(0)),
                 preferAddToBalance: false,
@@ -221,7 +223,8 @@ contract LPSplitHookTestBase is Test {
         return _buildContext(projectId, address(projectToken), amount, 1);
     }
 
-    // ─── Accumulation & Deployment Helpers ───────────────────────────────
+    // ─── Accumulation & Deployment Helpers
+    // ───────────────────────────────
 
     /// @notice Accumulate tokens by calling processSplitWith from controller
     function _accumulateTokens(uint256 projectId, uint256 amount) internal {

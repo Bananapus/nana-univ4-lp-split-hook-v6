@@ -116,7 +116,7 @@ contract ConstructorTest is LPSplitHookTestBase {
             address(v3Factory),
             address(nfpm),
             FEE_PROJECT_ID,
-            10001, // feePercent > BPS (10000)
+            10_001, // feePercent > BPS (10000)
             address(revDeployer)
         );
     }

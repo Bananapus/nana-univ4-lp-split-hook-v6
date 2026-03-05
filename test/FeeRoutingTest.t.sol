@@ -185,7 +185,7 @@ contract FeeRoutingTest is LPSplitHookTestBase {
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
 
         // FEE_PERCENT = 3800 => feeAmount = 1000e18 * 3800 / 10000 = 380e18
-        uint256 expectedFee = (feeAmount * FEE_PERCENT) / 10000;
+        uint256 expectedFee = (feeAmount * FEE_PERCENT) / 10_000;
         assertEq(expectedFee, 380e18, "Expected fee should be 380e18");
 
         // Verify terminal.pay was called with the fee amount
@@ -210,9 +210,7 @@ contract FeeRoutingTest is LPSplitHookTestBase {
 
         assertEq(terminal.payCallCount(), payCountBefore, "No pay calls expected for zero fees");
         assertEq(
-            terminal.addToBalanceCallCount(),
-            addBalanceCountBefore,
-            "No addToBalance calls expected for zero fees"
+            terminal.addToBalanceCallCount(), addBalanceCountBefore, "No addToBalance calls expected for zero fees"
         );
     }
 
@@ -233,7 +231,7 @@ contract FeeRoutingTest is LPSplitHookTestBase {
         assertGt(claimableAfter, claimableBefore, "claimableFeeTokens should increase after fee routing");
 
         // The mock terminal mints 1:1, so fee tokens minted = feeAmount paid
-        uint256 expectedFeePayment = (feeAmount * FEE_PERCENT) / 10000; // 380e18
+        uint256 expectedFeePayment = (feeAmount * FEE_PERCENT) / 10_000; // 380e18
         assertEq(
             claimableAfter - claimableBefore,
             expectedFeePayment,
@@ -263,11 +261,7 @@ contract FeeRoutingTest is LPSplitHookTestBase {
         hook.claimFeeTokensFor(PROJECT_ID, user);
 
         uint256 userBalanceAfter = feeProjectToken.balanceOf(user);
-        assertEq(
-            userBalanceAfter - userBalanceBefore,
-            claimable,
-            "User should receive all claimable fee tokens"
-        );
+        assertEq(userBalanceAfter - userBalanceBefore, claimable, "User should receive all claimable fee tokens");
     }
 
     // -----------------------------------------------------------------------
@@ -316,19 +310,14 @@ contract FeeRoutingTest is LPSplitHookTestBase {
         _setTerminalTokenFees(feeAmount);
 
         // Expected values
-        uint256 expectedFee = (feeAmount * FEE_PERCENT) / 10000; // 380e18
+        uint256 expectedFee = (feeAmount * FEE_PERCENT) / 10_000; // 380e18
         uint256 expectedRemaining = feeAmount - expectedFee; // 620e18
         // Mock terminal mints 1:1, so feeTokensMinted = expectedFee
         uint256 expectedFeeTokensMinted = expectedFee;
 
         vm.expectEmit(true, true, false, true, address(hook));
         emit IUniV3DeploymentSplitHook.LPFeesRouted(
-            PROJECT_ID,
-            address(terminalToken),
-            feeAmount,
-            expectedFee,
-            expectedRemaining,
-            expectedFeeTokensMinted
+            PROJECT_ID, address(terminalToken), feeAmount, expectedFee, expectedRemaining, expectedFeeTokensMinted
         );
 
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));

@@ -41,7 +41,9 @@ contract MockJBPermissions {
         uint256 projectId,
         uint256 permissionId,
         bool granted
-    ) external {
+    )
+        external
+    {
         _permissions[operator][account][projectId][permissionId] = granted;
     }
 
@@ -50,9 +52,14 @@ contract MockJBPermissions {
         address account,
         uint256 projectId,
         uint256 permissionId,
-        bool /* includeRoot */,
+        bool,
+        /* includeRoot */
         bool /* includeWildcardProjectId */
-    ) external view returns (bool) {
+    )
+        external
+        view
+        returns (bool)
+    {
         return _permissions[operator][account][projectId][permissionId];
     }
 }
@@ -221,7 +228,12 @@ contract MockJBController {
         });
     }
 
-    function allRulesetsOf(uint256 projectId, uint256 /* startIndex */, uint256 /* limit */)
+    function allRulesetsOf(
+        uint256 projectId,
+        uint256,
+        /* startIndex */
+        uint256 /* limit */
+    )
         external
         view
         returns (JBRulesetWithMetadata[] memory rulesets)
@@ -274,7 +286,9 @@ contract MockJBController {
         uint256 projectId,
         uint256 amount,
         string calldata /* memo */
-    ) external {
+    )
+        external
+    {
         burnCallCount++;
         lastBurnProjectId = projectId;
         lastBurnAmount = amount;
@@ -318,11 +332,7 @@ contract MockJBMultiTerminal {
     }
 
     function setAccountingContext(uint256 projectId, address token, uint32 currency, uint8 decimals) external {
-        _contexts[projectId][token] = JBAccountingContext({
-            token: token,
-            decimals: decimals,
-            currency: currency
-        });
+        _contexts[projectId][token] = JBAccountingContext({token: token, decimals: decimals, currency: currency});
     }
 
     function addAccountingContext(uint256 projectId, JBAccountingContext memory ctx) external {
@@ -348,7 +358,10 @@ contract MockJBMultiTerminal {
         return storeAddress;
     }
 
-    function accountingContextForTokenOf(uint256 projectId, address token)
+    function accountingContextForTokenOf(
+        uint256 projectId,
+        address token
+    )
         external
         view
         returns (JBAccountingContext memory)
@@ -356,23 +369,26 @@ contract MockJBMultiTerminal {
         return _contexts[projectId][token];
     }
 
-    function accountingContextsOf(uint256 projectId)
-        external
-        view
-        returns (JBAccountingContext[] memory)
-    {
+    function accountingContextsOf(uint256 projectId) external view returns (JBAccountingContext[] memory) {
         return _contextsList[projectId];
     }
 
     function pay(
         uint256 projectId,
-        address /* token */,
+        address,
+        /* token */
         uint256 amount,
         address beneficiary,
-        uint256 /* minReturnedTokens */,
-        string calldata /* memo */,
+        uint256,
+        /* minReturnedTokens */
+        string calldata,
+        /* memo */
         bytes calldata /* metadata */
-    ) external payable returns (uint256 beneficiaryTokenCount) {
+    )
+        external
+        payable
+        returns (uint256 beneficiaryTokenCount)
+    {
         payCallCount++;
         lastPayProjectId = projectId;
         lastPayAmount = amount;
@@ -393,14 +409,19 @@ contract MockJBMultiTerminal {
     }
 
     function cashOutTokensOf(
-        address /* holder */,
+        address,
+        /* holder */
         uint256 projectId,
         uint256 cashOutCount,
         address tokenToReclaim,
-        uint256 /* minTokensReclaimed */,
+        uint256,
+        /* minTokensReclaimed */
         address payable beneficiary,
         bytes calldata /* metadata */
-    ) external returns (uint256 reclaimAmount) {
+    )
+        external
+        returns (uint256 reclaimAmount)
+    {
         cashOutCallCount++;
         lastCashOutAmount = cashOutCount;
 
@@ -425,13 +446,21 @@ contract MockJBMultiTerminal {
     }
 
     function addToBalanceOf(
-        uint256 /* projectId */,
-        address /* token */,
-        uint256 /* amount */,
-        bool /* shouldReturnHeldTokens */,
-        string calldata /* memo */,
+        uint256,
+        /* projectId */
+        address,
+        /* token */
+        uint256,
+        /* amount */
+        bool,
+        /* shouldReturnHeldTokens */
+        string calldata,
+        /* memo */
         bytes calldata /* metadata */
-    ) external payable {
+    )
+        external
+        payable
+    {
         addToBalanceCallCount++;
     }
 
@@ -471,7 +500,11 @@ contract MockJBPrices {
         uint256 pricingCurrency,
         uint256 unitCurrency,
         uint256 /* decimals */
-    ) external view returns (uint256) {
+    )
+        external
+        view
+        returns (uint256)
+    {
         uint256 price = prices[projectId][pricingCurrency][unitCurrency];
         return price > 0 ? price : 1e18; // Default 1:1
     }
@@ -493,23 +526,36 @@ contract MockJBTerminalStore {
     function currentReclaimableSurplusOf(
         uint256 projectId,
         uint256 cashOutCount,
-        uint256 /* totalSupply */,
+        uint256,
+        /* totalSupply */
         uint256 /* surplus */
-    ) external view returns (uint256) {
+    )
+        external
+        view
+        returns (uint256)
+    {
         uint256 surplus = surplusPerToken[projectId];
         if (surplus == 0) return 0;
         return (surplus * cashOutCount) / 1e18;
     }
 
-    /// @dev Matches IJBTerminalStore.currentReclaimableSurplusOf(uint256,uint256,IJBTerminal[],JBAccountingContext[],uint256,uint256)
+    /// @dev Matches
+    /// IJBTerminalStore.currentReclaimableSurplusOf(uint256,uint256,IJBTerminal[],JBAccountingContext[],uint256,uint256)
     function currentReclaimableSurplusOf(
         uint256 projectId,
         uint256 cashOutCount,
-        IJBTerminal[] calldata /* terminals */,
-        JBAccountingContext[] calldata /* accountingContexts */,
-        uint256 /* decimals */,
+        IJBTerminal[] calldata,
+        /* terminals */
+        JBAccountingContext[] calldata,
+        /* accountingContexts */
+        uint256,
+        /* decimals */
         uint256 /* currency */
-    ) external view returns (uint256) {
+    )
+        external
+        view
+        returns (uint256)
+    {
         uint256 surplus = surplusPerToken[projectId];
         if (surplus == 0) return 0;
         return (surplus * cashOutCount) / 1e18;

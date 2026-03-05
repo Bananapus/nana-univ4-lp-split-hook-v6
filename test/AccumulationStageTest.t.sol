@@ -9,7 +9,8 @@ import {JBSplit} from "@bananapus/core/structs/JBSplit.sol";
 import {JBSplitHookContext} from "@bananapus/core/structs/JBSplitHookContext.sol";
 
 /// @notice Tests for UniV3DeploymentSplitHook pre-deployment (accumulation) behavior.
-/// @dev Covers projectDeployed/isPoolDeployed logic, processSplitWith accumulation, revert conditions, and supportsInterface.
+/// @dev Covers projectDeployed/isPoolDeployed logic, processSplitWith accumulation, revert conditions, and
+/// supportsInterface.
 contract AccumulationStageTest is LPSplitHookTestBase {
     // -----------------------------------------------------------------------
     // 1. projectDeployed -- false before any pool deployed
@@ -27,8 +28,7 @@ contract AccumulationStageTest is LPSplitHookTestBase {
     /// @notice Before deployPool is called, isPoolDeployed should return false.
     function test_IsPoolDeployed_FalseBeforeDeploy() public view {
         assertFalse(
-            hook.isPoolDeployed(PROJECT_ID, address(terminalToken)),
-            "isPoolDeployed should be false before deploy"
+            hook.isPoolDeployed(PROJECT_ID, address(terminalToken)), "isPoolDeployed should be false before deploy"
         );
     }
 
@@ -43,8 +43,7 @@ contract AccumulationStageTest is LPSplitHookTestBase {
 
         assertTrue(hook.projectDeployed(PROJECT_ID), "projectDeployed should be true after deploy");
         assertTrue(
-            hook.isPoolDeployed(PROJECT_ID, address(terminalToken)),
-            "isPoolDeployed should be true after deploy"
+            hook.isPoolDeployed(PROJECT_ID, address(terminalToken)), "isPoolDeployed should be true after deploy"
         );
     }
 
@@ -59,9 +58,7 @@ contract AccumulationStageTest is LPSplitHookTestBase {
         _accumulateTokens(PROJECT_ID, amount);
 
         assertEq(
-            hook.accumulatedProjectTokens(PROJECT_ID),
-            amount,
-            "accumulatedProjectTokens should equal deposited amount"
+            hook.accumulatedProjectTokens(PROJECT_ID), amount, "accumulatedProjectTokens should equal deposited amount"
         );
     }
 
@@ -123,7 +120,7 @@ contract AccumulationStageTest is LPSplitHookTestBase {
             projectId: PROJECT_ID,
             groupId: 1,
             split: JBSplit({
-                percent: 1000000,
+                percent: 1_000_000,
                 projectId: 0,
                 beneficiary: payable(address(0)),
                 preferAddToBalance: false,
@@ -132,9 +129,7 @@ contract AccumulationStageTest is LPSplitHookTestBase {
             })
         });
 
-        vm.expectRevert(
-            UniV3DeploymentSplitHook.UniV3DeploymentSplitHook_NotHookSpecifiedInContext.selector
-        );
+        vm.expectRevert(UniV3DeploymentSplitHook.UniV3DeploymentSplitHook_NotHookSpecifiedInContext.selector);
         vm.prank(address(controller));
         hook.processSplitWith(context);
     }
@@ -151,9 +146,7 @@ contract AccumulationStageTest is LPSplitHookTestBase {
         // Build context with groupId=0 (payout split, not reserved tokens)
         JBSplitHookContext memory context = _buildContext(PROJECT_ID, address(projectToken), amount, 0);
 
-        vm.expectRevert(
-            UniV3DeploymentSplitHook.UniV3DeploymentSplitHook_TerminalTokensNotAllowed.selector
-        );
+        vm.expectRevert(UniV3DeploymentSplitHook.UniV3DeploymentSplitHook_TerminalTokensNotAllowed.selector);
         vm.prank(address(controller));
         hook.processSplitWith(context);
     }
@@ -171,9 +164,7 @@ contract AccumulationStageTest is LPSplitHookTestBase {
         // Project 999 has no controller set in directory (defaults to address(0))
         JBSplitHookContext memory context = _buildReservedContext(invalidProjectId, amount);
 
-        vm.expectRevert(
-            UniV3DeploymentSplitHook.UniV3DeploymentSplitHook_InvalidProjectId.selector
-        );
+        vm.expectRevert(UniV3DeploymentSplitHook.UniV3DeploymentSplitHook_InvalidProjectId.selector);
         // Even pranking as some address, it will fail at the controllerOf check first
         vm.prank(address(controller));
         hook.processSplitWith(context);
@@ -189,15 +180,9 @@ contract AccumulationStageTest is LPSplitHookTestBase {
             hook.supportsInterface(type(IUniV3DeploymentSplitHook).interfaceId),
             "Should support IUniV3DeploymentSplitHook"
         );
-        assertTrue(
-            hook.supportsInterface(type(IJBSplitHook).interfaceId),
-            "Should support IJBSplitHook"
-        );
+        assertTrue(hook.supportsInterface(type(IJBSplitHook).interfaceId), "Should support IJBSplitHook");
         // Verify a random interface ID returns false
-        assertFalse(
-            hook.supportsInterface(bytes4(0xdeadbeef)),
-            "Should NOT support arbitrary interface"
-        );
+        assertFalse(hook.supportsInterface(bytes4(0xdeadbeef)), "Should NOT support arbitrary interface");
     }
 
     // -----------------------------------------------------------------------
@@ -225,11 +210,7 @@ contract AccumulationStageTest is LPSplitHookTestBase {
         assertGt(controller.burnCallCount(), burnCountBefore, "burnTokensOf should be called after deployment");
 
         // Verify accumulated stays 0
-        assertEq(
-            hook.accumulatedProjectTokens(PROJECT_ID),
-            0,
-            "accumulatedProjectTokens should remain 0 after burn"
-        );
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "accumulatedProjectTokens should remain 0 after burn");
     }
 
     // -----------------------------------------------------------------------

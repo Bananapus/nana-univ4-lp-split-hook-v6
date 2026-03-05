@@ -36,7 +36,11 @@ contract TestableUniV3DeploymentSplitHook is UniV3DeploymentSplitHook {
         uint256 projectId,
         address terminalToken,
         address projectToken
-    ) external view returns (uint160) {
+    )
+        external
+        view
+        returns (uint160)
+    {
         return _getIssuanceRateSqrtPriceX96(projectId, terminalToken, projectToken);
     }
 
@@ -44,7 +48,11 @@ contract TestableUniV3DeploymentSplitHook is UniV3DeploymentSplitHook {
         uint256 projectId,
         address terminalToken,
         address projectToken
-    ) external view returns (uint160) {
+    )
+        external
+        view
+        returns (uint160)
+    {
         return _getCashOutRateSqrtPriceX96(projectId, terminalToken, projectToken);
     }
 
@@ -52,7 +60,11 @@ contract TestableUniV3DeploymentSplitHook is UniV3DeploymentSplitHook {
         uint256 projectId,
         address terminalToken,
         address projectToken
-    ) external view returns (int24, int24) {
+    )
+        external
+        view
+        returns (int24, int24)
+    {
         return _calculateTickBounds(projectId, terminalToken, projectToken);
     }
 
@@ -64,7 +76,11 @@ contract TestableUniV3DeploymentSplitHook is UniV3DeploymentSplitHook {
         uint256 projectId,
         address terminalToken,
         address projectToken
-    ) external view returns (uint160) {
+    )
+        external
+        view
+        returns (uint160)
+    {
         return _getSqrtPriceX96ForCurrentJuiceboxPrice(projectId, terminalToken, projectToken);
     }
 
@@ -72,7 +88,11 @@ contract TestableUniV3DeploymentSplitHook is UniV3DeploymentSplitHook {
         uint256 projectId,
         address terminalToken,
         address projectToken
-    ) external view returns (uint160) {
+    )
+        external
+        view
+        returns (uint160)
+    {
         return _computeInitialSqrtPrice(projectId, terminalToken, projectToken);
     }
 
@@ -84,10 +104,13 @@ contract TestableUniV3DeploymentSplitHook is UniV3DeploymentSplitHook {
         uint160 sqrtPriceInit,
         int24 tickLower,
         int24 tickUpper
-    ) external view returns (uint256) {
+    )
+        external
+        view
+        returns (uint256)
+    {
         return _computeOptimalCashOutAmount(
-            projectId, terminalToken, projectToken,
-            totalProjectTokens, sqrtPriceInit, tickLower, tickUpper
+            projectId, terminalToken, projectToken, totalProjectTokens, sqrtPriceInit, tickLower, tickUpper
         );
     }
 }
@@ -158,7 +181,7 @@ contract PriceMathTest is LPSplitHookTestBase {
 
     /// @notice With 100% reserved (10000), all tokens go to reserves so issuance rate = 0.
     function test_IssuanceRate_MaxReserved() public {
-        controller.setReservedPercent(PROJECT_ID, 10000);
+        controller.setReservedPercent(PROJECT_ID, 10_000);
 
         uint256 rate = testableHook.exposed_getIssuanceRate(PROJECT_ID, address(terminalToken));
 
@@ -251,9 +274,8 @@ contract PriceMathTest is LPSplitHookTestBase {
 
     /// @notice _getIssuanceRateSqrtPriceX96 returns nonzero for valid project.
     function test_IssuanceRateSqrtPriceX96_NonZero() public view {
-        uint160 sqrtPrice = testableHook.exposed_getIssuanceRateSqrtPriceX96(
-            PROJECT_ID, address(terminalToken), address(projectToken)
-        );
+        uint160 sqrtPrice =
+            testableHook.exposed_getIssuanceRateSqrtPriceX96(PROJECT_ID, address(terminalToken), address(projectToken));
 
         assertGt(sqrtPrice, 0, "Issuance rate sqrtPriceX96 should be nonzero");
     }
@@ -264,9 +286,8 @@ contract PriceMathTest is LPSplitHookTestBase {
 
     /// @notice _getCashOutRateSqrtPriceX96 returns nonzero for valid project.
     function test_CashOutRateSqrtPriceX96_NonZero() public view {
-        uint160 sqrtPrice = testableHook.exposed_getCashOutRateSqrtPriceX96(
-            PROJECT_ID, address(terminalToken), address(projectToken)
-        );
+        uint160 sqrtPrice =
+            testableHook.exposed_getCashOutRateSqrtPriceX96(PROJECT_ID, address(terminalToken), address(projectToken));
 
         assertGt(sqrtPrice, 0, "Cash out rate sqrtPriceX96 should be nonzero");
     }
@@ -277,9 +298,8 @@ contract PriceMathTest is LPSplitHookTestBase {
 
     /// @notice Under normal conditions (cashOutRate < issuanceRate), tickLower < tickUpper.
     function test_TickBounds_Normal() public view {
-        (int24 tickLower, int24 tickUpper) = testableHook.exposed_calculateTickBounds(
-            PROJECT_ID, address(terminalToken), address(projectToken)
-        );
+        (int24 tickLower, int24 tickUpper) =
+            testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
 
         assertLt(tickLower, tickUpper, "tickLower should be less than tickUpper under normal rates");
     }
@@ -303,9 +323,8 @@ contract PriceMathTest is LPSplitHookTestBase {
         // That makes cashOut token1Amount = 1e36 / 1e12 = 1e24, far exceeding issuance at 900e18.
         store.setSurplus(PROJECT_ID, 1e12);
 
-        (int24 tickLower, int24 tickUpper) = testableHook.exposed_calculateTickBounds(
-            PROJECT_ID, address(terminalToken), address(projectToken)
-        );
+        (int24 tickLower, int24 tickUpper) =
+            testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
 
         // Should fall back to currentTick +/- TICK_SPACING
         assertLt(tickLower, tickUpper, "Fallback should still produce tickLower < tickUpper");
@@ -318,9 +337,8 @@ contract PriceMathTest is LPSplitHookTestBase {
 
     /// @notice Both tick bounds are multiples of TICK_SPACING.
     function test_TickBounds_AlignedToSpacing() public view {
-        (int24 tickLower, int24 tickUpper) = testableHook.exposed_calculateTickBounds(
-            PROJECT_ID, address(terminalToken), address(projectToken)
-        );
+        (int24 tickLower, int24 tickUpper) =
+            testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
 
         assertEq(tickLower % 200, 0, "tickLower should be aligned to TICK_SPACING (200)");
         assertEq(tickUpper % 200, 0, "tickUpper should be aligned to TICK_SPACING (200)");
@@ -358,7 +376,7 @@ contract PriceMathTest is LPSplitHookTestBase {
     /// @notice For any valid tick in the Uniswap V3 range, alignment always produces a multiple of 200.
     function testFuzz_AlignTick_AlwaysAligned(int24 tick) public view {
         // Constrain to valid Uniswap V3 tick range
-        vm.assume(tick > -887200 && tick < 887200);
+        vm.assume(tick > -887_200 && tick < 887_200);
 
         int24 aligned = testableHook.exposed_alignTickToSpacing(tick, 200);
 
@@ -375,15 +393,12 @@ contract PriceMathTest is LPSplitHookTestBase {
 
     /// @notice _computeInitialSqrtPrice returns a price between cash-out and issuance bounds.
     function test_GeometricMean_BetweenBounds() public view {
-        uint160 sqrtPriceInit = testableHook.exposed_computeInitialSqrtPrice(
-            PROJECT_ID, address(terminalToken), address(projectToken)
-        );
-        uint160 sqrtPriceCashOut = testableHook.exposed_getCashOutRateSqrtPriceX96(
-            PROJECT_ID, address(terminalToken), address(projectToken)
-        );
-        uint160 sqrtPriceIssuance = testableHook.exposed_getIssuanceRateSqrtPriceX96(
-            PROJECT_ID, address(terminalToken), address(projectToken)
-        );
+        uint160 sqrtPriceInit =
+            testableHook.exposed_computeInitialSqrtPrice(PROJECT_ID, address(terminalToken), address(projectToken));
+        uint160 sqrtPriceCashOut =
+            testableHook.exposed_getCashOutRateSqrtPriceX96(PROJECT_ID, address(terminalToken), address(projectToken));
+        uint160 sqrtPriceIssuance =
+            testableHook.exposed_getIssuanceRateSqrtPriceX96(PROJECT_ID, address(terminalToken), address(projectToken));
 
         // Determine which is lower/upper (depends on token ordering)
         uint160 lower = sqrtPriceCashOut < sqrtPriceIssuance ? sqrtPriceCashOut : sqrtPriceIssuance;
@@ -401,12 +416,10 @@ contract PriceMathTest is LPSplitHookTestBase {
     function test_GeometricMean_FallbackOnZeroCashOut() public {
         store.setSurplus(PROJECT_ID, 0);
 
-        uint160 sqrtPriceInit = testableHook.exposed_computeInitialSqrtPrice(
-            PROJECT_ID, address(terminalToken), address(projectToken)
-        );
-        uint160 sqrtPriceIssuance = testableHook.exposed_getIssuanceRateSqrtPriceX96(
-            PROJECT_ID, address(terminalToken), address(projectToken)
-        );
+        uint160 sqrtPriceInit =
+            testableHook.exposed_computeInitialSqrtPrice(PROJECT_ID, address(terminalToken), address(projectToken));
+        uint160 sqrtPriceIssuance =
+            testableHook.exposed_getIssuanceRateSqrtPriceX96(PROJECT_ID, address(terminalToken), address(projectToken));
 
         assertEq(sqrtPriceInit, sqrtPriceIssuance, "Should fall back to issuance rate when cash-out is 0");
     }
@@ -420,16 +433,13 @@ contract PriceMathTest is LPSplitHookTestBase {
         uint256 totalTokens = 100e18;
 
         // Get tick bounds and initial price
-        (int24 tickLower, int24 tickUpper) = testableHook.exposed_calculateTickBounds(
-            PROJECT_ID, address(terminalToken), address(projectToken)
-        );
-        uint160 sqrtPriceInit = testableHook.exposed_computeInitialSqrtPrice(
-            PROJECT_ID, address(terminalToken), address(projectToken)
-        );
+        (int24 tickLower, int24 tickUpper) =
+            testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
+        uint160 sqrtPriceInit =
+            testableHook.exposed_computeInitialSqrtPrice(PROJECT_ID, address(terminalToken), address(projectToken));
 
         uint256 cashOut = testableHook.exposed_computeOptimalCashOutAmount(
-            PROJECT_ID, address(terminalToken), address(projectToken),
-            totalTokens, sqrtPriceInit, tickLower, tickUpper
+            PROJECT_ID, address(terminalToken), address(projectToken), totalTokens, sqrtPriceInit, tickLower, tickUpper
         );
 
         assertLe(cashOut, totalTokens / 2, "Optimal cash-out should be <= 50% of total");
@@ -450,13 +460,17 @@ contract PriceMathTest is LPSplitHookTestBase {
         // _computeOptimalCashOutAmount returns 0 when cash-out rate is 0.
         // We pass issuance-rate sqrtPrice and arbitrary tick bounds since the function
         // short-circuits on cashOutRate == 0.
-        uint160 sqrtPriceInit = testableHook.exposed_getIssuanceRateSqrtPriceX96(
-            PROJECT_ID, address(terminalToken), address(projectToken)
-        );
+        uint160 sqrtPriceInit =
+            testableHook.exposed_getIssuanceRateSqrtPriceX96(PROJECT_ID, address(terminalToken), address(projectToken));
 
         uint256 cashOut = testableHook.exposed_computeOptimalCashOutAmount(
-            PROJECT_ID, address(terminalToken), address(projectToken),
-            totalTokens, sqrtPriceInit, int24(-200), int24(200)
+            PROJECT_ID,
+            address(terminalToken),
+            address(projectToken),
+            totalTokens,
+            sqrtPriceInit,
+            int24(-200),
+            int24(200)
         );
 
         assertEq(cashOut, 0, "Cash-out should be 0 when surplus is 0");
@@ -468,20 +482,16 @@ contract PriceMathTest is LPSplitHookTestBase {
 
     /// @notice Doubling total tokens should approximately double the cash-out amount.
     function test_OptimalCashOut_ScalesWithTotal() public view {
-        (int24 tickLower, int24 tickUpper) = testableHook.exposed_calculateTickBounds(
-            PROJECT_ID, address(terminalToken), address(projectToken)
-        );
-        uint160 sqrtPriceInit = testableHook.exposed_computeInitialSqrtPrice(
-            PROJECT_ID, address(terminalToken), address(projectToken)
-        );
+        (int24 tickLower, int24 tickUpper) =
+            testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
+        uint160 sqrtPriceInit =
+            testableHook.exposed_computeInitialSqrtPrice(PROJECT_ID, address(terminalToken), address(projectToken));
 
         uint256 cashOut100 = testableHook.exposed_computeOptimalCashOutAmount(
-            PROJECT_ID, address(terminalToken), address(projectToken),
-            100e18, sqrtPriceInit, tickLower, tickUpper
+            PROJECT_ID, address(terminalToken), address(projectToken), 100e18, sqrtPriceInit, tickLower, tickUpper
         );
         uint256 cashOut200 = testableHook.exposed_computeOptimalCashOutAmount(
-            PROJECT_ID, address(terminalToken), address(projectToken),
-            200e18, sqrtPriceInit, tickLower, tickUpper
+            PROJECT_ID, address(terminalToken), address(projectToken), 200e18, sqrtPriceInit, tickLower, tickUpper
         );
 
         // Should be exactly 2x (linear scaling)

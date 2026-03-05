@@ -13,7 +13,6 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 /// @dev Covers access control on processSplitWith, claimFeeTokensFor authorization,
 ///      permissionless function access, cross-project isolation, and reentrancy safety.
 contract SecurityTest is LPSplitHookTestBase {
-
     // ─────────────────────────────────────────────────────────────────────
     // 1. processSplitWith -- only the controller can call it
     // ─────────────────────────────────────────────────────────────────────
@@ -47,7 +46,7 @@ contract SecurityTest is LPSplitHookTestBase {
             projectId: PROJECT_ID,
             groupId: 1,
             split: JBSplit({
-                percent: 1000000,
+                percent: 1_000_000,
                 projectId: 0,
                 beneficiary: payable(address(0)),
                 preferAddToBalance: false,
@@ -57,9 +56,7 @@ contract SecurityTest is LPSplitHookTestBase {
         });
 
         vm.prank(address(controller));
-        vm.expectRevert(
-            UniV3DeploymentSplitHook.UniV3DeploymentSplitHook_NotHookSpecifiedInContext.selector
-        );
+        vm.expectRevert(UniV3DeploymentSplitHook.UniV3DeploymentSplitHook_NotHookSpecifiedInContext.selector);
         hook.processSplitWith(context);
     }
 
@@ -73,14 +70,10 @@ contract SecurityTest is LPSplitHookTestBase {
         projectToken.mint(address(hook), amount);
 
         // groupId=0 means payout split, not reserved tokens
-        JBSplitHookContext memory context = _buildContext(
-            PROJECT_ID, address(projectToken), amount, 0
-        );
+        JBSplitHookContext memory context = _buildContext(PROJECT_ID, address(projectToken), amount, 0);
 
         vm.prank(address(controller));
-        vm.expectRevert(
-            UniV3DeploymentSplitHook.UniV3DeploymentSplitHook_TerminalTokensNotAllowed.selector
-        );
+        vm.expectRevert(UniV3DeploymentSplitHook.UniV3DeploymentSplitHook_TerminalTokensNotAllowed.selector);
         hook.processSplitWith(context);
     }
 
@@ -115,10 +108,7 @@ contract SecurityTest is LPSplitHookTestBase {
 
         // Step 3: Set fee terminal accounting context for the fee project
         terminal.setAccountingContext(
-            FEE_PROJECT_ID,
-            address(terminalToken),
-            uint32(uint160(address(terminalToken))),
-            18
+            FEE_PROJECT_ID, address(terminalToken), uint32(uint160(address(terminalToken))), 18
         );
 
         // Step 4: Call collectAndRouteLPFees -- this routes fees and creates claimable fee tokens
@@ -151,9 +141,7 @@ contract SecurityTest is LPSplitHookTestBase {
         address beneficiary = makeAddr("unauthorized");
 
         // Do NOT set the operator for this beneficiary
-        vm.expectRevert(
-            UniV3DeploymentSplitHook.UniV3DeploymentSplitHook_UnauthorizedBeneficiary.selector
-        );
+        vm.expectRevert(UniV3DeploymentSplitHook.UniV3DeploymentSplitHook_UnauthorizedBeneficiary.selector);
         hook.claimFeeTokensFor(PROJECT_ID, beneficiary);
     }
 
@@ -181,10 +169,7 @@ contract SecurityTest is LPSplitHookTestBase {
         terminalToken.mint(address(nfpm), feeAmount);
 
         terminal.setAccountingContext(
-            FEE_PROJECT_ID,
-            address(terminalToken),
-            uint32(uint160(address(terminalToken))),
-            18
+            FEE_PROJECT_ID, address(terminalToken), uint32(uint160(address(terminalToken))), 18
         );
 
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
@@ -235,7 +220,7 @@ contract SecurityTest is LPSplitHookTestBase {
 
     /// @notice Accumulating tokens for one project does not affect another project's balance.
     function test_CrossProjectIsolation() public {
-        uint256 projectA = PROJECT_ID;       // Already configured (ID=1)
+        uint256 projectA = PROJECT_ID; // Already configured (ID=1)
         uint256 projectB = 3;
 
         // Set up project B with its own controller, weights, and terminal
@@ -247,18 +232,11 @@ contract SecurityTest is LPSplitHookTestBase {
         _setDirectoryTerminal(projectB, address(terminalToken), address(terminal));
         _addDirectoryTerminal(projectB, address(terminal));
 
-        terminal.setAccountingContext(
-            projectB,
-            address(terminalToken),
-            uint32(uint160(address(terminalToken))),
-            18
-        );
+        terminal.setAccountingContext(projectB, address(terminalToken), uint32(uint160(address(terminalToken))), 18);
         terminal.addAccountingContext(
             projectB,
             JBAccountingContext({
-                token: address(terminalToken),
-                decimals: 18,
-                currency: uint32(uint160(address(terminalToken)))
+                token: address(terminalToken), decimals: 18, currency: uint32(uint160(address(terminalToken)))
             })
         );
 
@@ -270,16 +248,8 @@ contract SecurityTest is LPSplitHookTestBase {
         _accumulateTokens(projectB, amountB);
 
         // Verify independent accounting
-        assertEq(
-            hook.accumulatedProjectTokens(projectA),
-            amountA,
-            "Project A should have its own accumulated balance"
-        );
-        assertEq(
-            hook.accumulatedProjectTokens(projectB),
-            amountB,
-            "Project B should have its own accumulated balance"
-        );
+        assertEq(hook.accumulatedProjectTokens(projectA), amountA, "Project A should have its own accumulated balance");
+        assertEq(hook.accumulatedProjectTokens(projectB), amountB, "Project B should have its own accumulated balance");
 
         // Accumulate more for project A and verify B is unchanged
         _accumulateTokens(projectA, 50e18);
@@ -289,9 +259,7 @@ contract SecurityTest is LPSplitHookTestBase {
             "Project A total should reflect additional accumulation"
         );
         assertEq(
-            hook.accumulatedProjectTokens(projectB),
-            amountB,
-            "Project B should be unaffected by Project A accumulation"
+            hook.accumulatedProjectTokens(projectB), amountB, "Project B should be unaffected by Project A accumulation"
         );
     }
 
@@ -318,10 +286,7 @@ contract SecurityTest is LPSplitHookTestBase {
         terminalToken.mint(address(nfpm), feeAmount);
 
         terminal.setAccountingContext(
-            FEE_PROJECT_ID,
-            address(terminalToken),
-            uint32(uint160(address(terminalToken))),
-            18
+            FEE_PROJECT_ID, address(terminalToken), uint32(uint160(address(terminalToken))), 18
         );
 
         // Call from a random user address -- should succeed without reverting
@@ -410,11 +375,7 @@ contract SecurityTest is LPSplitHookTestBase {
     // Internal helper to sort tokens (mirrors hook's _sortTokens)
     // ─────────────────────────────────────────────────────────────────────
 
-    function _sortForTest(address tokenA, address tokenB)
-        internal
-        pure
-        returns (address token0, address token1)
-    {
+    function _sortForTest(address tokenA, address tokenB) internal pure returns (address token0, address token1) {
         return tokenA < tokenB ? (tokenA, tokenB) : (tokenB, tokenA);
     }
 }

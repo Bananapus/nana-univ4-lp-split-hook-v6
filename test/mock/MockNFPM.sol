@@ -15,7 +15,7 @@ contract MockNFPM {
 
     // Configurable usage percent (how much of desired amounts are used in mint)
     // Default 100% = 10000 bps
-    uint256 public usagePercent = 10000;
+    uint256 public usagePercent = 10_000;
 
     struct Position {
         address token0;
@@ -71,7 +71,11 @@ contract MockNFPM {
         address token1,
         uint24 fee,
         uint160 /* sqrtPriceX96 */
-    ) external payable returns (address pool) {
+    )
+        external
+        payable
+        returns (address pool)
+    {
         bytes32 poolKey = keccak256(abi.encodePacked(token0, token1, fee));
         pool = createdPools[poolKey];
         if (pool == address(0)) {
@@ -97,8 +101,8 @@ contract MockNFPM {
         lastMintTokenId = tokenId;
 
         // Calculate amounts used based on usagePercent
-        amount0 = (params.amount0Desired * usagePercent) / 10000;
-        amount1 = (params.amount1Desired * usagePercent) / 10000;
+        amount0 = (params.amount0Desired * usagePercent) / 10_000;
+        amount1 = (params.amount1Desired * usagePercent) / 10_000;
 
         // Handle native ETH sent as msg.value — wrap to WETH like the real NFPM does
         if (msg.value > 0) {
@@ -240,7 +244,7 @@ contract MockNFPM {
             0, // feeGrowthInside0LastX128
             0, // feeGrowthInside1LastX128
             0, // tokensOwed0
-            0  // tokensOwed1
+            0 // tokensOwed1
         );
     }
 
