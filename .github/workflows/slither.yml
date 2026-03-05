@@ -1,4 +1,4 @@
-name: test
+name: slither
 on:
   pull_request:
     branches:
@@ -7,7 +7,7 @@ on:
     branches:
       - main
 jobs:
-  forge-test:
+  analyze:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -15,7 +15,8 @@ jobs:
           submodules: recursive
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
-      - name: Run tests
-        run: forge test --fail-fast
-      - name: Check contract sizes
-        run: forge build --sizes
+      - name: Run slither
+        uses: crytic/slither-action@v0.3.1
+        with:
+          slither-config: slither-ci.config.json
+          fail-on: medium
