@@ -1,20 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity 0.8.28;
 
-import { IJBController } from "@bananapus/core-v6/src/interfaces/IJBController.sol";
-import { IJBDirectory } from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
-import { IJBMultiTerminal } from "@bananapus/core-v6/src/interfaces/IJBMultiTerminal.sol";
-import { IJBSplitHook } from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
-import { IJBTerminal } from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
-import { IJBTerminalStore } from "@bananapus/core-v6/src/interfaces/IJBTerminalStore.sol";
-import { IJBTokens } from "@bananapus/core-v6/src/interfaces/IJBTokens.sol";
-import { JBAccountingContext } from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
-import { JBRuleset } from "@bananapus/core-v6/src/structs/JBRuleset.sol";
-import { JBRulesetMetadata } from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
-import { JBRulesetWithMetadata } from "@bananapus/core-v6/src/structs/JBRulesetWithMetadata.sol";
-import { JBRulesetMetadataResolver } from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
-import { JBSplitHookContext } from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
-import { JBConstants } from "@bananapus/core-v6/src/libraries/JBConstants.sol";
+import { IJBController } from "@bananapus/core/interfaces/IJBController.sol";
+import { IJBDirectory } from "@bananapus/core/interfaces/IJBDirectory.sol";
+import { IJBMultiTerminal } from "@bananapus/core/interfaces/IJBMultiTerminal.sol";
+import { IJBSplitHook } from "@bananapus/core/interfaces/IJBSplitHook.sol";
+import { IJBTerminal } from "@bananapus/core/interfaces/IJBTerminal.sol";
+import { IJBTerminalStore } from "@bananapus/core/interfaces/IJBTerminalStore.sol";
+import { IJBTokens } from "@bananapus/core/interfaces/IJBTokens.sol";
+import { JBAccountingContext } from "@bananapus/core/structs/JBAccountingContext.sol";
+import { JBRuleset } from "@bananapus/core/structs/JBRuleset.sol";
+import { JBRulesetMetadata } from "@bananapus/core/structs/JBRulesetMetadata.sol";
+import { JBRulesetWithMetadata } from "@bananapus/core/structs/JBRulesetWithMetadata.sol";
+import { JBRulesetMetadataResolver } from "@bananapus/core/libraries/JBRulesetMetadataResolver.sol";
+import { JBSplitHookContext } from "@bananapus/core/structs/JBSplitHookContext.sol";
+import { JBConstants } from "@bananapus/core/libraries/JBConstants.sol";
 
 import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import { SafeERC20 } from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
