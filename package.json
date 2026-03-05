@@ -8,5 +8,8 @@
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@bananapus/core-v6": "^0.0.1"
   }
 }
