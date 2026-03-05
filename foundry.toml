@@ -39,7 +39,7 @@ optimizer_runs = 200
 fail_on_revert = false
 
 [fuzz]
-runs = 1024
+runs = 4096
 
 [fmt]
 number_underscore = "thousands"
