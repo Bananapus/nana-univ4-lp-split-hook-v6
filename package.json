@@ -1,0 +1,29 @@
+{
+  "name": "@bananapus/univ3-lp-split-hook-v6",
+  "version": "0.0.1",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Bananapus/nana-univ3-lp-split-hook-v6"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "test": "forge test",
+    "deploy:mainnets": "source ./.env && npx sphinx propose ./script/Deploy.s.sol --networks mainnets",
+    "deploy:testnets": "source ./.env && npx sphinx propose ./script/Deploy.s.sol --networks testnets",
+    "artifacts": "source ./.env && npx sphinx artifacts --org-id 'ea165b21-7cdc-4d7b-be59-ecdd4c26bee4' --project-name 'nana-univ3-lp-split-hook-v6'"
+  },
+  "dependencies": {
+    "@bananapus/core-v6": "^0.0.4",
+    "@bananapus/permission-ids-v6": "^0.0.2",
+    "@openzeppelin/contracts": "^5.2.0",
+    "@prb/math": "^4.1.0",
+    "@uniswap/permit2": "github:Uniswap/permit2",
+    "@uniswap/v3-core": "github:Uniswap/v3-core#0.8"
+  },
+  "devDependencies": {
+    "@sphinx-labs/plugins": "^0.33.2"
+  }
+}

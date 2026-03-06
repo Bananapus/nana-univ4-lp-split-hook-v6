@@ -1,0 +1,20 @@
+{
+  "lib/forge-std": {
+    "rev": "b93cf4bc34ff214c099dc970b153f85ade8c9f66"
+  },
+  "lib/nana-core": {
+    "rev": "0b1ecd53ff0e11ca07e6fc0d8376aa567a2fd07c"
+  },
+  "lib/openzeppelin-contracts": {
+    "rev": "9e66e2f9f5567e20e76cf84b95929327485a7807"
+  },
+  "lib/permit2": {
+    "rev": "cc56ad0f3439c502c246fc5cfcc3db92bb8b7219"
+  },
+  "lib/prb-math": {
+    "rev": "280fc5f77e1b21b9c54013aac51966be33f4a410"
+  },
+  "lib/v3-core": {
+    "rev": "e3589b192d0be27e100cd0daaf6c97204fdb1899"
+  }
+}
