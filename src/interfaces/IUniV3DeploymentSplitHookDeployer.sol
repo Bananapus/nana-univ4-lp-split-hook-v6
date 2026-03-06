@@ -1,8 +1,8 @@
-// SPDX-License-Identifier: Apache-2.0
-pragma solidity ^0.8.0;
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.23;
 
-import { UniV3DeploymentSplitHook } from "../UniV3DeploymentSplitHook.sol";
-import { IUniV3DeploymentSplitHook } from "./IUniV3DeploymentSplitHook.sol";
+import {UniV3DeploymentSplitHook} from "../UniV3DeploymentSplitHook.sol";
+import {IUniV3DeploymentSplitHook} from "./IUniV3DeploymentSplitHook.sol";
 
 interface IUniV3DeploymentSplitHookDeployer {
     event HookDeployed(

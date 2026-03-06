@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.28;
+pragma solidity 0.8.23;
 
 /// @notice Minimal interface for REVDeployer split operator checks.
 interface IREVDeployer {

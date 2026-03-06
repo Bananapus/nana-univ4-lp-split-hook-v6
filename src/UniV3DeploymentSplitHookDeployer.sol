@@ -1,11 +1,11 @@
-// SPDX-License-Identifier: Apache-2.0
-pragma solidity 0.8.28;
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.23;
 
-import { LibClone } from "solady/src/utils/LibClone.sol";
+import {LibClone} from "solady/src/utils/LibClone.sol";
 
-import { UniV3DeploymentSplitHook } from "./UniV3DeploymentSplitHook.sol";
-import { IUniV3DeploymentSplitHook } from "./interfaces/IUniV3DeploymentSplitHook.sol";
-import { IUniV3DeploymentSplitHookDeployer } from "./interfaces/IUniV3DeploymentSplitHookDeployer.sol";
+import {UniV3DeploymentSplitHook} from "./UniV3DeploymentSplitHook.sol";
+import {IUniV3DeploymentSplitHook} from "./interfaces/IUniV3DeploymentSplitHook.sol";
+import {IUniV3DeploymentSplitHookDeployer} from "./interfaces/IUniV3DeploymentSplitHookDeployer.sol";
 
 /// @notice Deploys `UniV3DeploymentSplitHook` clones with shared infrastructure baked into the implementation.
 /// @dev Anyone can deploy a hook by providing only `feeProjectId` and `feePercent`.

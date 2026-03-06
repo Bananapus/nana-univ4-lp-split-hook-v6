@@ -85,6 +85,7 @@ contract DeployScript is Script, Sphinx {
     function deploy() public sphinx {
         UniV3DeploymentSplitHook hookImpl = new UniV3DeploymentSplitHook{salt: HOOK_SALT}(
             address(core.directory),
+            core.permissions,
             address(core.tokens),
             factory,
             nonfungiblePositionManager,

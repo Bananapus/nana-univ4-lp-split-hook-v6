@@ -1,22 +1,32 @@
 [profile.default]
-solc = '0.8.28'
-src = "src"
-out = "out"
+solc = '0.8.23'
+evm_version = 'paris'
+optimizer_runs = 200
 libs = ["node_modules", "lib"]
+fs_permissions = [{ access = "read-write", path = "./"}]
+via_ir = true
 remappings = [
     "forge-std/=lib/forge-std/src/",
-    "@uniswap/v3-core-patched/=lib/v3-core-patched/",
-    "@uniswap/v3-periphery-flattened/=lib/v3-periphery-flattened/",
-    "@uniswap/v3-core/=node_modules/@uniswap/v3-core/",
-    "@uniswap/permit2/=node_modules/@uniswap/permit2/",
+    "@openzeppelin/contracts=lib/openzeppelin-contracts/contracts",
+    "@bananapus/core=lib/nana-core/src",
+    "@bananapus/permission-ids=node_modules/@bananapus/permission-ids-v6/src",
+    "@uniswap/v3-core=lib/v3-core/contracts",
+    "@uniswap/v3-core-patched=lib/v3-core-patched",
+    "@uniswap/v3-periphery-flattened=lib/v3-periphery-flattened",
+    "@uniswap/permit2=lib/permit2",
+    "@prb/math=lib/prb-math",
 ]
-# Required to avoid stack too deep for invoking INonfungiblePositionManager.position() as per https://github.com/Uniswap/v3-periphery/issues/273
-via_ir = true
-optimizer_runs = 1000
-fs_permissions = [{ access = "read-write", path = "./"}]
 
 [profile.ci_sizes]
 optimizer_runs = 200
+
+[fuzz]
+runs = 4096
+
+[invariant]
+runs = 1024
+depth = 100
+fail_on_revert = false
 
 [fmt]
 number_underscore = "thousands"
