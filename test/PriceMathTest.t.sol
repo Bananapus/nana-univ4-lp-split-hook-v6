@@ -3,7 +3,7 @@ pragma solidity 0.8.23;
 
 import {LPSplitHookTestBase} from "./TestBase.sol";
 import {UniV3DeploymentSplitHook} from "../src/UniV3DeploymentSplitHook.sol";
-import {IJBPermissions} from "@bananapus/core/interfaces/IJBPermissions.sol";
+import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
 import {mulDiv, sqrt} from "@prb/math/src/Common.sol";
 
 /// @notice Wrapper that exposes internal price math functions for testing.

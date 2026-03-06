@@ -4,8 +4,8 @@ pragma solidity 0.8.23;
 import {LPSplitHookTestBase} from "./TestBase.sol";
 import {UniV3DeploymentSplitHook} from "../src/UniV3DeploymentSplitHook.sol";
 import {IUniV3DeploymentSplitHook} from "../src/interfaces/IUniV3DeploymentSplitHook.sol";
-import {JBPermissioned} from "@bananapus/core/abstract/JBPermissioned.sol";
-import {JBSplitHookContext} from "@bananapus/core/structs/JBSplitHookContext.sol";
+import {JBPermissioned} from "@bananapus/core-v6/src/abstract/JBPermissioned.sol";
+import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
 
 /// @notice Tests for UniV3DeploymentSplitHook deployment stage behavior.
 /// @dev Covers deployPool access control, processSplitWith accumulation/burning, leftovers, and revert conditions.

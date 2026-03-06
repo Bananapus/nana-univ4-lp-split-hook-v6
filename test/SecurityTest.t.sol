@@ -3,10 +3,10 @@ pragma solidity 0.8.23;
 
 import {LPSplitHookTestBase} from "./TestBase.sol";
 import {UniV3DeploymentSplitHook} from "../src/UniV3DeploymentSplitHook.sol";
-import {JBSplit} from "@bananapus/core/structs/JBSplit.sol";
-import {JBSplitHookContext} from "@bananapus/core/structs/JBSplitHookContext.sol";
-import {JBAccountingContext} from "@bananapus/core/structs/JBAccountingContext.sol";
-import {IJBSplitHook} from "@bananapus/core/interfaces/IJBSplitHook.sol";
+import {JBSplit} from "@bananapus/core-v6/src/structs/JBSplit.sol";
+import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
+import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
+import {IJBSplitHook} from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// @notice Security-focused tests for UniV3DeploymentSplitHook.

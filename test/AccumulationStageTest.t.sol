@@ -4,9 +4,9 @@ pragma solidity 0.8.23;
 import {LPSplitHookTestBase} from "./TestBase.sol";
 import {UniV3DeploymentSplitHook} from "../src/UniV3DeploymentSplitHook.sol";
 import {IUniV3DeploymentSplitHook} from "../src/interfaces/IUniV3DeploymentSplitHook.sol";
-import {IJBSplitHook} from "@bananapus/core/interfaces/IJBSplitHook.sol";
-import {JBSplit} from "@bananapus/core/structs/JBSplit.sol";
-import {JBSplitHookContext} from "@bananapus/core/structs/JBSplitHookContext.sol";
+import {IJBSplitHook} from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
+import {JBSplit} from "@bananapus/core-v6/src/structs/JBSplit.sol";
+import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
 
 /// @notice Tests for UniV3DeploymentSplitHook pre-deployment (accumulation) behavior.
 /// @dev Covers projectDeployed/isPoolDeployed logic, processSplitWith accumulation, revert conditions, and supportsInterface.

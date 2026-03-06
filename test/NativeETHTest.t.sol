@@ -3,9 +3,9 @@ pragma solidity 0.8.23;
 
 import {LPSplitHookTestBase} from "./TestBase.sol";
 import {UniV3DeploymentSplitHook} from "../src/UniV3DeploymentSplitHook.sol";
-import {IJBPermissions} from "@bananapus/core/interfaces/IJBPermissions.sol";
-import {JBConstants} from "@bananapus/core/libraries/JBConstants.sol";
-import {JBAccountingContext} from "@bananapus/core/structs/JBAccountingContext.sol";
+import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
+import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
+import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 
 /// @notice Wrapper contract that exposes internal native-ETH helper functions for testing.
 contract TestableHookForETH is UniV3DeploymentSplitHook {

@@ -3,7 +3,7 @@ pragma solidity 0.8.23;
 
 import {LPSplitHookTestBase} from "./TestBase.sol";
 import {UniV3DeploymentSplitHook} from "../src/UniV3DeploymentSplitHook.sol";
-import {IJBPermissions} from "@bananapus/core/interfaces/IJBPermissions.sol";
+import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
 
 /// @notice Tests for UniV3DeploymentSplitHook constructor behavior.
 /// @dev Verifies all immutables are set correctly, zero-address checks revert,
