@@ -1,11 +1,11 @@
 name: slither
 on:
-  pull_request:
-    branches:
-      - main
-  push:
-    branches:
-      - main
+    pull_request:
+      branches:
+        - main
+    push:
+      branches:
+        - main
 jobs:
   analyze:
     runs-on: ubuntu-latest
@@ -18,5 +18,5 @@ jobs:
       - name: Run slither
         uses: crytic/slither-action@v0.3.1
         with:
-          slither-config: slither-ci.config.json
-          fail-on: medium
+            slither-config: slither-ci.config.json
+            fail-on: medium
