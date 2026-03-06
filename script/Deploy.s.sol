@@ -2,19 +2,22 @@
 pragma solidity 0.8.28;
 
 import "@bananapus/core-v6/script/helpers/CoreDeploymentLib.sol";
+import "@rev-net/core-v6/script/helpers/RevnetCoreDeploymentLib.sol";
 
 import {Sphinx} from "@sphinx-labs/contracts/SphinxPlugin.sol";
 import {Script} from "forge-std/Script.sol";
 
-import {UniV3DeploymentSplitHook} from "../src/UniV3DeploymentSplitHook.sol";
-import {IUniswapV3Factory} from "@uniswap/v3-core/contracts/interfaces/IUniswapV3Factory.sol";
+import {UniV3DeploymentSplitHookDeployer} from "../src/UniV3DeploymentSplitHookDeployer.sol";
 
 contract DeployScript is Script, Sphinx {
     /// @notice tracks the deployment of the core contracts for the chain we are deploying to.
     CoreDeployment core;
 
+    /// @notice tracks the deployment of the revnet core contracts for the chain we are deploying to.
+    RevnetCoreDeployment revnet;
+
     /// @notice the salt that is used to deploy the contract.
-    bytes32 SPLIT_HOOK = "UniV3DeploymentSplitHookV6";
+    bytes32 DEPLOYER_SALT = "UniV3DeploymentSplitHookDeployerV6";
 
     /// @notice tracks the addresses that are required for the chain we are deploying to.
     address factory;
@@ -30,6 +33,11 @@ contract DeployScript is Script, Sphinx {
         // Get the deployment addresses for the nana CORE for this chain.
         core = CoreDeploymentLib.getDeployment(
             vm.envOr("NANA_CORE_DEPLOYMENT_PATH", string("node_modules/@bananapus/core-v6/deployments/"))
+        );
+
+        // Get the deployment addresses for the revnet CORE for this chain.
+        revnet = RevnetCoreDeploymentLib.getDeployment(
+            vm.envOr("REVNET_CORE_DEPLOYMENT_PATH", string("node_modules/@rev-net/core-v6/deployments/"))
         );
 
         // Ethereum Mainnet
@@ -73,15 +81,12 @@ contract DeployScript is Script, Sphinx {
     }
 
     function deploy() public sphinx {
-        new UniV3DeploymentSplitHook{salt: SPLIT_HOOK}(
-            safeAddress(),
+        new UniV3DeploymentSplitHookDeployer{salt: DEPLOYER_SALT}(
             address(core.directory),
             address(core.tokens),
             factory,
             nonfungiblePositionManager,
-            vm.envOr("FEE_PROJECT_ID", uint256(0)),
-            vm.envOr("FEE_PERCENT", uint256(3800)),
-            vm.envOr("REV_DEPLOYER", address(0))
+            address(revnet.basic_deployer)
         );
     }
 
