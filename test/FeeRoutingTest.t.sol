@@ -163,12 +163,14 @@ contract FeeRoutingTest is LPSplitHookTestBase {
 
     /// @notice collectAndRouteLPFees should revert when pool is set but tokenId mapping is cleared.
     function test_CollectFees_RevertsIfNoTokenId() public {
-        // tokenIdForPool is the second mapping in contract storage.
-        // Ownable uses slot 0 (_owner), so:
-        //   slot 1 = poolOf (nested mapping)
-        //   slot 2 = tokenIdForPool (mapping)
-        // For mapping(address => uint256), the slot for key `pool` is keccak256(abi.encode(pool, 2))
-        bytes32 slot = keccak256(abi.encode(pool, uint256(2)));
+        // Storage layout (from forge inspect):
+        //   slot 0 = _owner
+        //   slot 1 = FEE_PROJECT_ID
+        //   slot 2 = FEE_PERCENT
+        //   slot 3 = poolOf
+        //   slot 4 = tokenIdForPool
+        // For mapping(address => uint256), the slot for key `pool` is keccak256(abi.encode(pool, 4))
+        bytes32 slot = keccak256(abi.encode(pool, uint256(4)));
         vm.store(address(hook), slot, bytes32(0));
 
         vm.expectRevert(UniV3DeploymentSplitHook.UniV3DeploymentSplitHook_InvalidStageForAction.selector);
