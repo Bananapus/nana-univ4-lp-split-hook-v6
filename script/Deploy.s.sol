@@ -2,6 +2,7 @@
 pragma solidity 0.8.26;
 
 import "@bananapus/core-v6/script/helpers/CoreDeploymentLib.sol";
+import "@bananapus/address-registry-v6/script/helpers/AddressRegistryDeploymentLib.sol";
 
 import {Sphinx} from "@sphinx-labs/contracts/SphinxPlugin.sol";
 import {Script} from "forge-std/Script.sol";
@@ -10,14 +11,15 @@ import {IJBPermissions} from "@bananapus/core/interfaces/IJBPermissions.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 
-import {IJBAddressRegistry} from "@bananapus/address-registry-v6/src/interfaces/IJBAddressRegistry.sol";
-
 import {UniV4DeploymentSplitHook} from "../src/UniV4DeploymentSplitHook.sol";
 import {UniV4DeploymentSplitHookDeployer} from "../src/UniV4DeploymentSplitHookDeployer.sol";
 
 contract DeployScript is Script, Sphinx {
     /// @notice tracks the deployment of the core contracts for the chain we are deploying to.
     CoreDeployment core;
+
+    /// @notice tracks the deployment of the address registry for the chain we are deploying to.
+    AddressRegistryDeployment registry;
 
     /// @notice the salts used to deploy the contracts.
     bytes32 HOOK_SALT = "UniV4DeploymentSplitHookV6";
@@ -37,6 +39,14 @@ contract DeployScript is Script, Sphinx {
         // Get the deployment addresses for the nana CORE for this chain.
         core = CoreDeploymentLib.getDeployment(
             vm.envOr("NANA_CORE_DEPLOYMENT_PATH", string("node_modules/@bananapus/core-v6/deployments/"))
+        );
+
+        // Get the deployment addresses for the address registry for this chain.
+        registry = AddressRegistryDeploymentLib.getDeployment(
+            vm.envOr(
+                "NANA_ADDRESS_REGISTRY_DEPLOYMENT_PATH",
+                string("node_modules/@bananapus/address-registry-v6/deployments/")
+            )
         );
 
         // Uniswap V4 PoolManager — canonical address on all chains
@@ -84,9 +94,7 @@ contract DeployScript is Script, Sphinx {
             positionManager
         );
 
-        new UniV4DeploymentSplitHookDeployer{salt: DEPLOYER_SALT}(
-            hookImpl, IJBAddressRegistry(0x2d9B78cb37Ca724cFB9B32cd8e9A5DC1C88Bc7Bb)
-        );
+        new UniV4DeploymentSplitHookDeployer{salt: DEPLOYER_SALT}(hookImpl, registry.registry);
     }
 
     function _isDeployed(bytes32 salt, bytes memory creationCode, bytes memory arguments) internal view returns (bool) {
