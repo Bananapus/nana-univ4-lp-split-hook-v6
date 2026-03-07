@@ -1,4 +1,4 @@
-# nana-univ4-lp-split-hook
+# Juicebox UniV4 LP Split Hook
 
 Juicebox split hook that accumulates reserved project tokens over time, then deploys a Uniswap V4 concentrated liquidity position bounded by the project's issuance rate (ceiling) and cash-out rate (floor). After deployment, it manages fee collection, liquidity rebalancing, and routes LP fees back to the project with a configurable fee split.
 
