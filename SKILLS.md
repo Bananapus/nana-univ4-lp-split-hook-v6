@@ -1,111 +1,194 @@
-# nana-lp-split-hook-v5
+# univ4-lp-split-hook-v6
 
 ## Purpose
 
-Juicebox reserved-token split hook that accumulates project tokens, deploys a Uniswap V3 liquidity position bounded by the project's issuance and cash-out rates, and routes LP fees back to the project.
+Juicebox reserved-token split hook that accumulates project tokens, deploys a Uniswap V4 concentrated liquidity position bounded by the project's issuance and cash-out rates, and routes LP fees back to the project with a configurable fee split.
 
 ## Contracts
 
 | Contract | Role |
 |----------|------|
-| `UniV3DeploymentSplitHook` | Core split hook. Implements `IJBSplitHook.processSplitWith` to accumulate or burn tokens. Manages V3 pool creation, LP position minting, fee collection, and liquidity rebalancing. Inherits `JBPermissioned` (permission checks), `ERC2771Context` (meta-transactions), `Ownable` (admin). |
-| `IUniV3DeploymentSplitHook` | Public interface: `isPoolDeployed`, `deployPool`, `collectAndRouteLPFees`, `claimFeeTokensFor`. |
-| `IREVDeployer` | Minimal interface with `isSplitOperatorOf(uint256 projectId, address operator)` for revnet operator validation. |
+| `UniV4DeploymentSplitHook` | Core split hook. Implements `IJBSplitHook.processSplitWith` to accumulate or burn tokens. Manages V4 pool creation, LP position minting, fee collection, and liquidity rebalancing. Inherits `JBPermissioned`, `Ownable`. Deployed as clones via factory. |
+| `UniV4DeploymentSplitHookDeployer` | Factory that deploys hook clones via `LibClone` (Solady). Supports CREATE2 deterministic deployment. Initializes clones with `feeProjectId` and `feePercent`. |
 
 ## Key Functions
 
-| Function | Contract | What it does |
-|----------|----------|--------------|
-| `processSplitWith` | `UniV3DeploymentSplitHook` | Called by the project controller when distributing reserved tokens. If no pool deployed yet, accumulates tokens. If pool exists, burns received tokens. Only accepts `groupId == 1` (reserved tokens); reverts on payout splits. |
-| `deployPool` | `UniV3DeploymentSplitHook` | Owner/operator-gated (SET_BUYBACK_POOL permission). Creates and initializes V3 pool at geometric mean of [cashOutRate, issuanceRate] ticks. Computes optimal cash-out fraction for LP geometry, cashes out project tokens for terminal tokens, mints concentrated LP position, handles leftovers. |
-| `collectAndRouteLPFees` | `UniV3DeploymentSplitHook` | Permissionless. Collects fees from V3 position. Routes terminal-token fees: `FEE_PERCENT` to fee project via `pay()`, remainder to original project via `addToBalanceOf()`. Burns collected project-token fees. Tracks fee-project tokens for later claiming. |
-| `rebalanceLiquidity` | `UniV3DeploymentSplitHook` | Permissionless. Removes existing position, burns NFT, recalculates tick bounds from current issuance/cashOut rates, mints new position. Handles fee collection and leftover routing. |
-| `claimFeeTokensFor` | `UniV3DeploymentSplitHook` | Validates beneficiary is the revnet split operator via `IREVDeployer.isSplitOperatorOf`. Transfers accumulated fee-project tokens. |
-| `isPoolDeployed` | `UniV3DeploymentSplitHook` | View: returns whether a V3 pool exists for a project/terminal-token pair. |
-| `_getProjectTokensOutForTerminalTokensIn` | `UniV3DeploymentSplitHook` | Internal view: converts terminal tokens to project tokens using current ruleset weight and price feeds. |
-| `_getTerminalTokensOutForProjectTokensIn` | `UniV3DeploymentSplitHook` | Internal view: converts project tokens to terminal tokens (inverse of above). |
-| `_getSqrtPriceX96ForCurrentJuiceboxPrice` | `UniV3DeploymentSplitHook` | Internal view: converts Juicebox pricing to V3 sqrtPriceX96 format. |
-| `_getIssuanceRate` | `UniV3DeploymentSplitHook` | Internal view: project tokens per terminal token (ceiling), accounting for reserved rate. |
-| `_getCashOutRate` | `UniV3DeploymentSplitHook` | Internal view: terminal tokens per project token (floor), via `currentReclaimableSurplusOf`. |
-| `_computeInitialSqrtPrice` | `UniV3DeploymentSplitHook` | Internal view: geometric mean of cashOut and issuance ticks, used as pool initialization price. Falls back to issuance rate if cashOut is zero. |
-| `_computeOptimalCashOutAmount` | `UniV3DeploymentSplitHook` | Internal view: for V3 concentrated liquidity in range [Pa, Pb] at price P, computes the fraction of project tokens to cash out so the terminal/project token ratio matches LP geometry. Typically 15-30% instead of a naive 50%. |
-| `_calculateTickBounds` | `UniV3DeploymentSplitHook` | Internal view: returns (tickLower, tickUpper) aligned to TICK_SPACING, derived from cashOutRate (floor) and issuanceRate (ceiling) sqrtPrices. Falls back to +/- one tick spacing around current price if rates are inverted. |
+### Split Hook
+
+| Function | What it does |
+|----------|-------------|
+| `processSplitWith(context)` | Called by controller during reserved token distribution. If no pool deployed: accumulates tokens. If pool exists: burns received tokens. Only accepts `groupId == 1` (reserved tokens); reverts on payout splits (`groupId == 0`). |
+
+### Pool Deployment
+
+| Function | What it does |
+|----------|-------------|
+| `deployPool(projectId, terminalToken, amount0Min, amount1Min, minCashOutReturn)` | Requires `SET_BUYBACK_POOL` permission. Creates V4 pool at geometric mean of [cashOut, issuance] rates. Computes optimal cash-out fraction, cashes out tokens via terminal, mints concentrated LP position, handles leftovers (burns project tokens, adds terminal tokens to project balance). Sets `projectDeployed = true`. |
+
+### Fee Management
+
+| Function | What it does |
+|----------|-------------|
+| `collectAndRouteLPFees(projectId, terminalToken)` | **Permissionless.** Collects V4 position fees via `PositionManager.modifyLiquidities()`. Routes terminal token fees: `FEE_PERCENT` to fee project via `terminal.pay()`, remainder to original project via `addToBalanceOf()`. Burns collected project token fees. Tracks fee-project tokens for claiming. |
+| `claimFeeTokensFor(projectId, beneficiary)` | Requires `SET_BUYBACK_POOL` permission. Transfers accumulated fee-project tokens to beneficiary. |
+
+### Liquidity Management
+
+| Function | What it does |
+|----------|-------------|
+| `rebalanceLiquidity(projectId, terminalToken, decreaseAmount0Min, decreaseAmount1Min, increaseAmount0Min, increaseAmount1Min)` | **Permissionless.** Burns old position (removes all liquidity + collects fees), recalculates tick bounds from current issuance/cashOut rates, mints new position with updated bounds. Routes collected fees. Handles leftovers. |
+
+### Views
+
+| Function | What it does |
+|----------|-------------|
+| `isPoolDeployed(projectId, terminalToken)` | Returns whether a V4 position exists for this project/token pair. |
+| `poolKeyOf(projectId, terminalToken)` | Returns the V4 `PoolKey` for a deployed pool. |
+| `supportsInterface(interfaceId)` | Returns `true` for `IUniV4DeploymentSplitHook` and `IJBSplitHook`. |
+
+### Factory
+
+| Function | What it does |
+|----------|-------------|
+| `UniV4DeploymentSplitHookDeployer.deployHookFor(feeProjectId, feePercent, salt)` | Deploys a new hook clone. Salt is scoped to `msg.sender` via `keccak256(abi.encode(msg.sender, salt))`. Pass `bytes32(0)` for plain CREATE. Calls `initialize()` on the new clone. |
+
+### Internal Pricing
+
+| Function | What it does |
+|----------|-------------|
+| `_getIssuanceRate(projectId, terminalToken)` | Returns project tokens per terminal token (price ceiling), accounting for reserved rate deduction. |
+| `_getCashOutRate(projectId, terminalToken)` | Returns terminal tokens per project token (price floor), via `currentReclaimableSurplusOf`. Returns 0 if call fails. |
+| `_getSqrtPriceX96ForCurrentJuiceboxPrice(...)` | Converts Juicebox pricing to V4 sqrtPriceX96 format for sorted token pair. |
+| `_computeInitialSqrtPrice(...)` | Geometric mean of cashOut and issuance ticks. Falls back to issuance rate if cashOut is 0. |
+| `_computeOptimalCashOutAmount(...)` | For concentrated LP in range [Pa, Pb] at price P, computes the fraction of project tokens to cash out so terminal/project ratio matches LP geometry. Typically 15-30%, capped at 50%. |
+| `_calculateTickBounds(...)` | Returns (tickLower, tickUpper) aligned to `TICK_SPACING`, from cashOut (floor) and issuance (ceiling) sqrtPrices. Falls back to +/- one spacing around current price if rates are inverted. |
 
 ## Integration Points
 
 | Dependency | Import | Used For |
 |------------|--------|----------|
-| `@bananapus/core-v6` | `IJBController`, `IJBDirectory`, `IJBMultiTerminal`, `IJBPermissions`, `IJBSplitHook`, `IJBTerminal`, `IJBTerminalStore`, `IJBTokens`, `JBPermissioned`, `JBSplitHookContext`, `JBRuleset`, `JBRulesetMetadata`, `JBRulesetMetadataResolver`, `JBAccountingContext`, `JBConstants` | Full Juicebox protocol interaction: controller queries, terminal pay/cashOut/addToBalance, permission checks, ruleset weight and pricing |
-| `@bananapus/permission-ids-v6` | `JBPermissionIds` | `SET_BUYBACK_POOL` permission ID for `deployPool` access control |
-| `@openzeppelin/contracts` | `IERC20`, `IERC20Metadata`, `SafeERC20`, `Ownable`, `ERC2771Context`, `Context` | Token operations, ownership, meta-transactions |
-| `@prb/math` | `mulDiv`, `sqrt` | Overflow-safe multiplication and square root for sqrtPriceX96 calculations |
-| `@uniswap/v3-periphery-flattened` | `INonfungiblePositionManager` | V3 position management: `createAndInitializePoolIfNecessary`, `mint`, `collect`, `decreaseLiquidity`, `burn`, `unwrapWETH9` |
-| `@uniswap/v3-core` | `IUniswapV3Factory`, `IUniswapV3Pool` | V3 pool creation and queries |
-| `@uniswap/v3-core-patched` | `TickMath` | Tick-to-sqrtPrice and sqrtPrice-to-tick conversions |
+| `@bananapus/core-v6` | `IJBController`, `IJBDirectory`, `IJBMultiTerminal`, `IJBPermissions`, `IJBSplitHook`, `IJBTerminal`, `IJBTerminalStore`, `IJBTokens`, `JBSplitHookContext`, `JBRuleset`, `JBRulesetMetadataResolver`, `JBConstants` | Juicebox protocol: controller queries, terminal pay/cashOut/addToBalance, permission checks, ruleset weight and pricing |
+| `@bananapus/permission-ids-v6` | `JBPermissionIds` | `SET_BUYBACK_POOL` permission ID |
+| `@uniswap/v4-core` | `IPoolManager`, `PoolKey`, `PoolId`, `Currency`, `TickMath`, `IHooks` | V4 pool creation, price math, currency handling |
+| `@uniswap/v4-periphery` | `IPositionManager`, `Actions`, `LiquidityAmounts` | V4 position management: mint, modify, burn, collect |
+| `@openzeppelin/contracts` | `IERC20`, `IERC20Metadata`, `SafeERC20`, `Ownable` | Token operations, ownership |
+| `@prb/math` | `mulDiv`, `sqrt` | Overflow-safe arithmetic for sqrtPriceX96 calculations |
+| `solady` | `LibClone` | Clone factory for deploying hook instances |
 
 ## Key Types
 
-| Struct/Enum | Key Fields | Used In |
-|-------------|------------|---------|
-| `JBSplitHookContext` | `uint256 projectId`, `uint256 groupId`, `address token`, `uint256 amount`, `JBSplit split` | `processSplitWith` -- provides the split execution context from the controller |
+| Struct | Key Fields | Used In |
+|--------|------------|---------|
+| `JBSplitHookContext` | `uint256 projectId`, `uint256 groupId`, `address token`, `uint256 amount`, `JBSplit split` | `processSplitWith` -- split execution context from controller |
+| `PoolKey` | `Currency currency0`, `Currency currency1`, `uint24 fee`, `int24 tickSpacing`, `IHooks hooks` | `_poolKeys` mapping, V4 pool identification |
+
+## Events
+
+| Event | When |
+|-------|------|
+| `ProjectDeployed(projectId, terminalToken, poolId)` | V4 pool created and LP position minted |
+| `LPFeesRouted(projectId, terminalToken, totalAmount, feeAmount, remainingAmount, feeTokensMinted)` | LP fees collected and distributed |
+| `TokensBurned(projectId, token, amount)` | Project tokens burned (Stage 2 or fee collection) |
+| `FeeTokensClaimed(projectId, beneficiary, amount)` | Fee-project tokens claimed |
+| `HookDeployed(feeProjectId, feePercent, hook, caller)` | New hook clone deployed (from factory) |
+
+## Errors
+
+| Error | When |
+|-------|------|
+| `UniV4DeploymentSplitHook_ZeroAddressNotAllowed` | Constructor receives zero address for required parameter |
+| `UniV4DeploymentSplitHook_InvalidProjectId` | Fee project ID doesn't have a controller |
+| `UniV4DeploymentSplitHook_NotHookSpecifiedInContext` | `processSplitWith` called but `context.split.hook != address(this)` |
+| `UniV4DeploymentSplitHook_SplitSenderNotValidControllerOrTerminal` | `processSplitWith` called by non-controller |
+| `UniV4DeploymentSplitHook_NoTokensAccumulated` | `deployPool` called with zero accumulated tokens |
+| `UniV4DeploymentSplitHook_InvalidStageForAction` | Operation requires deployed pool but none exists |
+| `UniV4DeploymentSplitHook_TerminalTokensNotAllowed` | `processSplitWith` called with `groupId != 1` (payout splits not supported) |
+| `UniV4DeploymentSplitHook_InvalidFeePercent` | `feePercent > BPS` (> 100%) |
+| `UniV4DeploymentSplitHook_InvalidTerminalToken` | No primary terminal found for project/token pair |
+| `UniV4DeploymentSplitHook_PoolAlreadyDeployed` | `deployPool` called for a pair that already has a position |
+| `UniV4DeploymentSplitHook_AlreadyInitialized` | `initialize` called on a clone that already has an owner |
+
+## Constants
+
+| Constant | Value | Purpose |
+|----------|-------|---------|
+| `BPS` | 10,000 | Basis points denominator (100%) |
+| `POOL_FEE` | 10,000 (1%) | V4 pool fee tier |
+| `TICK_SPACING` | 200 | Tick spacing for 1% fee tier |
 
 ## Storage
 
 | Mapping | Type | Purpose |
 |---------|------|---------|
-| `poolOf` | `projectId => terminalToken => address` | V3 pool address per project/token pair |
-| `tokenIdForPool` | `pool => uint256` | V3 NFT position ID for each pool |
+| `_poolKeys` | `projectId => terminalToken => PoolKey` | V4 pool key per project/token pair |
+| `tokenIdOf` | `projectId => terminalToken => uint256` | V4 PositionManager NFT ID per pool |
 | `accumulatedProjectTokens` | `projectId => uint256` | Pre-deployment token accumulation |
-| `projectDeployed` | `projectId => bool` | Whether any pool has been deployed (switches accumulate to burn) |
-| `claimableFeeTokens` | `projectId => uint256` | Fee-project tokens claimable by revnet operator |
+| `projectDeployed` | `projectId => bool` | Switches accumulate (Stage 1) to burn (Stage 2) |
+| `claimableFeeTokens` | `projectId => uint256` | Fee-project tokens claimable via `claimFeeTokensFor` |
 
 ## Gotchas
 
-- **Requires `via_ir = true` in foundry.toml.** The contract hits stack-too-deep without the IR pipeline, particularly in `INonfungiblePositionManager.positions()` return value destructuring and the `_addUniswapLiquidity` function.
-- **Only accepts reserved-token splits (`groupId == 1`).** Reverts with `UniV3DeploymentSplitHook_TerminalTokensNotAllowed` if called from a payout split. This is intentional -- it only manages project tokens, not terminal tokens from payouts.
-- **`deployPool` requires `SET_BUYBACK_POOL` permission.** The caller must be the project owner or have been granted this permission via `JBPermissions`.
-- **`collectAndRouteLPFees` and `rebalanceLiquidity` are permissionless.** Anyone can call them. This is safe because they only operate on existing positions and route funds to verified project terminals.
-- **`claimFeeTokensFor` validates the beneficiary is the revnet split operator** via `IREVDeployer.isSplitOperatorOf`. It does not check `msg.sender` -- it checks the `beneficiary` parameter.
-- **Native ETH handling is non-trivial.** Juicebox uses `JBConstants.NATIVE_TOKEN` (0x...EEEe), Uniswap uses WETH. The contract converts between them via `_toUniswapToken` (reads WETH from NonfungiblePositionManager) and `unwrapWETH9` for fee routing.
-- **Cash-out fraction is geometrically optimized, not 50/50.** `_computeOptimalCashOutAmount` uses V3 concentrated liquidity math to compute the exact ratio needed, typically 15-30%. Safety-capped at 50%.
-- **Pool initialization price is the geometric mean of [cashOutRate, issuanceRate] in tick space.** This centers the initial price in the LP range, creating a balanced position. Falls back to issuance rate if cash-out rate is 0 or ticks are equal.
-- **One LP position per pool.** The contract manages a single NFT position per V3 pool. Rebalancing burns the old NFT and mints a new one.
-- **Pragma is `0.8.23`** (not ^0.8.24 like the V4 hook repo), matching nana-core-v6.
+1. **This is a V4 hook, not V3.** Despite the repo history, the current implementation uses Uniswap V4 (`IPoolManager`, `IPositionManager`, `PoolKey`, `Actions`). All V3 references in older docs are outdated.
+2. **Requires `via_ir = true` in foundry.toml.** Stack-too-deep errors occur without the IR pipeline, particularly in `_addUniswapLiquidity` and V4 `PositionManager` interactions.
+3. **Only accepts reserved-token splits (`groupId == 1`).** Reverts with `TerminalTokensNotAllowed` if called from a payout split (`groupId == 0`). This is intentional -- it only manages project tokens.
+4. **`deployPool` requires `SET_BUYBACK_POOL` permission.** The caller must be the project owner or have been granted this permission via `JBPermissions`.
+5. **`collectAndRouteLPFees` and `rebalanceLiquidity` are permissionless.** Anyone can call them. Safe because they only operate on existing positions and route funds to verified project terminals.
+6. **`claimFeeTokensFor` requires `SET_BUYBACK_POOL` permission** from the project owner. It validates the caller, not the beneficiary.
+7. **Cash-out fraction is geometrically optimized, not 50/50.** `_computeOptimalCashOutAmount` uses concentrated liquidity math to compute the exact ratio needed, typically 15-30%. Safety-capped at 50%.
+8. **Pool initialization price is the geometric mean** of [cashOutRate, issuanceRate] in tick space. Falls back to issuance rate if cash-out rate is 0 or ticks are equal.
+9. **One LP position per project/terminal-token pair.** The hook manages a single V4 NFT position. Rebalancing burns the old NFT and mints a new one, briefly leaving no active position.
+10. **After deployment, newly received reserved tokens are burned.** This is intentional -- prevents inflating the project token supply without corresponding LP rebalancing.
+11. **Native ETH handling:** Juicebox uses `JBConstants.NATIVE_TOKEN` (`0x...EEEe`), V4 uses `Currency.wrap(address(0))`. The hook converts between them via `_toCurrency()`. The contract has `receive() external payable {}` to accept ETH during cash-outs and V4 TAKE operations.
+12. **Deployed as clones via factory.** `UniV4DeploymentSplitHookDeployer` uses Solady's `LibClone`. The constructor sets shared infrastructure (directory, tokens, V4 contracts). Per-clone config (fee project, fee percent) is set via `initialize()`, which can only be called once.
+13. **Tick alignment:** All ticks are aligned to `TICK_SPACING = 200`. Negative ticks use floor semantics in `_alignTickToSpacing()`.
+14. **`minCashOutReturn = 0` defaults to 1% tolerance.** If no minimum is specified for `deployPool`, the hook applies a 1% slippage tolerance on the cash-out automatically.
+15. **Fee routing splits terminal token fees only.** Project token fees are always burned. Terminal token fees are split: `FEE_PERCENT` to fee project via `terminal.pay()`, remainder to original project via `addToBalanceOf()`.
+16. **Deterministic clone deployment** via CREATE2 uses `keccak256(abi.encode(msg.sender, salt))`, so different callers with the same salt get different addresses.
 
 ## Example Integration
 
 ```solidity
-import {UniV3DeploymentSplitHook} from "nana-lp-split-hook-v6/src/UniV3DeploymentSplitHook.sol";
+import {UniV4DeploymentSplitHook} from "@bananapus/univ4-lp-split-hook-v6/src/UniV4DeploymentSplitHook.sol";
+import {UniV4DeploymentSplitHookDeployer} from "@bananapus/univ4-lp-split-hook-v6/src/UniV4DeploymentSplitHookDeployer.sol";
+import {IUniV4DeploymentSplitHook} from "@bananapus/univ4-lp-split-hook-v6/src/interfaces/IUniV4DeploymentSplitHook.sol";
 
-// Deploy the split hook
-UniV3DeploymentSplitHook hook = new UniV3DeploymentSplitHook(
-    owner,
-    address(jbDirectory),
-    jbPermissions,
-    address(jbTokens),
-    address(uniswapV3Factory),
-    address(nonfungiblePositionManager),
-    feeProjectId,        // e.g. project 1
-    3800,                // 38% of LP fees to fee project
-    address(revDeployer),
-    trustedForwarder
-);
+// --- Deploy a hook clone via the factory ---
 
-// Configure as a reserved-token split in a Juicebox ruleset:
-// JBSplit({ ... hook: hook, ... })
+IUniV4DeploymentSplitHook hook = deployer.deployHookFor({
+    feeProjectId: 1,             // fee-project receives share of LP fees
+    feePercent: 3800,            // 38% of LP fees to fee project
+    salt: bytes32("my-hook")     // deterministic address (or bytes32(0) for CREATE)
+});
 
-// After enough tokens accumulate, deploy the pool:
-hook.deployPool(
-    projectId,
-    terminalToken,       // e.g. JBConstants.NATIVE_TOKEN for ETH
-    0,                   // amount0Min (slippage)
-    0,                   // amount1Min (slippage)
-    0                    // minCashOutReturn (0 = auto 1% tolerance)
-);
+// --- Configure as a reserved-token split in a Juicebox ruleset ---
+// JBSplit({ ... hook: address(hook), ... })
 
-// Periodically collect LP fees:
-hook.collectAndRouteLPFees(projectId, terminalToken);
+// --- After enough tokens accumulate, deploy the pool ---
 
-// Rebalance when rates change significantly:
-hook.rebalanceLiquidity(projectId, terminalToken, 0, 0, 0, 0);
+hook.deployPool({
+    projectId: projectId,
+    terminalToken: JBConstants.NATIVE_TOKEN,  // ETH
+    amount0Min: 0,                            // slippage (0 = no check)
+    amount1Min: 0,                            // slippage (0 = no check)
+    minCashOutReturn: 0                       // 0 = auto 1% tolerance
+});
+
+// --- Periodically collect and route LP fees (permissionless) ---
+
+hook.collectAndRouteLPFees(projectId, JBConstants.NATIVE_TOKEN);
+
+// --- Rebalance when rates change significantly (permissionless) ---
+
+hook.rebalanceLiquidity({
+    projectId: projectId,
+    terminalToken: JBConstants.NATIVE_TOKEN,
+    decreaseAmount0Min: 0,
+    decreaseAmount1Min: 0,
+    increaseAmount0Min: 0,
+    increaseAmount1Min: 0
+});
+
+// --- Claim accumulated fee-project tokens (requires permission) ---
+
+hook.claimFeeTokensFor(projectId, beneficiaryAddress);
 ```

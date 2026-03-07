@@ -1,51 +1,84 @@
-# nana-lp-split-hook-v5
+# univ4-lp-split-hook-v6
 
-Juicebox split hook that accumulates reserved project tokens, then deploys a Uniswap V3 liquidity position bounded by the project's issuance rate (ceiling) and cash-out rate (floor), with ongoing fee collection and liquidity rebalancing.
+Juicebox split hook that accumulates reserved project tokens over time, then deploys a Uniswap V4 concentrated liquidity position bounded by the project's issuance rate (ceiling) and cash-out rate (floor). After deployment, it manages fee collection, liquidity rebalancing, and routes LP fees back to the project with a configurable fee split.
+
+[Docs](https://docs.juicebox.money) | [Discord](https://discord.gg/juicebox)
+
+## Conceptual Overview
+
+This hook connects Juicebox's reserved token system to Uniswap V4's concentrated liquidity. It operates in two stages:
+
+**Stage 1 -- Accumulation:** Configure the hook as a reserved-token split in a project's ruleset. Each time reserved tokens are distributed, the hook accumulates them. This continues across multiple ruleset cycles until enough tokens are collected.
+
+**Stage 2 -- Deployment & Operation:** The project owner calls `deployPool()` to create a V4 pool and mint an LP position. The hook cashes out a geometrically-optimized fraction of the accumulated tokens (typically 15-30%) for terminal tokens, then provides both as concentrated liquidity bounded by the project's economic rates. After deployment, any newly received reserved tokens are burned to prevent LP dilution.
+
+The LP position is bounded by two rate-derived ticks:
+- **Lower bound (floor):** The cash-out rate -- what you get from redeeming project tokens via the bonding curve
+- **Upper bound (ceiling):** The issuance rate -- what you get from paying into the project
+
+This ensures the AMM price always trades within the project's intrinsic economic range.
+
+### Lifecycle
+
+```
+1. Configure as reserved-token split in a Juicebox ruleset
+   |
+2. Controller distributes reserved tokens → processSplitWith()
+   → Tokens accumulate in accumulatedProjectTokens[projectId]
+   |
+3. Project owner calls deployPool(projectId, terminalToken, ...)
+   → Creates V4 pool at geometric mean of [cashOut, issuance] rates
+   → Cashes out optimal fraction of tokens for terminal tokens
+   → Mints concentrated LP position bounded by rate-derived ticks
+   → Sets projectDeployed[projectId] = true
+   |
+4. Future reserved token distributions → burn received tokens
+   |
+5. Anyone calls collectAndRouteLPFees(projectId, terminalToken)
+   → Collects V4 position fees
+   → Routes terminal token fees: FEE_PERCENT to fee project, rest to original project
+   → Burns collected project token fees
+   |
+6. Anyone calls rebalanceLiquidity(projectId, terminalToken, ...)
+   → Removes old position, burns NFT
+   → Recalculates tick bounds from current rates
+   → Mints new position with updated bounds
+   |
+7. Authorized operator calls claimFeeTokensFor(projectId, beneficiary)
+   → Transfers accumulated fee-project tokens to beneficiary
+```
+
+### Pool Pricing
+
+The initial pool price is set at the **geometric mean** of the cash-out and issuance rate ticks. This centers the LP position in the economic range, creating balanced exposure to both sides. If the cash-out rate is zero (no surplus), the pool initializes at the issuance rate.
+
+### Optimal Cash-Out Calculation
+
+V4 concentrated liquidity positions aren't 50/50 -- the token ratio depends on where the current price sits within the tick range. `_computeOptimalCashOutAmount` solves for the exact fraction of project tokens to cash out so the resulting token pair matches the LP geometry. The result is typically 15-30%, safety-capped at 50%.
 
 ## Architecture
 
 | Contract | Description |
 |----------|-------------|
-| `UniV3DeploymentSplitHook` | `IJBSplitHook` implementation with a two-stage lifecycle. **Before deployment:** accumulates project tokens received via reserved-token splits. **After deployment:** burns newly received project tokens, manages the V3 LP position (fee collection, rebalancing), and routes LP fees back to the project with a configurable fee split to a fee project. Inherits `JBPermissioned`, `ERC2771Context`, `Ownable`. |
-| `IUniV3DeploymentSplitHook` | Interface declaring `isPoolDeployed`, `deployPool`, `collectAndRouteLPFees`, `claimFeeTokensFor`, plus events. |
-| `IREVDeployer` | Minimal interface for `isSplitOperatorOf(projectId, operator)` used to authorize fee-token claims. |
+| `UniV4DeploymentSplitHook` | `IJBSplitHook` implementation with a two-stage lifecycle. Accumulates project tokens before deployment, burns them after. Creates V4 pools, mints/rebalances LP positions, collects and routes fees. Inherits `JBPermissioned`, `Ownable`. |
+| `UniV4DeploymentSplitHookDeployer` | Factory that deploys hook clones via `LibClone`. Supports deterministic CREATE2 deployment with caller-scoped salts. Anyone can deploy a new hook by providing `feeProjectId` and `feePercent`. |
 
-## Lifecycle
+### Interfaces
 
-```
-1. Configure as a reserved-token split hook for a Juicebox project
-   |
-2. Controller calls processSplitWith() on each reserved-token distribution
-   --> Tokens accumulate in accumulatedProjectTokens[projectId]
-   |
-3. Project owner calls deployPool(projectId, terminalToken, ...)
-   --> Creates V3 pool at geometric mean of [cashOutRate, issuanceRate]
-   --> Computes optimal cash-out fraction for LP geometry
-   --> Cashes out a portion of project tokens for terminal tokens
-   --> Mints V3 LP position bounded by [cashOutRate tick, issuanceRate tick]
-   --> Burns leftover project tokens, adds leftover terminal tokens to project
-   --> Sets projectDeployed[projectId] = true
-   |
-4. Future processSplitWith() calls burn received project tokens
-   |
-5. Anyone calls collectAndRouteLPFees(projectId, terminalToken)
-   --> Collects fees from V3 position
-   --> Routes terminal token fees: FEE_PERCENT to fee project, rest to original project
-   --> Burns collected project token fees
-   |
-6. Anyone calls rebalanceLiquidity(projectId, terminalToken, ...)
-   --> Removes old position, burns NFT
-   --> Recalculates tick bounds from current rates
-   --> Mints new position with updated bounds
-   |
-7. Revnet operator calls claimFeeTokensFor(projectId, beneficiary)
-   --> Transfers accumulated fee-project tokens to beneficiary
-```
+| Interface | Description |
+|-----------|-------------|
+| `IUniV4DeploymentSplitHook` | Public interface: `initialize`, `isPoolDeployed`, `poolKeyOf`, `deployPool`, `collectAndRouteLPFees`, `claimFeeTokensFor`, plus events. |
+| `IUniV4DeploymentSplitHookDeployer` | Factory interface: `HOOK`, `deployHookFor`, plus `HookDeployed` event. |
 
 ## Install
 
 ```bash
-npm install
+npm install @bananapus/univ4-lp-split-hook-v6
+```
+
+If using Forge directly:
+
+```bash
 forge install
 ```
 
@@ -54,34 +87,60 @@ forge install
 | Command | Description |
 |---------|-------------|
 | `forge build` | Compile (requires `via_ir = true` due to stack depth) |
-| `forge test` | Run tests |
+| `forge test` | Run all tests (9 test files covering full lifecycle) |
 | `forge test -vvv` | Run tests with full trace |
 
-## Key Constants
+### Settings
 
-| Constant | Value | Purpose |
-|----------|-------|---------|
-| `BPS` | 10000 | Basis points denominator |
-| `UNISWAP_V3_POOL_FEE` | 10000 (1%) | V3 pool fee tier |
-| `TICK_SPACING` | 200 | Tick spacing for 1% fee tier |
+```toml
+# foundry.toml
+[profile.default]
+solc = '0.8.26'
+evm_version = 'paris'
+optimizer_runs = 200
+via_ir = true
 
-## Constructor
-
-```solidity
-constructor(
-    address initialOwner,                              // Contract owner
-    address directory,                                 // JBDirectory
-    IJBPermissions permissions,                        // JBPermissions
-    address tokens,                                    // JBTokens
-    address uniswapV3Factory,                          // V3 Factory
-    address uniswapV3NonfungiblePositionManager,       // V3 NonfungiblePositionManager
-    uint256 feeProjectId,                              // Project ID to receive LP fee split
-    uint256 feePercent,                                // Fee split in basis points (e.g. 3800 = 38%)
-    address revDeployer,                               // REVDeployer for operator validation
-    address trustedForwarder                           // ERC-2771 trusted forwarder
-)
+[fuzz]
+runs = 4096
 ```
 
-## License
+## Repository Layout
 
-MIT
+```
+src/
+  UniV4DeploymentSplitHook.sol               # Main split hook (1125 lines)
+  UniV4DeploymentSplitHookDeployer.sol       # Clone factory (61 lines)
+  interfaces/
+    IUniV4DeploymentSplitHook.sol            # Hook interface + events
+    IUniV4DeploymentSplitHookDeployer.sol    # Factory interface
+test/
+  ConstructorTest.t.sol                      # Constructor validation
+  AccumulationStageTest.t.sol                # Stage 1: token accumulation
+  DeploymentStageTest.t.sol                  # Pool creation, LP minting
+  FeeRoutingTest.t.sol                       # Fee collection and routing
+  RebalanceTest.t.sol                        # Liquidity rebalancing
+  NativeETHTest.t.sol                        # Native ETH handling
+  PriceMathTest.t.sol                        # Price conversion math
+  SecurityTest.t.sol                         # Permission checks, access control
+  IntegrationLifecycle.t.sol                 # Full end-to-end workflow
+  TestBaseV4.sol                             # Shared test infrastructure
+script/
+  Deploy.s.sol                               # Sphinx deployment script
+```
+
+## Permissions
+
+| Permission | Required For |
+|------------|-------------|
+| `SET_BUYBACK_POOL` | `deployPool` -- create V4 pool and mint LP position |
+| `SET_BUYBACK_POOL` | `claimFeeTokensFor` -- claim accumulated fee-project tokens |
+
+Note: `collectAndRouteLPFees` and `rebalanceLiquidity` are **permissionless** -- anyone can call them. This is safe because they only operate on existing positions and route funds to verified project terminals.
+
+## Risks
+
+- **Impermanent loss:** The LP position is subject to standard concentrated liquidity IL. If the market price moves outside the [cashOut, issuance] range, the position becomes single-sided.
+- **Stale tick bounds:** If the project's issuance or cash-out rates change significantly (e.g., new ruleset with different weight), the LP position bounds become stale. `rebalanceLiquidity` must be called to update them.
+- **Cash-out price impact:** The initial `deployPool` cashes out a fraction of accumulated tokens, which affects the bonding curve. Large accumulations may create meaningful price impact.
+- **One position per pool:** The hook manages a single V4 NFT position per project/terminal-token pair. Rebalancing destroys and recreates it, temporarily leaving no active position.
+- **Fee-project token accumulation:** Fee-project tokens are held by the hook until claimed via `claimFeeTokensFor`. If the fee project token changes or is not deployed, tokens may be stuck.
