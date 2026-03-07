@@ -1,24 +1,23 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import {LPSplitHookTestBase} from "./TestBase.sol";
-import {UniV3DeploymentSplitHook} from "../src/UniV3DeploymentSplitHook.sol";
+import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
+import {UniV4DeploymentSplitHook} from "../src/UniV4DeploymentSplitHook.sol";
 import {IJBPermissions} from "@bananapus/core/interfaces/IJBPermissions.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {mulDiv, sqrt} from "@prb/math/src/Common.sol";
 
 /// @notice Wrapper that exposes internal price math functions for testing.
-contract TestableUniV3DeploymentSplitHook is UniV3DeploymentSplitHook {
+contract TestableUniV4DeploymentSplitHook is UniV4DeploymentSplitHook {
     constructor(
         address _directory,
         IJBPermissions _permissions,
         address _tokens,
-        address _factory,
-        address _nfpm,
-        address _revDeployer
+        IPoolManager _poolManager,
+        IPositionManager _positionManager
     )
-        UniV3DeploymentSplitHook(
-            _directory, _permissions, _tokens, _factory, _nfpm, _revDeployer
-        )
+        UniV4DeploymentSplitHook(_directory, _permissions, _tokens, _poolManager, _positionManager)
     {}
 
     function exposed_getIssuanceRate(uint256 projectId, address terminalToken) external view returns (uint256) {
@@ -112,10 +111,10 @@ contract TestableUniV3DeploymentSplitHook is UniV3DeploymentSplitHook {
     }
 }
 
-/// @notice Tests for UniV3DeploymentSplitHook internal price math functions.
-/// @dev Uses TestableUniV3DeploymentSplitHook to expose internal view functions.
+/// @notice Tests for UniV4DeploymentSplitHook internal price math functions.
+/// @dev Uses TestableUniV4DeploymentSplitHook to expose internal view functions.
 ///
-/// Default mock setup (from LPSplitHookTestBase):
+/// Default mock setup (from LPSplitHookV4TestBase):
 ///   - weight = 1000e18, reservedPercent = 1000 (10%), baseCurrency = 1 (ETH)
 ///   - accountingContext currency = uint32(uint160(terminalToken)) (not 1)
 ///   - prices.pricePerUnitOf returns 1e18 by default
@@ -126,18 +125,17 @@ contract TestableUniV3DeploymentSplitHook is UniV3DeploymentSplitHook {
 ///   rawTokensOut(1e18 input) = mulDiv(1e18, 1000e18, 1e18) = 1000e18
 ///   issuanceRate = 1000e18 * (10000-1000)/10000 = 900e18
 ///   cashOutRate  = (0.5e18 * 1e18) / 1e18 = 0.5e18
-contract PriceMathTest is LPSplitHookTestBase {
-    TestableUniV3DeploymentSplitHook public testableHook;
+contract PriceMathTest is LPSplitHookV4TestBase {
+    TestableUniV4DeploymentSplitHook public testableHook;
 
     function setUp() public override {
         super.setUp();
-        testableHook = new TestableUniV3DeploymentSplitHook(
+        testableHook = new TestableUniV4DeploymentSplitHook(
             address(directory),
             IJBPermissions(address(permissions)),
             address(jbTokens),
-            address(v3Factory),
-            address(nfpm),
-            address(revDeployer)
+            IPoolManager(address(1)),
+            IPositionManager(address(positionManager))
         );
         vm.store(address(testableHook), bytes32(uint256(0)), bytes32(0));
         testableHook.initialize(owner, FEE_PROJECT_ID, FEE_PERCENT);
@@ -231,22 +229,6 @@ contract PriceMathTest is LPSplitHookTestBase {
         uint160 sqrtPriceA = testableHook.exposed_getSqrtPriceX96ForCurrentJuiceboxPrice(
             PROJECT_ID, address(terminalToken), address(projectToken)
         );
-
-        // Create a second project with reversed token setup is complex,
-        // so instead we verify the price changes when we call with projectToken as terminal
-        // and terminalToken as project. The _sortTokens will produce the same token0/token1,
-        // but the branch inside will flip (token0 == terminalToken vs token0 == projectToken).
-        // Since the mocks route through the same pricing, we just verify a nonzero result
-        // and that the two calls produce different numeric values.
-
-        // To get a different result, we need to set up a second terminal token with different address.
-        // For simplicity, verify the price is within expected bounds instead.
-        // price = sqrt(token1Amount / token0Amount) * 2^96
-        // With weight 1000e18 and weightRatio 1e18:
-        //   If token0 < token1 and token0 == terminalToken: token1Amount = 1000e18
-        //   sqrtPrice = sqrt(1000e18) * 2^96 / sqrt(1e18)
-        //            = sqrt(1000) * sqrt(1e18) * 2^96 / sqrt(1e18) = sqrt(1000) * 2^96
-        //            ~ 31.62 * 2^96
 
         // We confirm it is > 2^96 (since there are 1000 projectTokens per terminalToken)
         uint256 Q96 = 2 ** 96;
@@ -369,9 +351,9 @@ contract PriceMathTest is LPSplitHookTestBase {
     // 15. Fuzz: aligned tick is always a multiple of spacing
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice For any valid tick in the Uniswap V3 range, alignment always produces a multiple of 200.
+    /// @notice For any valid tick in the Uniswap V4 range, alignment always produces a multiple of 200.
     function testFuzz_AlignTick_AlwaysAligned(int24 tick) public view {
-        // Constrain to valid Uniswap V3 tick range
+        // Constrain to valid Uniswap V4 tick range
         vm.assume(tick > -887_200 && tick < 887_200);
 
         int24 aligned = testableHook.exposed_alignTickToSpacing(tick, 200);

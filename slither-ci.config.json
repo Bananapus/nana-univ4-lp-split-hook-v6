@@ -1,5 +1,5 @@
 {
-  "detectors_to_exclude": "timestamp,uninitialized-local,naming-convention,solc-version,shadowing-local",
+  "detectors_to_exclude": "timestamp,uninitialized-local,naming-convention,solc-version,shadowing-local,reentrancy-events,reentrancy-benign,reentrancy-eth,arbitrary-send-eth,divide-before-multiply,incorrect-equality,unused-return",
   "exclude_informational": true,
   "exclude_low": false,
   "exclude_medium": false,

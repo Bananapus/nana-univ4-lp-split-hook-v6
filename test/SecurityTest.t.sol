@@ -1,18 +1,19 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import {LPSplitHookTestBase} from "./TestBase.sol";
-import {UniV3DeploymentSplitHook} from "../src/UniV3DeploymentSplitHook.sol";
+import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
+import {UniV4DeploymentSplitHook} from "../src/UniV4DeploymentSplitHook.sol";
 import {JBSplit} from "@bananapus/core/structs/JBSplit.sol";
 import {JBSplitHookContext} from "@bananapus/core/structs/JBSplitHookContext.sol";
 import {JBAccountingContext} from "@bananapus/core/structs/JBAccountingContext.sol";
 import {IJBSplitHook} from "@bananapus/core/interfaces/IJBSplitHook.sol";
+import {JBPermissionIds} from "@bananapus/permission-ids/JBPermissionIds.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-/// @notice Security-focused tests for UniV3DeploymentSplitHook.
+/// @notice Security-focused tests for UniV4DeploymentSplitHook.
 /// @dev Covers access control on processSplitWith, claimFeeTokensFor authorization,
 ///      permissionless function access, cross-project isolation, and reentrancy safety.
-contract SecurityTest is LPSplitHookTestBase {
+contract SecurityTest is LPSplitHookV4TestBase {
     // ─────────────────────────────────────────────────────────────────────
     // 1. processSplitWith -- only the controller can call it
     // ─────────────────────────────────────────────────────────────────────
@@ -24,7 +25,7 @@ contract SecurityTest is LPSplitHookTestBase {
 
         vm.prank(user); // NOT the controller
         vm.expectRevert(
-            UniV3DeploymentSplitHook.UniV3DeploymentSplitHook_SplitSenderNotValidControllerOrTerminal.selector
+            UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_SplitSenderNotValidControllerOrTerminal.selector
         );
         hook.processSplitWith(context);
     }
@@ -56,7 +57,7 @@ contract SecurityTest is LPSplitHookTestBase {
         });
 
         vm.prank(address(controller));
-        vm.expectRevert(UniV3DeploymentSplitHook.UniV3DeploymentSplitHook_NotHookSpecifiedInContext.selector);
+        vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_NotHookSpecifiedInContext.selector);
         hook.processSplitWith(context);
     }
 
@@ -73,37 +74,33 @@ contract SecurityTest is LPSplitHookTestBase {
         JBSplitHookContext memory context = _buildContext(PROJECT_ID, address(projectToken), amount, 0);
 
         vm.prank(address(controller));
-        vm.expectRevert(UniV3DeploymentSplitHook.UniV3DeploymentSplitHook_TerminalTokensNotAllowed.selector);
+        vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_TerminalTokensNotAllowed.selector);
         hook.processSplitWith(context);
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 4. claimFeeTokensFor -- valid operator succeeds
+    // 4. claimFeeTokensFor -- caller with SET_BUYBACK_POOL permission succeeds
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice claimFeeTokensFor transfers fee tokens when the beneficiary is a valid split operator.
+    /// @notice claimFeeTokensFor transfers fee tokens when the caller has SET_BUYBACK_POOL permission.
     function test_ClaimFeeTokens_ValidOperator() public {
+        address caller = makeAddr("caller");
         address beneficiary = makeAddr("beneficiary");
 
         // Step 1: Accumulate and deploy pool (deployPool called as owner inside helper)
         _accumulateAndDeploy(PROJECT_ID, 1000e18);
 
-        // Step 2: Set up collectable fees on the NFPM mock
-        // Determine token ordering to figure out which amount slot is the terminal token
-        address pool = hook.poolOf(PROJECT_ID, address(terminalToken));
-        uint256 tokenId = hook.tokenIdForPool(pool);
+        // Step 2: Set up collectable fees on the PositionManager mock
+        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         (address token0,) = _sortForTest(address(projectToken), address(terminalToken));
 
         uint256 feeAmount = 50e18;
         if (token0 == address(terminalToken)) {
-            // Terminal token is token0
-            nfpm.setCollectableFees(tokenId, feeAmount, 0);
-            // Mint terminal tokens to NFPM so it can transfer them during collect
-            terminalToken.mint(address(nfpm), feeAmount);
+            positionManager.setCollectableFees(tokenId, feeAmount, 0);
+            terminalToken.mint(address(positionManager), feeAmount);
         } else {
-            // Terminal token is token1
-            nfpm.setCollectableFees(tokenId, 0, feeAmount);
-            terminalToken.mint(address(nfpm), feeAmount);
+            positionManager.setCollectableFees(tokenId, 0, feeAmount);
+            terminalToken.mint(address(positionManager), feeAmount);
         }
 
         // Step 3: Set fee terminal accounting context for the fee project
@@ -118,13 +115,14 @@ contract SecurityTest is LPSplitHookTestBase {
         uint256 claimable = hook.claimableFeeTokens(PROJECT_ID);
         assertTrue(claimable > 0, "Claimable fee tokens should be > 0 after fee collection");
 
-        // Step 6: Set operator authorization for the beneficiary
-        revDeployer.setOperator(PROJECT_ID, beneficiary, true);
+        // Step 6: Grant SET_BUYBACK_POOL permission to the caller
+        permissions.setPermission(caller, owner, PROJECT_ID, JBPermissionIds.SET_BUYBACK_POOL, true);
 
         // Step 7: Record the fee project token balance before claiming
         uint256 balanceBefore = feeProjectToken.balanceOf(beneficiary);
 
-        // Step 8: Claim fee tokens
+        // Step 8: Claim fee tokens (caller has permission)
+        vm.prank(caller);
         hook.claimFeeTokensFor(PROJECT_ID, beneficiary);
 
         // Step 9: Verify tokens were transferred to beneficiary
@@ -133,16 +131,17 @@ contract SecurityTest is LPSplitHookTestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 5. claimFeeTokensFor -- unauthorized beneficiary reverts
+    // 5. claimFeeTokensFor -- unauthorized caller reverts
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice claimFeeTokensFor reverts when the beneficiary is not a valid split operator.
+    /// @notice claimFeeTokensFor reverts when the caller lacks SET_BUYBACK_POOL permission.
     function test_ClaimFeeTokens_InvalidOperator_Reverts() public {
-        address beneficiary = makeAddr("unauthorized");
+        address unauthorized = makeAddr("unauthorized");
 
-        // Do NOT set the operator for this beneficiary
-        vm.expectRevert(UniV3DeploymentSplitHook.UniV3DeploymentSplitHook_UnauthorizedBeneficiary.selector);
-        hook.claimFeeTokensFor(PROJECT_ID, beneficiary);
+        // Do NOT grant permission
+        vm.prank(unauthorized);
+        vm.expectRevert();
+        hook.claimFeeTokensFor(PROJECT_ID, unauthorized);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -156,17 +155,16 @@ contract SecurityTest is LPSplitHookTestBase {
         // Accumulate and deploy pool (deployPool called as owner inside helper)
         _accumulateAndDeploy(PROJECT_ID, 1000e18);
 
-        address pool = hook.poolOf(PROJECT_ID, address(terminalToken));
-        uint256 tokenId = hook.tokenIdForPool(pool);
+        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         (address token0,) = _sortForTest(address(projectToken), address(terminalToken));
 
         uint256 feeAmount = 50e18;
         if (token0 == address(terminalToken)) {
-            nfpm.setCollectableFees(tokenId, feeAmount, 0);
+            positionManager.setCollectableFees(tokenId, feeAmount, 0);
         } else {
-            nfpm.setCollectableFees(tokenId, 0, feeAmount);
+            positionManager.setCollectableFees(tokenId, 0, feeAmount);
         }
-        terminalToken.mint(address(nfpm), feeAmount);
+        terminalToken.mint(address(positionManager), feeAmount);
 
         terminal.setAccountingContext(
             FEE_PROJECT_ID, address(terminalToken), uint32(uint160(address(terminalToken))), 18
@@ -177,8 +175,8 @@ contract SecurityTest is LPSplitHookTestBase {
         uint256 claimableBefore = hook.claimableFeeTokens(PROJECT_ID);
         assertTrue(claimableBefore > 0, "Should have claimable tokens before claiming");
 
-        // Set operator and claim
-        revDeployer.setOperator(PROJECT_ID, beneficiary, true);
+        // Grant permission to owner and claim as owner
+        vm.prank(owner);
         hook.claimFeeTokensFor(PROJECT_ID, beneficiary);
 
         // Verify the claimable balance is zeroed out
@@ -194,16 +192,14 @@ contract SecurityTest is LPSplitHookTestBase {
     function test_ClaimFeeTokens_ZeroBalance_NoTransfer() public {
         address beneficiary = makeAddr("beneficiary");
 
-        // Authorize the beneficiary as a valid operator
-        revDeployer.setOperator(PROJECT_ID, beneficiary, true);
-
         // No fees have been collected, so claimableFeeTokens[PROJECT_ID] == 0
         assertEq(hook.claimableFeeTokens(PROJECT_ID), 0, "Pre-condition: no claimable tokens");
 
         // Record balance before
         uint256 balanceBefore = feeProjectToken.balanceOf(beneficiary);
 
-        // Should succeed without reverting
+        // Should succeed without reverting (owner has implicit permission)
+        vm.prank(owner);
         hook.claimFeeTokensFor(PROJECT_ID, beneficiary);
 
         // No tokens should have been transferred
@@ -272,18 +268,17 @@ contract SecurityTest is LPSplitHookTestBase {
         // Deploy pool first (deployPool called as owner inside helper)
         _accumulateAndDeploy(PROJECT_ID, 1000e18);
 
-        // Set up collectable fees on NFPM
-        address pool = hook.poolOf(PROJECT_ID, address(terminalToken));
-        uint256 tokenId = hook.tokenIdForPool(pool);
+        // Set up collectable fees on PositionManager
+        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         (address token0,) = _sortForTest(address(projectToken), address(terminalToken));
 
         uint256 feeAmount = 10e18;
         if (token0 == address(terminalToken)) {
-            nfpm.setCollectableFees(tokenId, feeAmount, 0);
+            positionManager.setCollectableFees(tokenId, feeAmount, 0);
         } else {
-            nfpm.setCollectableFees(tokenId, 0, feeAmount);
+            positionManager.setCollectableFees(tokenId, 0, feeAmount);
         }
-        terminalToken.mint(address(nfpm), feeAmount);
+        terminalToken.mint(address(positionManager), feeAmount);
 
         terminal.setAccountingContext(
             FEE_PROJECT_ID, address(terminalToken), uint32(uint160(address(terminalToken))), 18
@@ -294,8 +289,8 @@ contract SecurityTest is LPSplitHookTestBase {
         vm.prank(randomCaller);
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
 
-        // Verify fees were collected (collect call count increased)
-        assertTrue(nfpm.collectCallCount() > 0, "Fees should have been collected");
+        // Verify fees were routed (pay was called)
+        assertTrue(terminal.payCallCount() > 0, "Fees should have been collected and routed");
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -323,10 +318,10 @@ contract SecurityTest is LPSplitHookTestBase {
         // Accumulate tokens as the controller
         _accumulateTokens(PROJECT_ID, amount);
 
-        // Approve hook to spend project tokens (for NFPM mint)
+        // Approve hook to spend project tokens (for PositionManager settle)
         vm.startPrank(address(hook));
-        projectToken.approve(address(nfpm), type(uint256).max);
-        terminalToken.approve(address(nfpm), type(uint256).max);
+        projectToken.approve(address(positionManager), type(uint256).max);
+        terminalToken.approve(address(positionManager), type(uint256).max);
         vm.stopPrank();
 
         // Call deployPool as the project owner -- should succeed
@@ -334,11 +329,11 @@ contract SecurityTest is LPSplitHookTestBase {
         hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0, 0);
 
         // Verify pool was deployed
-        address pool = hook.poolOf(PROJECT_ID, address(terminalToken));
-        assertTrue(pool != address(0), "Pool should have been deployed by owner");
+        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        assertTrue(tokenId != 0, "Pool should have been deployed by owner");
 
-        // Verify the NFPM mint was called
-        assertTrue(nfpm.mintCallCount() > 0, "NFPM mint should have been called");
+        // Verify the PositionManager mint was called
+        assertTrue(positionManager.mintCallCount() > 0, "PositionManager mint should have been called");
 
         // Verify projectDeployed is set
         assertTrue(hook.projectDeployed(PROJECT_ID), "projectDeployed should be true after deployment");

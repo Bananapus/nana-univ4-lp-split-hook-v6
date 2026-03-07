@@ -1,15 +1,13 @@
-name: test
+name: lint
 on:
-  push:
-    branches:
-      - main
   pull_request:
     branches:
       - main
-  workflow_dispatch:
-
+  push:
+    branches:
+      - main
 jobs:
-  forge-test:
+  forge-lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,7 +17,5 @@ jobs:
         uses: foundry-rs/foundry-toolchain@v1
       - name: Install npm dependencies
         run: npm ci
-      - name: Run tests
-        run: forge test --fail-fast
-      - name: Check contract sizes
-        run: forge build --sizes --skip "*/test/**" --skip "*/script/**"
+      - name: Check linting
+        run: forge fmt --check

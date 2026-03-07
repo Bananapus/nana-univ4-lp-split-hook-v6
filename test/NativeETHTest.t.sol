@@ -1,44 +1,35 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import {LPSplitHookTestBase} from "./TestBase.sol";
-import {UniV3DeploymentSplitHook} from "../src/UniV3DeploymentSplitHook.sol";
+import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
+import {UniV4DeploymentSplitHook} from "../src/UniV4DeploymentSplitHook.sol";
 import {IJBPermissions} from "@bananapus/core/interfaces/IJBPermissions.sol";
 import {JBConstants} from "@bananapus/core/libraries/JBConstants.sol";
 import {JBAccountingContext} from "@bananapus/core/structs/JBAccountingContext.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 
 /// @notice Wrapper contract that exposes internal native-ETH helper functions for testing.
-contract TestableHookForETH is UniV3DeploymentSplitHook {
+contract TestableHookForETH is UniV4DeploymentSplitHook {
     constructor(
         address _directory,
         IJBPermissions _permissions,
         address _tokens,
-        address _factory,
-        address _nfpm,
-        address _revDeployer
+        IPoolManager _poolManager,
+        IPositionManager _positionManager
     )
-        UniV3DeploymentSplitHook(
-            _directory, _permissions, _tokens, _factory, _nfpm, _revDeployer
-        )
+        UniV4DeploymentSplitHook(_directory, _permissions, _tokens, _poolManager, _positionManager)
     {}
 
     function exposed_isNativeToken(address token) external pure returns (bool) {
         return _isNativeToken(token);
     }
-
-    function exposed_toUniswapToken(address token) external view returns (address) {
-        return _toUniswapToken(token);
-    }
-
-    function exposed_getWETH() external view returns (address) {
-        return _getWETH();
-    }
 }
 
-/// @notice Tests for native ETH handling in UniV3DeploymentSplitHook.
-/// @dev Covers _isNativeToken, _toUniswapToken, receive(), WETH plumbing,
-///      and native-ETH deployment setup through the accounting pipeline.
-contract NativeETHTest is LPSplitHookTestBase {
+/// @notice Tests for native ETH handling in UniV4DeploymentSplitHook.
+/// @dev In V4, native ETH uses Currency.wrap(address(0)) instead of WETH.
+///      No WETH wrapping/unwrapping is needed.
+contract NativeETHTest is LPSplitHookV4TestBase {
     TestableHookForETH public testableHook;
     address constant NATIVE_TOKEN = address(0x000000000000000000000000000000000000EEEe);
 
@@ -49,9 +40,8 @@ contract NativeETHTest is LPSplitHookTestBase {
             address(directory),
             IJBPermissions(address(permissions)),
             address(jbTokens),
-            address(v3Factory),
-            address(nfpm),
-            address(revDeployer)
+            IPoolManager(address(1)),
+            IPositionManager(address(positionManager))
         );
         vm.store(address(testableHook), bytes32(uint256(0)), bytes32(0));
         testableHook.initialize(owner, FEE_PROJECT_ID, FEE_PERCENT);
@@ -75,32 +65,10 @@ contract NativeETHTest is LPSplitHookTestBase {
         assertFalse(testableHook.exposed_isNativeToken(address(terminalToken)), "ERC20 address should not be native");
         assertFalse(testableHook.exposed_isNativeToken(address(0)), "address(0) should not be native");
         assertFalse(testableHook.exposed_isNativeToken(address(1)), "address(1) should not be native");
-        assertFalse(testableHook.exposed_isNativeToken(address(weth)), "WETH address should not be native");
     }
 
     // -----------------------------------------------------------------------
-    // 3. _toUniswapToken converts NATIVE_TOKEN to WETH
-    // -----------------------------------------------------------------------
-
-    /// @notice When the terminal token is NATIVE_TOKEN, Uniswap operations
-    ///         must use WETH instead (obtained from NFPM.WETH9()).
-    function test_ToUniswapToken_NativeETH_ReturnsWETH() public view {
-        address result = testableHook.exposed_toUniswapToken(NATIVE_TOKEN);
-        assertEq(result, address(weth), "NATIVE_TOKEN should convert to WETH for Uniswap");
-    }
-
-    // -----------------------------------------------------------------------
-    // 4. _toUniswapToken passes through ERC20 addresses unchanged
-    // -----------------------------------------------------------------------
-
-    /// @notice For ordinary ERC20 terminal tokens the address must be returned as-is.
-    function test_ToUniswapToken_ERC20_Unchanged() public view {
-        address result = testableHook.exposed_toUniswapToken(address(terminalToken));
-        assertEq(result, address(terminalToken), "ERC20 address should pass through unchanged");
-    }
-
-    // -----------------------------------------------------------------------
-    // 5. JBConstants.NATIVE_TOKEN has the expected sentinel value
+    // 3. JBConstants.NATIVE_TOKEN has the expected sentinel value
     // -----------------------------------------------------------------------
 
     /// @notice Guard against accidental changes to the sentinel constant.
@@ -113,11 +81,11 @@ contract NativeETHTest is LPSplitHookTestBase {
     }
 
     // -----------------------------------------------------------------------
-    // 6. Hook contract accepts direct ETH transfers (receive function)
+    // 4. Hook contract accepts direct ETH transfers (receive function)
     // -----------------------------------------------------------------------
 
-    /// @notice The hook must have a payable receive() so that WETH unwraps
-    ///         and terminal cashOuts can send ETH to the contract.
+    /// @notice The hook must have a payable receive() so that terminal cashOuts
+    ///         can send ETH to the contract.
     function test_HookAcceptsETH() public {
         vm.deal(user, 1 ether);
         vm.prank(user);
@@ -127,7 +95,7 @@ contract NativeETHTest is LPSplitHookTestBase {
     }
 
     // -----------------------------------------------------------------------
-    // 7. Full native-ETH deployment setup (accounting + accumulation)
+    // 5. Full native-ETH deployment setup (accounting + accumulation)
     // -----------------------------------------------------------------------
 
     /// @notice Validate that a project configured with NATIVE_TOKEN as the
@@ -162,12 +130,12 @@ contract NativeETHTest is LPSplitHookTestBase {
     }
 
     // -----------------------------------------------------------------------
-    // 8. Full native-ETH deployPool end-to-end
+    // 6. Full native-ETH deployPool end-to-end
     // -----------------------------------------------------------------------
 
     /// @notice Full e2e: accumulate project tokens, then deployPool with NATIVE_TOKEN
-    ///         as the terminal token. Verifies the pool is created using WETH (not
-    ///         the native sentinel), NFPM.mint is called, and the pool/tokenId are set.
+    ///         as the terminal token. In V4, native ETH uses Currency.wrap(address(0))
+    ///         so no WETH wrapping is needed.
     function test_DeployPool_NativeETH_EndToEnd() public {
         // Wire directory for NATIVE_TOKEN
         _setDirectoryTerminal(PROJECT_ID, NATIVE_TOKEN, address(terminal));
@@ -181,7 +149,6 @@ contract NativeETHTest is LPSplitHookTestBase {
         );
 
         // Set NATIVE_TOKEN as the terminal token for cash-outs
-        // The mock terminal needs to know how to handle native ETH cash-outs
         terminal.setProjectToken(PROJECT_ID, address(projectToken));
 
         // Accumulate project tokens
@@ -197,39 +164,21 @@ contract NativeETHTest is LPSplitHookTestBase {
         vm.deal(address(terminal), 100 ether);
 
         // Deploy pool with NATIVE_TOKEN (owner required)
-        // The hook should convert NATIVE_TOKEN -> WETH for Uniswap operations
+        // In V4, the hook uses Currency.wrap(address(0)) for native ETH
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, NATIVE_TOKEN, 0, 0, 0);
 
-        // Verify pool was created
-        address pool = hook.poolOf(PROJECT_ID, NATIVE_TOKEN);
-        assertTrue(pool != address(0), "Pool should be created for NATIVE_TOKEN");
+        // Verify pool was created (tokenId is nonzero)
+        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, NATIVE_TOKEN);
+        assertTrue(tokenId != 0, "tokenIdOf should be nonzero after deploy");
 
-        // Verify NFPM was called
-        assertEq(nfpm.mintCallCount(), 1, "NFPM.mint should be called once");
-
-        // Verify tokenId was set
-        uint256 tokenId = hook.tokenIdForPool(pool);
-        assertTrue(tokenId != 0, "tokenIdForPool should be nonzero");
+        // Verify PositionManager was called
+        assertEq(positionManager.mintCallCount(), 1, "PositionManager mint should be called once");
 
         // Verify accumulated tokens were cleared
         assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "Accumulated should be 0 after deploy");
 
         // Verify project is marked deployed
         assertTrue(hook.projectDeployed(PROJECT_ID), "projectDeployed should be true after deploy");
-    }
-
-    // -----------------------------------------------------------------------
-    // 9. WETH address sourced correctly from NFPM
-    // -----------------------------------------------------------------------
-
-    /// @notice The internal _getWETH() must return the WETH9 address
-    ///         configured on the NonfungiblePositionManager mock.
-    function test_WETH_AddressFromNFPM() public view {
-        // Verify the mock NFPM returns the correct WETH address
-        assertEq(nfpm.WETH9(), address(weth), "NFPM WETH9() must equal the MockWETH address");
-
-        // Verify the exposed helper agrees
-        assertEq(testableHook.exposed_getWETH(), address(weth), "_getWETH() must return the same WETH address as NFPM");
     }
 }

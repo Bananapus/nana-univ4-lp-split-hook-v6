@@ -10,12 +10,13 @@ import {JBSplitHookContext} from "@bananapus/core/structs/JBSplitHookContext.sol
 import {JBAccountingContext} from "@bananapus/core/structs/JBAccountingContext.sol";
 import {IJBSplitHook} from "@bananapus/core/interfaces/IJBSplitHook.sol";
 import {JBConstants} from "@bananapus/core/libraries/JBConstants.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 
 import {LibClone} from "solady/src/utils/LibClone.sol";
-import {UniV3DeploymentSplitHook} from "../src/UniV3DeploymentSplitHook.sol";
+import {UniV4DeploymentSplitHook} from "../src/UniV4DeploymentSplitHook.sol";
 import {MockERC20} from "./mock/MockERC20.sol";
-import {MockWETH} from "./mock/MockWETH.sol";
-import {MockNFPM} from "./mock/MockNFPM.sol";
+import {MockPositionManager} from "./mock/MockPositionManager.sol";
 import {
     MockJBDirectory,
     MockJBController,
@@ -23,42 +24,32 @@ import {
     MockJBTokens,
     MockJBPrices,
     MockJBTerminalStore,
-    MockREVDeployer,
-    MockUniswapV3Factory,
     MockJBProjects,
     MockJBPermissions
 } from "./mock/MockJBContracts.sol";
 
-/// @notice Shared test harness for UniV3DeploymentSplitHook tests
-/// @dev Deploys all mocks, creates default project, and provides helpers
-contract LPSplitHookTestBase is Test {
+/// @notice Shared test harness for UniV4DeploymentSplitHook tests
+contract LPSplitHookV4TestBase is Test {
     // ─── Contracts Under Test
-    // ───────────────────────────────────────────
-    UniV3DeploymentSplitHook public hook;
+    UniV4DeploymentSplitHook public hook;
 
     // ─── Mock Infrastructure
-    // ────────────────────────────────────────────
     MockJBDirectory public directory;
     MockJBController public controller;
     MockJBMultiTerminal public terminal;
     MockJBTokens public jbTokens;
     MockJBPrices public prices;
     MockJBTerminalStore public store;
-    MockREVDeployer public revDeployer;
-    MockUniswapV3Factory public v3Factory;
-    MockNFPM public nfpm;
-    MockWETH public weth;
+    MockPositionManager public positionManager;
     MockJBProjects public jbProjects;
     MockJBPermissions public permissions;
 
     // ─── Test Tokens
-    // ────────────────────────────────────────────────────
     MockERC20 public projectToken;
     MockERC20 public terminalToken;
     MockERC20 public feeProjectToken;
 
     // ─── Test Constants
-    // ─────────────────────────────────────────────────
     uint256 public constant PROJECT_ID = 1;
     uint256 public constant FEE_PROJECT_ID = 2;
     uint256 public constant FEE_PERCENT = 3800; // 38%
@@ -80,7 +71,6 @@ contract LPSplitHookTestBase is Test {
         projectToken = new MockERC20("Project Token", "PROJ", 18);
         terminalToken = new MockERC20("Terminal Token", "TERM", 18);
         feeProjectToken = new MockERC20("Fee Project Token", "FEE", 18);
-        weth = new MockWETH();
 
         // Deploy mock JB contracts
         directory = new MockJBDirectory();
@@ -89,13 +79,11 @@ contract LPSplitHookTestBase is Test {
         jbTokens = new MockJBTokens();
         prices = new MockJBPrices();
         store = new MockJBTerminalStore();
-        revDeployer = new MockREVDeployer();
         jbProjects = new MockJBProjects();
         permissions = new MockJBPermissions();
 
-        // Deploy mock Uniswap contracts
-        v3Factory = new MockUniswapV3Factory();
-        nfpm = new MockNFPM(address(weth), address(v3Factory));
+        // Deploy mock V4 contracts
+        positionManager = new MockPositionManager();
 
         // Wire JB contracts
         controller.setPrices(address(prices));
@@ -138,54 +126,48 @@ contract LPSplitHookTestBase is Test {
         jbTokens.setToken(FEE_PROJECT_ID, address(feeProjectToken));
 
         // Set surplus for cash out rate
-        store.setSurplus(PROJECT_ID, 0.5e18); // 0.5 terminal tokens per project token
+        store.setSurplus(PROJECT_ID, 0.5e18);
 
         // Add terminal to directory's terminal list
         _addDirectoryTerminal(PROJECT_ID, address(terminal));
 
         // Deploy the hook (implementation + clone + initialize)
-        UniV3DeploymentSplitHook hookImpl = new UniV3DeploymentSplitHook(
+        // Use a mock address for PoolManager since the hook doesn't call it directly
+        // (it calls PositionManager which handles PoolManager interaction)
+        UniV4DeploymentSplitHook hookImpl = new UniV4DeploymentSplitHook(
             address(directory),
             IJBPermissions(address(permissions)),
             address(jbTokens),
-            address(v3Factory),
-            address(nfpm),
-            address(revDeployer)
+            IPoolManager(address(1)), // placeholder — hook uses PositionManager.initializePool()
+            IPositionManager(address(positionManager))
         );
-        hook = UniV3DeploymentSplitHook(payable(LibClone.clone(address(hookImpl))));
+        hook = UniV4DeploymentSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize(owner, FEE_PROJECT_ID, FEE_PERCENT);
     }
 
     // ─── Directory Helpers (write to fallback-based mock) ───────────────
 
     function _setDirectoryController(uint256 projectId, address ctrl) internal {
-        directory._controllers(projectId); // Ensure storage slot exists
-        // Use vm.store to set the mapping — slot 1 now (_projects at slot 0, _controllers at slot 1)
+        directory._controllers(projectId);
         bytes32 slot = keccak256(abi.encode(projectId, uint256(1)));
         vm.store(address(directory), slot, bytes32(uint256(uint160(ctrl))));
     }
 
     function _setDirectoryTerminal(uint256 projectId, address token, address term) internal {
-        // _terminals is at slot 2 (after _projects at slot 0, _controllers at slot 1)
         bytes32 innerSlot = keccak256(abi.encode(projectId, uint256(2)));
         bytes32 slot = keccak256(abi.encode(token, innerSlot));
         vm.store(address(directory), slot, bytes32(uint256(uint160(term))));
     }
 
     function _addDirectoryTerminal(uint256 projectId, address term) internal {
-        // _terminalsList is at slot 3
         bytes32 arraySlot = keccak256(abi.encode(projectId, uint256(3)));
-        // Read current length
         uint256 currentLen = uint256(vm.load(address(directory), arraySlot));
-        // Set new length
         vm.store(address(directory), arraySlot, bytes32(currentLen + 1));
-        // Set element at index currentLen
         bytes32 elementSlot = bytes32(uint256(keccak256(abi.encode(arraySlot))) + currentLen);
         vm.store(address(directory), elementSlot, bytes32(uint256(uint160(term))));
     }
 
     // ─── Context Builder
-    // ────────────────────────────────────────────────
 
     function _buildContext(
         uint256 projectId,
@@ -204,7 +186,7 @@ contract LPSplitHookTestBase is Test {
             projectId: projectId,
             groupId: groupId,
             split: JBSplit({
-                percent: 1_000_000, // 100%
+                percent: 1_000_000,
                 projectId: 0,
                 beneficiary: payable(address(0)),
                 preferAddToBalance: false,
@@ -214,7 +196,6 @@ contract LPSplitHookTestBase is Test {
         });
     }
 
-    /// @notice Build context with reserved tokens groupId (1)
     function _buildReservedContext(uint256 projectId, uint256 amount)
         internal
         view
@@ -224,30 +205,23 @@ contract LPSplitHookTestBase is Test {
     }
 
     // ─── Accumulation & Deployment Helpers
-    // ───────────────────────────────
 
-    /// @notice Accumulate tokens by calling processSplitWith from controller
     function _accumulateTokens(uint256 projectId, uint256 amount) internal {
-        // Mint project tokens to the hook (simulates controller sending tokens)
         projectToken.mint(address(hook), amount);
 
-        // Build context
         JBSplitHookContext memory context = _buildReservedContext(projectId, amount);
 
-        // Call processSplitWith as the controller
         vm.prank(address(controller));
         hook.processSplitWith(context);
     }
 
-    /// @notice Accumulate and deploy pool for a project (called as owner)
     function _accumulateAndDeploy(uint256 projectId, uint256 amount) internal {
-        // Accumulate tokens
         _accumulateTokens(projectId, amount);
 
-        // Approve hook to spend project tokens (for NFPM mint)
+        // Approve hook to spend project tokens (for PositionManager settle)
         vm.startPrank(address(hook));
-        projectToken.approve(address(nfpm), type(uint256).max);
-        terminalToken.approve(address(nfpm), type(uint256).max);
+        projectToken.approve(address(positionManager), type(uint256).max);
+        terminalToken.approve(address(positionManager), type(uint256).max);
         vm.stopPrank();
 
         // Deploy pool as owner

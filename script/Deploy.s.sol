@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.28;
+pragma solidity 0.8.26;
 
 import "@bananapus/core-v6/script/helpers/CoreDeploymentLib.sol";
 import "@rev-net/core-v6/script/helpers/RevnetCoreDeploymentLib.sol";
@@ -7,8 +7,12 @@ import "@rev-net/core-v6/script/helpers/RevnetCoreDeploymentLib.sol";
 import {Sphinx} from "@sphinx-labs/contracts/SphinxPlugin.sol";
 import {Script} from "forge-std/Script.sol";
 
-import {UniV3DeploymentSplitHook} from "../src/UniV3DeploymentSplitHook.sol";
-import {UniV3DeploymentSplitHookDeployer} from "../src/UniV3DeploymentSplitHookDeployer.sol";
+import {IJBPermissions} from "@bananapus/core/interfaces/IJBPermissions.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
+
+import {UniV4DeploymentSplitHook} from "../src/UniV4DeploymentSplitHook.sol";
+import {UniV4DeploymentSplitHookDeployer} from "../src/UniV4DeploymentSplitHookDeployer.sol";
 
 contract DeployScript is Script, Sphinx {
     /// @notice tracks the deployment of the core contracts for the chain we are deploying to.
@@ -18,15 +22,15 @@ contract DeployScript is Script, Sphinx {
     RevnetCoreDeployment revnet;
 
     /// @notice the salts used to deploy the contracts.
-    bytes32 HOOK_SALT = "UniV3DeploymentSplitHookV6";
-    bytes32 DEPLOYER_SALT = "UniV3DeploymentSplitHookDeployerV6";
+    bytes32 HOOK_SALT = "UniV4DeploymentSplitHookV6";
+    bytes32 DEPLOYER_SALT = "UniV4SplitHookDeployerV6";
 
-    /// @notice tracks the addresses that are required for the chain we are deploying to.
-    address factory;
-    address nonfungiblePositionManager;
+    /// @notice Uniswap V4 addresses (same on all chains)
+    IPoolManager poolManager;
+    IPositionManager positionManager;
 
     function configureSphinx() public override {
-        sphinxConfig.projectName = "nana-univ3-lp-split-hook-v6";
+        sphinxConfig.projectName = "nana-univ4-lp-split-hook-v6";
         sphinxConfig.mainnets = ["ethereum", "optimism", "base", "arbitrum"];
         sphinxConfig.testnets = ["ethereum_sepolia", "optimism_sepolia", "base_sepolia", "arbitrum_sepolia"];
     }
@@ -42,38 +46,34 @@ contract DeployScript is Script, Sphinx {
             vm.envOr("REVNET_CORE_DEPLOYMENT_PATH", string("node_modules/@rev-net/core-v6/deployments/"))
         );
 
-        // Ethereum Mainnet
+        // Uniswap V4 PoolManager — canonical address on all chains
+        poolManager = IPoolManager(0x000000000004444c5dc75cB358380D2e3dE08A90);
+
+        // Uniswap V4 PositionManager — per-chain addresses
         if (block.chainid == 1) {
-            factory = 0x1F98431c8aD98523631AE4a59f267346ea31F984;
-            nonfungiblePositionManager = 0xC36442b4a4522E871399CD717aBDD847Ab11FE88;
-            // Ethereum Sepolia
+            // Ethereum Mainnet
+            positionManager = IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e);
         } else if (block.chainid == 11_155_111) {
-            factory = 0x0227628f3F023bb0B980b67D528571c95c6DaC1c;
-            nonfungiblePositionManager = 0x1238536071E1c677A632429e3655c799b22cDA52;
-            // Optimism Mainnet
+            // Ethereum Sepolia
+            positionManager = IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e);
         } else if (block.chainid == 10) {
-            factory = 0x1F98431c8aD98523631AE4a59f267346ea31F984;
-            nonfungiblePositionManager = 0xC36442b4a4522E871399CD717aBDD847Ab11FE88;
-            // Base Mainnet
+            // Optimism Mainnet
+            positionManager = IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e);
         } else if (block.chainid == 8453) {
-            factory = 0x33128a8fC17869897dcE68Ed026d694621f6FDfD;
-            nonfungiblePositionManager = 0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1;
-            // Optimism Sepolia
+            // Base Mainnet
+            positionManager = IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e);
         } else if (block.chainid == 11_155_420) {
-            factory = 0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24;
-            nonfungiblePositionManager = 0x27F971cb582BF9E50F397e4d29a5C7A34f11faA2;
-            // BASE Sepolia
+            // Optimism Sepolia
+            positionManager = IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e);
         } else if (block.chainid == 84_532) {
-            factory = 0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24;
-            nonfungiblePositionManager = 0x27F971cb582BF9E50F397e4d29a5C7A34f11faA2;
-            // Arbitrum Mainnet
+            // Base Sepolia
+            positionManager = IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e);
         } else if (block.chainid == 42_161) {
-            factory = 0x1F98431c8aD98523631AE4a59f267346ea31F984;
-            nonfungiblePositionManager = 0xC36442b4a4522E871399CD717aBDD847Ab11FE88;
-            // Arbitrum Sepolia
+            // Arbitrum Mainnet
+            positionManager = IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e);
         } else if (block.chainid == 421_614) {
-            factory = 0x248AB79Bbb9bC29bB72f7Cd42F17e054Fc40188e;
-            nonfungiblePositionManager = 0x6b2937Bde17889EDCf8fbD8dE31C3C2a70Bc4d65;
+            // Arbitrum Sepolia
+            positionManager = IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e);
         } else {
             revert("Invalid RPC / no juice contracts deployed on this network");
         }
@@ -83,16 +83,16 @@ contract DeployScript is Script, Sphinx {
     }
 
     function deploy() public sphinx {
-        UniV3DeploymentSplitHook hookImpl = new UniV3DeploymentSplitHook{salt: HOOK_SALT}(
+        UniV4DeploymentSplitHook hookImpl = new UniV4DeploymentSplitHook{salt: HOOK_SALT}(
             address(core.directory),
-            core.permissions,
+            IJBPermissions(address(core.permissions)),
             address(core.tokens),
-            factory,
-            nonfungiblePositionManager,
+            poolManager,
+            positionManager,
             address(revnet.basic_deployer)
         );
 
-        new UniV3DeploymentSplitHookDeployer{salt: DEPLOYER_SALT}(hookImpl);
+        new UniV4DeploymentSplitHookDeployer{salt: DEPLOYER_SALT}(hookImpl);
     }
 
     function _isDeployed(bytes32 salt, bytes memory creationCode, bytes memory arguments) internal view returns (bool) {

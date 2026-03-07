@@ -1,28 +1,27 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import {LPSplitHookTestBase} from "./TestBase.sol";
-import {UniV3DeploymentSplitHook} from "../src/UniV3DeploymentSplitHook.sol";
+import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
+import {UniV4DeploymentSplitHook} from "../src/UniV4DeploymentSplitHook.sol";
 import {MockERC20} from "./mock/MockERC20.sol";
 
-/// @notice Tests for UniV3DeploymentSplitHook.rebalanceLiquidity function.
-/// @dev Covers revert conditions, NFPM interactions (collect, decrease, burn, mint), and permissionlessness.
-contract RebalanceTest is LPSplitHookTestBase {
+/// @notice Tests for UniV4DeploymentSplitHook.rebalanceLiquidity function.
+/// @dev Covers revert conditions, PositionManager interactions (modifyLiquidities with
+///      DECREASE_LIQUIDITY, BURN_POSITION, MINT_POSITION, TAKE_PAIR, SETTLE, SWEEP), and permissionlessness.
+contract RebalanceTest is LPSplitHookV4TestBase {
     uint256 poolTokenId;
-    address pool;
 
     function setUp() public override {
         super.setUp();
 
         // Deploy a pool so we have a position to rebalance
         _accumulateAndDeploy(PROJECT_ID, 100e18);
-        pool = hook.poolOf(PROJECT_ID, address(terminalToken));
-        poolTokenId = hook.tokenIdForPool(pool);
+        poolTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
 
-        // Ensure NFPM has tokens so that collect can transfer them to the hook
+        // Ensure PositionManager has tokens so that collect can transfer them to the hook
         // after decreaseLiquidity makes them collectable
-        projectToken.mint(address(nfpm), 50e18);
-        terminalToken.mint(address(nfpm), 50e18);
+        projectToken.mint(address(positionManager), 50e18);
+        terminalToken.mint(address(positionManager), 50e18);
     }
 
     // -----------------------------------------------------------------------
@@ -39,7 +38,7 @@ contract RebalanceTest is LPSplitHookTestBase {
         _setDirectoryController(newProjectId, address(controller));
         _setDirectoryTerminal(newProjectId, address(terminalToken), address(terminal));
 
-        vm.expectRevert(UniV3DeploymentSplitHook.UniV3DeploymentSplitHook_InvalidStageForAction.selector);
+        vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_InvalidStageForAction.selector);
         hook.rebalanceLiquidity(newProjectId, address(terminalToken), 0, 0, 0, 0);
     }
 
@@ -57,7 +56,7 @@ contract RebalanceTest is LPSplitHookTestBase {
         // Set accounting context for the other token
         terminal.setAccountingContext(PROJECT_ID, address(otherToken), uint32(uint160(address(otherToken))), 18);
 
-        vm.expectRevert(UniV3DeploymentSplitHook.UniV3DeploymentSplitHook_InvalidStageForAction.selector);
+        vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_InvalidStageForAction.selector);
         hook.rebalanceLiquidity(PROJECT_ID, address(otherToken), 0, 0, 0, 0);
     }
 
@@ -70,97 +69,82 @@ contract RebalanceTest is LPSplitHookTestBase {
     function test_Rebalance_RevertsIfInvalidTerminal() public {
         address randomToken = makeAddr("randomToken");
 
-        vm.expectRevert(UniV3DeploymentSplitHook.UniV3DeploymentSplitHook_InvalidTerminalToken.selector);
+        vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_InvalidTerminalToken.selector);
         hook.rebalanceLiquidity(PROJECT_ID, randomToken, 0, 0, 0, 0);
     }
 
     // -----------------------------------------------------------------------
-    // 4. rebalanceLiquidity -- collects fees first
+    // 4. rebalanceLiquidity -- removes all liquidity
     // -----------------------------------------------------------------------
 
-    /// @notice rebalanceLiquidity calls NFPM.collect at least once (the first collect
-    ///         before decreaseLiquidity to harvest accrued fees).
-    function test_Rebalance_CollectsFeesFirst() public {
-        // Pre-configure some collectable fees on the position
-        nfpm.setCollectableFees(poolTokenId, 2e18, 3e18);
-
-        uint256 collectCountBefore = nfpm.collectCallCount();
-
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
-
-        // Collect is called at least twice: once for fees, once after decreaseLiquidity
-        assertTrue(
-            nfpm.collectCallCount() >= collectCountBefore + 2,
-            "NFPM collect should be called at least twice during rebalance"
-        );
-    }
-
-    // -----------------------------------------------------------------------
-    // 5. rebalanceLiquidity -- removes all liquidity
-    // -----------------------------------------------------------------------
-
-    /// @notice rebalanceLiquidity calls NFPM.decreaseLiquidity exactly once to remove
-    ///         all liquidity from the existing position.
+    /// @notice rebalanceLiquidity calls PositionManager.modifyLiquidities which includes
+    ///         BURN_POSITION to remove all liquidity and burn the old position NFT.
     function test_Rebalance_RemovesAllLiquidity() public {
-        uint256 decreaseCountBefore = nfpm.decreaseLiquidityCallCount();
+        uint256 burnCountBefore = positionManager.burnCallCount();
 
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
 
         assertEq(
-            nfpm.decreaseLiquidityCallCount(),
-            decreaseCountBefore + 1,
-            "NFPM decreaseLiquidity should be called exactly once"
+            positionManager.burnCallCount(),
+            burnCountBefore + 1,
+            "PositionManager burn (which removes all liquidity) should be called exactly once"
         );
     }
 
     // -----------------------------------------------------------------------
-    // 6. rebalanceLiquidity -- burns old NFT
+    // 5. rebalanceLiquidity -- burns old NFT
     // -----------------------------------------------------------------------
 
-    /// @notice rebalanceLiquidity calls NFPM.burn exactly once to remove the old position NFT
-    ///         before minting a new one.
+    /// @notice rebalanceLiquidity calls PositionManager with BURN_POSITION to remove the old
+    ///         position NFT before minting a new one.
     function test_Rebalance_BurnsOldNFT() public {
-        uint256 burnCountBefore = nfpm.burnCallCount();
+        uint256 burnCountBefore = positionManager.burnCallCount();
 
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
 
-        assertEq(nfpm.burnCallCount(), burnCountBefore + 1, "NFPM burn should be called exactly once");
+        assertEq(
+            positionManager.burnCallCount(), burnCountBefore + 1, "PositionManager burn should be called exactly once"
+        );
     }
 
     // -----------------------------------------------------------------------
-    // 7. rebalanceLiquidity -- mints new position
+    // 6. rebalanceLiquidity -- mints new position
     // -----------------------------------------------------------------------
 
-    /// @notice rebalanceLiquidity calls NFPM.mint to create a new LP position with
-    ///         updated tick bounds. The mint count should increase by 1 from the deploy mint.
+    /// @notice rebalanceLiquidity calls PositionManager with MINT_POSITION to create a new LP
+    ///         position with updated tick bounds.
     function test_Rebalance_MintsNewPosition() public {
-        uint256 mintCountBefore = nfpm.mintCallCount();
+        uint256 mintCountBefore = positionManager.mintCallCount();
         // mintCountBefore should be 1 (from the initial _accumulateAndDeploy)
 
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
 
-        assertEq(nfpm.mintCallCount(), mintCountBefore + 1, "NFPM mint should be called once more for the new position");
+        assertEq(
+            positionManager.mintCallCount(),
+            mintCountBefore + 1,
+            "PositionManager mint should be called once more for the new position"
+        );
     }
 
     // -----------------------------------------------------------------------
-    // 8. rebalanceLiquidity -- updates tokenIdForPool
+    // 7. rebalanceLiquidity -- updates tokenIdOf
     // -----------------------------------------------------------------------
 
-    /// @notice After rebalance, the tokenIdForPool mapping should point to a new tokenId
+    /// @notice After rebalance, the tokenIdOf mapping should point to a new tokenId
     ///         (different from the original one created during deployPool).
     function test_Rebalance_UpdatesTokenId() public {
-        uint256 originalTokenId = hook.tokenIdForPool(pool);
+        uint256 originalTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertTrue(originalTokenId != 0, "original tokenId should be nonzero");
 
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
 
-        uint256 newTokenId = hook.tokenIdForPool(pool);
+        uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertTrue(newTokenId != 0, "new tokenId should be nonzero");
-        assertTrue(newTokenId != originalTokenId, "tokenIdForPool should change after rebalance");
+        assertTrue(newTokenId != originalTokenId, "tokenIdOf should change after rebalance");
     }
 
     // -----------------------------------------------------------------------
-    // 9. rebalanceLiquidity -- permissionless (anyone can call)
+    // 8. rebalanceLiquidity -- permissionless (anyone can call)
     // -----------------------------------------------------------------------
 
     /// @notice rebalanceLiquidity is permissionless: a random user address can call it
@@ -172,20 +156,20 @@ contract RebalanceTest is LPSplitHookTestBase {
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
 
         // Verify it succeeded by checking the tokenId was updated
-        uint256 newTokenId = hook.tokenIdForPool(pool);
+        uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertTrue(newTokenId != 0, "rebalance should succeed from any caller");
         assertTrue(newTokenId != poolTokenId, "tokenId should change after permissionless rebalance");
     }
 
     // -----------------------------------------------------------------------
-    // 10. rebalanceLiquidity -- routes collected fees
+    // 9. rebalanceLiquidity -- routes collected fees
     // -----------------------------------------------------------------------
 
     /// @notice When the position has accrued fees, rebalanceLiquidity collects them and
     ///         routes terminal token fees to the project (via pay for fee project or addToBalance).
     function test_Rebalance_HandlesFees() public {
         // Pre-configure collectable fees on the position
-        // We need to figure out token ordering: the mock NFPM stores token0/token1 in the position
+        // We need to figure out token ordering: the mock PositionManager stores token0/token1 in the position
         // The fees need to include terminal token fees to trigger routing
         (address token0,) = _sortTokens(address(projectToken), address(terminalToken));
 
@@ -199,10 +183,10 @@ contract RebalanceTest is LPSplitHookTestBase {
             feeAmount1 = 5e18;
         }
 
-        nfpm.setCollectableFees(poolTokenId, feeAmount0, feeAmount1);
+        positionManager.setCollectableFees(poolTokenId, feeAmount0, feeAmount1);
 
-        // Ensure NFPM has enough terminal tokens for the fee transfer
-        terminalToken.mint(address(nfpm), 5e18);
+        // Ensure PositionManager has enough terminal tokens for the fee transfer
+        terminalToken.mint(address(positionManager), 5e18);
 
         // Set up fee project terminal
         terminal.setAccountingContext(

@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import {LPSplitHookTestBase} from "./TestBase.sol";
-import {UniV3DeploymentSplitHook} from "../src/UniV3DeploymentSplitHook.sol";
-import {IUniV3DeploymentSplitHook} from "../src/interfaces/IUniV3DeploymentSplitHook.sol";
+import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
+import {UniV4DeploymentSplitHook} from "../src/UniV4DeploymentSplitHook.sol";
+import {IUniV4DeploymentSplitHook} from "../src/interfaces/IUniV4DeploymentSplitHook.sol";
 import {IJBSplitHook} from "@bananapus/core/interfaces/IJBSplitHook.sol";
 import {JBSplit} from "@bananapus/core/structs/JBSplit.sol";
 import {JBSplitHookContext} from "@bananapus/core/structs/JBSplitHookContext.sol";
 
-/// @notice Tests for UniV3DeploymentSplitHook pre-deployment (accumulation) behavior.
+/// @notice Tests for UniV4DeploymentSplitHook pre-deployment (accumulation) behavior.
 /// @dev Covers projectDeployed/isPoolDeployed logic, processSplitWith accumulation, revert conditions, and
 /// supportsInterface.
-contract AccumulationStageTest is LPSplitHookTestBase {
+contract AccumulationStageTest is LPSplitHookV4TestBase {
     // -----------------------------------------------------------------------
     // 1. projectDeployed -- false before any pool deployed
     // -----------------------------------------------------------------------
@@ -96,7 +96,7 @@ contract AccumulationStageTest is LPSplitHookTestBase {
         JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, amount);
 
         vm.expectRevert(
-            UniV3DeploymentSplitHook.UniV3DeploymentSplitHook_SplitSenderNotValidControllerOrTerminal.selector
+            UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_SplitSenderNotValidControllerOrTerminal.selector
         );
         // Call from `user` instead of controller
         vm.prank(user);
@@ -129,7 +129,7 @@ contract AccumulationStageTest is LPSplitHookTestBase {
             })
         });
 
-        vm.expectRevert(UniV3DeploymentSplitHook.UniV3DeploymentSplitHook_NotHookSpecifiedInContext.selector);
+        vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_NotHookSpecifiedInContext.selector);
         vm.prank(address(controller));
         hook.processSplitWith(context);
     }
@@ -146,7 +146,7 @@ contract AccumulationStageTest is LPSplitHookTestBase {
         // Build context with groupId=0 (payout split, not reserved tokens)
         JBSplitHookContext memory context = _buildContext(PROJECT_ID, address(projectToken), amount, 0);
 
-        vm.expectRevert(UniV3DeploymentSplitHook.UniV3DeploymentSplitHook_TerminalTokensNotAllowed.selector);
+        vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_TerminalTokensNotAllowed.selector);
         vm.prank(address(controller));
         hook.processSplitWith(context);
     }
@@ -164,7 +164,7 @@ contract AccumulationStageTest is LPSplitHookTestBase {
         // Project 999 has no controller set in directory (defaults to address(0))
         JBSplitHookContext memory context = _buildReservedContext(invalidProjectId, amount);
 
-        vm.expectRevert(UniV3DeploymentSplitHook.UniV3DeploymentSplitHook_InvalidProjectId.selector);
+        vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_InvalidProjectId.selector);
         // Even pranking as some address, it will fail at the controllerOf check first
         vm.prank(address(controller));
         hook.processSplitWith(context);
@@ -174,11 +174,11 @@ contract AccumulationStageTest is LPSplitHookTestBase {
     // 10. supportsInterface -- both interface IDs return true
     // -----------------------------------------------------------------------
 
-    /// @notice supportsInterface returns true for IUniV3DeploymentSplitHook and IJBSplitHook.
+    /// @notice supportsInterface returns true for IUniV4DeploymentSplitHook and IJBSplitHook.
     function test_SupportsInterface() public view {
         assertTrue(
-            hook.supportsInterface(type(IUniV3DeploymentSplitHook).interfaceId),
-            "Should support IUniV3DeploymentSplitHook"
+            hook.supportsInterface(type(IUniV4DeploymentSplitHook).interfaceId),
+            "Should support IUniV4DeploymentSplitHook"
         );
         assertTrue(hook.supportsInterface(type(IJBSplitHook).interfaceId), "Should support IJBSplitHook");
         // Verify a random interface ID returns false
