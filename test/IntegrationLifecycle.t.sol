@@ -128,8 +128,16 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
 
         // Verify old position was burned and new one minted
-        assertEq(positionManager.burnCallCount(), burnCountBefore + 1, "PositionManager burn should be called once for old position");
-        assertEq(positionManager.mintCallCount(), mintCountBefore + 1, "PositionManager mint should be called once for new position");
+        assertEq(
+            positionManager.burnCallCount(),
+            burnCountBefore + 1,
+            "PositionManager burn should be called once for old position"
+        );
+        assertEq(
+            positionManager.mintCallCount(),
+            mintCountBefore + 1,
+            "PositionManager mint should be called once for new position"
+        );
 
         // Verify new tokenId differs from original
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));

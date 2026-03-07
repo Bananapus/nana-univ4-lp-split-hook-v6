@@ -22,11 +22,7 @@ contract ConstructorTest is LPSplitHookV4TestBase {
         assertEq(hook.DIRECTORY(), address(directory), "DIRECTORY mismatch");
         assertEq(hook.TOKENS(), address(jbTokens), "TOKENS mismatch");
         assertEq(address(hook.POOL_MANAGER()), address(1), "POOL_MANAGER mismatch");
-        assertEq(
-            address(hook.POSITION_MANAGER()),
-            address(positionManager),
-            "POSITION_MANAGER mismatch"
-        );
+        assertEq(address(hook.POSITION_MANAGER()), address(positionManager), "POSITION_MANAGER mismatch");
     }
 
     /// @notice Verify initialize() sets per-clone config (owner, feeProjectId, feePercent).
@@ -128,11 +124,7 @@ contract ConstructorTest is LPSplitHookV4TestBase {
         assertEq(impl.DIRECTORY(), address(directory), "DIRECTORY mismatch");
         assertEq(impl.TOKENS(), address(jbTokens), "TOKENS mismatch");
         assertEq(address(impl.POOL_MANAGER()), address(1), "POOL_MANAGER mismatch");
-        assertEq(
-            address(impl.POSITION_MANAGER()),
-            address(positionManager),
-            "POSITION_MANAGER mismatch"
-        );
+        assertEq(address(impl.POSITION_MANAGER()), address(positionManager), "POSITION_MANAGER mismatch");
     }
 
     /// @notice Calling initialize() a second time reverts with AlreadyInitialized.

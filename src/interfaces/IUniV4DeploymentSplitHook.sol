@@ -72,7 +72,8 @@ interface IUniV4DeploymentSplitHook {
         uint256 amount0Min,
         uint256 amount1Min,
         uint256 minCashOutReturn
-    ) external;
+    )
+        external;
 
     /**
      * @notice Collect LP fees and route them back to the project

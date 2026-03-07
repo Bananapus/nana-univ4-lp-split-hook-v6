@@ -17,9 +17,7 @@ contract TestableUniV4DeploymentSplitHook is UniV4DeploymentSplitHook {
         IPoolManager _poolManager,
         IPositionManager _positionManager
     )
-        UniV4DeploymentSplitHook(
-            _directory, _permissions, _tokens, _poolManager, _positionManager
-        )
+        UniV4DeploymentSplitHook(_directory, _permissions, _tokens, _poolManager, _positionManager)
     {}
 
     function exposed_getIssuanceRate(uint256 projectId, address terminalToken) external view returns (uint256) {

@@ -18,9 +18,7 @@ contract TestableHookForETH is UniV4DeploymentSplitHook {
         IPoolManager _poolManager,
         IPositionManager _positionManager
     )
-        UniV4DeploymentSplitHook(
-            _directory, _permissions, _tokens, _poolManager, _positionManager
-        )
+        UniV4DeploymentSplitHook(_directory, _permissions, _tokens, _poolManager, _positionManager)
     {}
 
     function exposed_isNativeToken(address token) external pure returns (bool) {

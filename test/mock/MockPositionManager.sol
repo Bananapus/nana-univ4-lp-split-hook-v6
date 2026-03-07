@@ -77,7 +77,13 @@ contract MockPositionManager {
 
     /// @notice IPositionManager.modifyLiquidities — the main entry point
     /// @dev Decodes actions and params, simulates behavior
-    function modifyLiquidities(bytes calldata unlockData, uint256 /* deadline */ ) external payable {
+    function modifyLiquidities(
+        bytes calldata unlockData,
+        uint256 /* deadline */
+    )
+        external
+        payable
+    {
         (bytes memory actions, bytes[] memory params) = abi.decode(unlockData, (bytes, bytes[]));
 
         for (uint256 i = 0; i < actions.length; i++) {
@@ -122,11 +128,7 @@ contract MockPositionManager {
         uint256 amount1Used = (uint256(amount1Max) * usagePercent) / 10_000;
 
         _positions[tokenId] = Position({
-            poolKey: key,
-            tickLower: tickLower,
-            tickUpper: tickUpper,
-            liquidity: uint128(liquidity),
-            exists: true
+            poolKey: key, tickLower: tickLower, tickUpper: tickUpper, liquidity: uint128(liquidity), exists: true
         });
 
         // Transfer tokens from caller (settled via SETTLE actions that follow)
@@ -134,8 +136,11 @@ contract MockPositionManager {
     }
 
     function _handleBurn(bytes memory data) internal {
-        (uint256 tokenId, uint128 amount0Min, uint128 amount1Min, /* hookData */ ) =
-            abi.decode(data, (uint256, uint128, uint128, bytes));
+        (
+            uint256 tokenId,
+            uint128 amount0Min,
+            uint128 amount1Min, /* hookData */
+        ) = abi.decode(data, (uint256, uint128, uint128, bytes));
 
         burnCallCount++;
         Position storage pos = _positions[tokenId];
@@ -147,8 +152,12 @@ contract MockPositionManager {
     }
 
     function _handleDecreaseLiquidity(bytes memory data) internal {
-        (uint256 tokenId, uint256 liquidity, uint128 amount0Min, uint128 amount1Min, /* hookData */ ) =
-            abi.decode(data, (uint256, uint256, uint128, uint128, bytes));
+        (
+            uint256 tokenId,
+            uint256 liquidity,
+            uint128 amount0Min,
+            uint128 amount1Min, /* hookData */
+        ) = abi.decode(data, (uint256, uint256, uint128, uint128, bytes));
 
         decreaseLiquidityCallCount++;
 
@@ -167,8 +176,7 @@ contract MockPositionManager {
     }
 
     function _handleTakePair(bytes memory data) internal {
-        (Currency currency0, Currency currency1, address recipient) =
-            abi.decode(data, (Currency, Currency, address));
+        (Currency currency0, Currency currency1, address recipient) = abi.decode(data, (Currency, Currency, address));
 
         // For fee collection: transfer collectable amounts
         // Find the relevant tokenId — use lastMintTokenId as proxy

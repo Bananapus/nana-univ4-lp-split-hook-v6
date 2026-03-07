@@ -15,5 +15,7 @@ interface IUniV4DeploymentSplitHookDeployer {
         uint256 feeProjectId,
         uint256 feePercent,
         bytes32 salt
-    ) external returns (IUniV4DeploymentSplitHook hook);
+    )
+        external
+        returns (IUniV4DeploymentSplitHook hook);
 }

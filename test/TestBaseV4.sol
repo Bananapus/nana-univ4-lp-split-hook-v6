@@ -117,9 +117,7 @@ contract LPSplitHookV4TestBase is Test {
         terminal.addAccountingContext(
             PROJECT_ID,
             JBAccountingContext({
-                token: address(terminalToken),
-                decimals: 18,
-                currency: uint32(uint160(address(terminalToken)))
+                token: address(terminalToken), decimals: 18, currency: uint32(uint160(address(terminalToken)))
             })
         );
 

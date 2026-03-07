@@ -158,7 +158,8 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
         POSITION_MANAGER = positionManager;
     }
 
-    /// @notice Initialize per-instance config on a clone. Can only be called once (clones start with owner = address(0)).
+    /// @notice Initialize per-instance config on a clone. Can only be called once (clones start with
+    /// owner = address(0)).
     /// @param initialOwner The owner of this clone instance.
     /// @param feeProjectId Project ID to receive LP fees.
     /// @param feePercent Percentage of LP fees to route to fee project (in basis points, e.g., 3800 = 38%).
@@ -186,8 +187,8 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
     //*********************************************************************//
 
     function supportsInterface(bytes4 interfaceId) public pure override returns (bool) {
-        return interfaceId == type(IUniV4DeploymentSplitHook).interfaceId
-            || interfaceId == type(IJBSplitHook).interfaceId;
+        return
+            interfaceId == type(IUniV4DeploymentSplitHook).interfaceId || interfaceId == type(IJBSplitHook).interfaceId;
     }
 
     //*********************************************************************//
@@ -230,12 +231,13 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
 
         uint256 weightRatio = context.currency == baseCurrency
             ? 10 ** context.decimals
-            : IJBController(controller).PRICES().pricePerUnitOf({
-                projectId: projectId,
-                pricingCurrency: context.currency,
-                unitCurrency: baseCurrency,
-                decimals: context.decimals
-            });
+            : IJBController(controller).PRICES()
+                .pricePerUnitOf({
+                    projectId: projectId,
+                    pricingCurrency: context.currency,
+                    unitCurrency: baseCurrency,
+                    decimals: context.decimals
+                });
 
         projectTokenOutAmount = mulDiv(terminalTokenInAmount, ruleset.weight, weightRatio);
     }
@@ -262,12 +264,13 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
 
         uint256 weightRatio = context.currency == baseCurrency
             ? 10 ** context.decimals
-            : IJBController(controller).PRICES().pricePerUnitOf({
-                projectId: projectId,
-                pricingCurrency: context.currency,
-                unitCurrency: baseCurrency,
-                decimals: context.decimals
-            });
+            : IJBController(controller).PRICES()
+                .pricePerUnitOf({
+                    projectId: projectId,
+                    pricingCurrency: context.currency,
+                    unitCurrency: baseCurrency,
+                    decimals: context.decimals
+                });
 
         terminalTokenOutAmount = mulDiv(projectTokenInAmount, weightRatio, ruleset.weight);
     }
@@ -333,15 +336,18 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
         returns (uint256 terminalTokensPerProjectToken)
     {
         try IJBMultiTerminal(
-            address(IJBDirectory(DIRECTORY).primaryTerminalOf({projectId: projectId, token: terminalToken}))
-        ).STORE().currentReclaimableSurplusOf({
-            projectId: projectId,
-            cashOutCount: 10 ** 18,
-            terminals: new IJBTerminal[](0),
-            accountingContexts: new JBAccountingContext[](0),
-            decimals: _getTokenDecimals(terminalToken),
-            currency: uint256(uint160(terminalToken))
-        }) returns (uint256 reclaimableAmount) {
+                address(IJBDirectory(DIRECTORY).primaryTerminalOf({projectId: projectId, token: terminalToken}))
+            ).STORE()
+            .currentReclaimableSurplusOf({
+                projectId: projectId,
+                cashOutCount: 10 ** 18,
+                terminals: new IJBTerminal[](0),
+                accountingContexts: new JBAccountingContext[](0),
+                decimals: _getTokenDecimals(terminalToken),
+                currency: uint256(uint160(terminalToken))
+            }) returns (
+            uint256 reclaimableAmount
+        ) {
             terminalTokensPerProjectToken = reclaimableAmount;
         } catch {
             terminalTokensPerProjectToken = 0;
@@ -448,7 +454,7 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
         uint256 bal1Before = _currencyBalance(key.currency1);
 
         // Collect fees: DECREASE_LIQUIDITY with 0 liquidity + TAKE_PAIR
-        bytes memory actions = abi.encodePacked(Actions.DECREASE_LIQUIDITY, Actions.TAKE_PAIR);
+        bytes memory actions = abi.encodePacked(uint8(Actions.DECREASE_LIQUIDITY), uint8(Actions.TAKE_PAIR));
 
         bytes[] memory params = new bytes[](2);
         params[0] = abi.encode(tokenId, uint256(0), uint128(0), uint128(0), "");
@@ -524,7 +530,7 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
 
         // Step 1: Burn old position (removes all liquidity + collects fees) and take all tokens
         {
-            bytes memory burnActions = abi.encodePacked(Actions.BURN_POSITION, Actions.TAKE_PAIR);
+            bytes memory burnActions = abi.encodePacked(uint8(Actions.BURN_POSITION), uint8(Actions.TAKE_PAIR));
 
             bytes[] memory burnParams = new bytes[](2);
             burnParams[0] = abi.encode(tokenId, uint128(decreaseAmount0Min), uint128(decreaseAmount1Min), "");
@@ -567,9 +573,8 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
             uint256 amount1 = projectToken == token0 ? terminalTokenBalance : projectTokenBalance;
 
             // Calculate liquidity from amounts
-            uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts(
-                sqrtPriceX96, sqrtPriceA, sqrtPriceB, amount0, amount1
-            );
+            uint128 liquidity =
+                LiquidityAmounts.getLiquidityForAmounts(sqrtPriceX96, sqrtPriceA, sqrtPriceB, amount0, amount1);
 
             if (liquidity > 0) {
                 uint256 newTokenId = POSITION_MANAGER.nextTokenId();
@@ -627,8 +632,9 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
         Currency projectCurrency = Currency.wrap(projectToken);
 
         // Sort currencies for V4 (currency0 < currency1)
-        (Currency currency0, Currency currency1) =
-            terminalCurrency < projectCurrency ? (terminalCurrency, projectCurrency) : (projectCurrency, terminalCurrency);
+        (Currency currency0, Currency currency1) = terminalCurrency < projectCurrency
+            ? (terminalCurrency, projectCurrency)
+            : (projectCurrency, terminalCurrency);
 
         key = PoolKey({
             currency0: currency0,
@@ -687,15 +693,16 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
                 }
             }
 
-            IJBMultiTerminal(terminal).cashOutTokensOf({
-                holder: address(this),
-                projectId: projectId,
-                cashOutCount: cashOutAmount,
-                tokenToReclaim: terminalToken,
-                minTokensReclaimed: effectiveMinReturn,
-                beneficiary: payable(address(this)),
-                metadata: ""
-            });
+            IJBMultiTerminal(terminal)
+                .cashOutTokensOf({
+                    holder: address(this),
+                    projectId: projectId,
+                    cashOutCount: cashOutAmount,
+                    tokenToReclaim: terminalToken,
+                    minTokensReclaimed: effectiveMinReturn,
+                    beneficiary: payable(address(this)),
+                    metadata: ""
+                });
         }
 
         // Get balances after cash out
@@ -763,8 +770,13 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
             IERC20(token1).forceApprove(address(POSITION_MANAGER), amount1);
         }
 
-        bytes memory actions =
-            abi.encodePacked(Actions.MINT_POSITION, Actions.SETTLE, Actions.SETTLE, Actions.SWEEP, Actions.SWEEP);
+        bytes memory actions = abi.encodePacked(
+            uint8(Actions.MINT_POSITION),
+            uint8(Actions.SETTLE),
+            uint8(Actions.SETTLE),
+            uint8(Actions.SWEEP),
+            uint8(Actions.SWEEP)
+        );
 
         bytes[] memory params = new bytes[](5);
         params[0] = abi.encode(
@@ -937,15 +949,16 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
                     });
                 } else {
                     IERC20(terminalToken).forceApprove(feeTerminal, feeAmount);
-                    IJBMultiTerminal(feeTerminal).pay({
-                        projectId: FEE_PROJECT_ID,
-                        token: terminalToken,
-                        amount: feeAmount,
-                        beneficiary: address(this),
-                        minReturnedTokens: 0,
-                        memo: "LP Fee",
-                        metadata: ""
-                    });
+                    IJBMultiTerminal(feeTerminal)
+                        .pay({
+                            projectId: FEE_PROJECT_ID,
+                            token: terminalToken,
+                            amount: feeAmount,
+                            beneficiary: address(this),
+                            minReturnedTokens: 0,
+                            memo: "LP Fee",
+                            metadata: ""
+                        });
                 }
 
                 uint256 feeTokensAfter = IERC20(feeProjectToken).balanceOf(address(this));
@@ -1037,12 +1050,8 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
 
         address controller = address(IJBDirectory(DIRECTORY).controllerOf(projectId));
         if (controller != address(0)) {
-            IJBController(controller).burnTokensOf({
-                holder: address(this),
-                projectId: projectId,
-                tokenCount: amount,
-                memo: memo
-            });
+            IJBController(controller)
+                .burnTokensOf({holder: address(this), projectId: projectId, tokenCount: amount, memo: memo});
             emit TokensBurned(projectId, projectToken, amount);
         }
     }
@@ -1059,12 +1068,7 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
         }
 
         IJBMultiTerminal(terminal).addToBalanceOf{value: isNative ? amount : 0}({
-            projectId: projectId,
-            token: token,
-            amount: amount,
-            shouldReturnHeldFees: false,
-            memo: "",
-            metadata: ""
+            projectId: projectId, token: token, amount: amount, shouldReturnHeldFees: false, memo: "", metadata: ""
         });
     }
 

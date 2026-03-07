@@ -295,7 +295,9 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         assertEq(tokenIdAfter, firstTokenId, "tokenId should not change after second processSplitWith");
 
         // PositionManager.mint should NOT have been called again
-        assertEq(positionManager.mintCallCount(), mintCountAfterDeploy, "PositionManager mint should not be called again");
+        assertEq(
+            positionManager.mintCallCount(), mintCountAfterDeploy, "PositionManager mint should not be called again"
+        );
 
         // But burn should have been called for the new tokens
         assertTrue(
@@ -321,7 +323,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
                 owner, // account (the project owner whose permission is required)
                 randomUser, // sender (the unauthorized caller)
                 PROJECT_ID, // projectId
-                25 // permissionId (SET_BUYBACK_POOL_PERMISSION)
+                JBPermissionIds.SET_BUYBACK_POOL // permissionId
             )
         );
         vm.prank(randomUser);

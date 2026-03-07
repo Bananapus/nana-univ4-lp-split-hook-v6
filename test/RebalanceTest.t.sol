@@ -78,16 +78,16 @@ contract RebalanceTest is LPSplitHookV4TestBase {
     // -----------------------------------------------------------------------
 
     /// @notice rebalanceLiquidity calls PositionManager.modifyLiquidities which includes
-    ///         DECREASE_LIQUIDITY to remove all liquidity from the existing position.
+    ///         BURN_POSITION to remove all liquidity and burn the old position NFT.
     function test_Rebalance_RemovesAllLiquidity() public {
-        uint256 decreaseCountBefore = positionManager.decreaseLiquidityCallCount();
+        uint256 burnCountBefore = positionManager.burnCallCount();
 
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
 
         assertEq(
-            positionManager.decreaseLiquidityCallCount(),
-            decreaseCountBefore + 1,
-            "PositionManager decreaseLiquidity should be called exactly once"
+            positionManager.burnCallCount(),
+            burnCountBefore + 1,
+            "PositionManager burn (which removes all liquidity) should be called exactly once"
         );
     }
 
@@ -102,7 +102,9 @@ contract RebalanceTest is LPSplitHookV4TestBase {
 
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
 
-        assertEq(positionManager.burnCallCount(), burnCountBefore + 1, "PositionManager burn should be called exactly once");
+        assertEq(
+            positionManager.burnCallCount(), burnCountBefore + 1, "PositionManager burn should be called exactly once"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -117,7 +119,11 @@ contract RebalanceTest is LPSplitHookV4TestBase {
 
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
 
-        assertEq(positionManager.mintCallCount(), mintCountBefore + 1, "PositionManager mint should be called once more for the new position");
+        assertEq(
+            positionManager.mintCallCount(),
+            mintCountBefore + 1,
+            "PositionManager mint should be called once more for the new position"
+        );
     }
 
     // -----------------------------------------------------------------------
