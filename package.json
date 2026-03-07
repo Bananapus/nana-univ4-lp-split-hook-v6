@@ -1,10 +1,10 @@
 {
-  "name": "@bananapus/univ3-lp-split-hook-v6",
-  "version": "0.0.3",
+  "name": "@bananapus/univ4-lp-split-hook-v6",
+  "version": "0.0.1",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Bananapus/nana-univ3-lp-split-hook-v6"
+    "url": "git+https://github.com/Bananapus/nana-univ4-lp-split-hook-v6"
   },
   "engines": {
     "node": ">=20.0.0"
