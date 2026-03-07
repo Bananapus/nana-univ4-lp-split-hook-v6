@@ -5,6 +5,7 @@ import {LPSplitHookTestBase} from "./TestBase.sol";
 import {UniV3DeploymentSplitHook} from "../src/UniV3DeploymentSplitHook.sol";
 import {IUniV3DeploymentSplitHook} from "../src/interfaces/IUniV3DeploymentSplitHook.sol";
 import {JBPermissioned} from "@bananapus/core/abstract/JBPermissioned.sol";
+import {JBPermissionIds} from "@bananapus/permission-ids/JBPermissionIds.sol";
 import {JBSplitHookContext} from "@bananapus/core/structs/JBSplitHookContext.sol";
 
 /// @notice Tests for UniV3DeploymentSplitHook deployment stage behavior.
@@ -321,7 +322,7 @@ contract DeploymentStageTest is LPSplitHookTestBase {
                 owner, // account (the project owner whose permission is required)
                 randomUser, // sender (the unauthorized caller)
                 PROJECT_ID, // projectId
-                25 // permissionId (SET_BUYBACK_POOL_PERMISSION)
+                JBPermissionIds.SET_BUYBACK_POOL // permissionId
             )
         );
         vm.prank(randomUser);
@@ -332,15 +333,15 @@ contract DeploymentStageTest is LPSplitHookTestBase {
     // 16. deployPool — succeeds for permitted operator
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice A user with SET_BUYBACK_POOL permission (permissionId 25) granted by the
+    /// @notice A user with SET_BUYBACK_POOL permission granted by the
     ///         project owner can successfully call deployPool.
     function test_DeployPool_SucceedsFor_PermittedOperator() public {
         _accumulateTokens(PROJECT_ID, 100e18);
 
         address operator = makeAddr("operator");
 
-        // Grant SET_BUYBACK_POOL permission (25) to operator from owner for PROJECT_ID
-        permissions.setPermission(operator, owner, PROJECT_ID, 25, true);
+        // Grant SET_BUYBACK_POOL permission to operator from owner for PROJECT_ID
+        permissions.setPermission(operator, owner, PROJECT_ID, JBPermissionIds.SET_BUYBACK_POOL, true);
 
         vm.prank(operator);
         hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0, 0);

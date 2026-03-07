@@ -23,7 +23,6 @@ import {
     MockJBTokens,
     MockJBPrices,
     MockJBTerminalStore,
-    MockREVDeployer,
     MockUniswapV3Factory,
     MockJBProjects,
     MockJBPermissions
@@ -44,7 +43,6 @@ contract LPSplitHookTestBase is Test {
     MockJBTokens public jbTokens;
     MockJBPrices public prices;
     MockJBTerminalStore public store;
-    MockREVDeployer public revDeployer;
     MockUniswapV3Factory public v3Factory;
     MockNFPM public nfpm;
     MockWETH public weth;
@@ -89,7 +87,6 @@ contract LPSplitHookTestBase is Test {
         jbTokens = new MockJBTokens();
         prices = new MockJBPrices();
         store = new MockJBTerminalStore();
-        revDeployer = new MockREVDeployer();
         jbProjects = new MockJBProjects();
         permissions = new MockJBPermissions();
 
@@ -149,8 +146,7 @@ contract LPSplitHookTestBase is Test {
             IJBPermissions(address(permissions)),
             address(jbTokens),
             address(v3Factory),
-            address(nfpm),
-            address(revDeployer)
+            address(nfpm)
         );
         hook = UniV3DeploymentSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize(owner, FEE_PROJECT_ID, FEE_PERCENT);

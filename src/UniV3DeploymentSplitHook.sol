@@ -27,7 +27,6 @@ import {IUniswapV3Pool} from "@uniswap/v3-core/interfaces/IUniswapV3Pool.sol";
 import {TickMath} from "@uniswap/v3-core-patched/TickMath.sol";
 import {JBPermissionIds} from "@bananapus/permission-ids/JBPermissionIds.sol";
 import {IUniV3DeploymentSplitHook} from "./interfaces/IUniV3DeploymentSplitHook.sol";
-import {IREVDeployer} from "./interfaces/IREVDeployer.sol";
 
 /// @custom:benediction DEVS BENEDICAT ET PROTEGAT CONTRACTVS MEAM
 /**
@@ -81,8 +80,6 @@ contract UniV3DeploymentSplitHook is IUniV3DeploymentSplitHook, IJBSplitHook, JB
     /// @dev Thrown when fee percent exceeds 100% (10000 basis points)
     error UniV3DeploymentSplitHook_InvalidFeePercent();
 
-    /// @dev Thrown when trying to claim tokens for a non-revnet operator
-    error UniV3DeploymentSplitHook_UnauthorizedBeneficiary();
 
     /// @dev Thrown when terminalToken is not a valid terminal token for the projectId
     error UniV3DeploymentSplitHook_InvalidTerminalToken();
@@ -122,9 +119,6 @@ contract UniV3DeploymentSplitHook is IUniV3DeploymentSplitHook, IJBSplitHook, JB
     /// @notice UniswapV3 NonFungiblePositionManager address
     address public immutable UNISWAP_V3_NONFUNGIBLE_POSITION_MANAGER;
 
-    /// @notice REVDeployer contract address for revnet operator validation
-    address public immutable REV_DEPLOYER;
-
     /// @notice Project ID to receive LP fees
     uint256 public FEE_PROJECT_ID;
 
@@ -163,14 +157,12 @@ contract UniV3DeploymentSplitHook is IUniV3DeploymentSplitHook, IJBSplitHook, JB
     /// @param tokens JBTokens address
     /// @param uniswapV3Factory UniswapV3Factory address
     /// @param uniswapV3NonfungiblePositionManager UniswapV3 NonfungiblePositionManager address
-    /// @param revDeployer REVDeployer contract address for revnet operator validation
     constructor(
         address directory,
         IJBPermissions permissions,
         address tokens,
         address uniswapV3Factory,
-        address uniswapV3NonfungiblePositionManager,
-        address revDeployer
+        address uniswapV3NonfungiblePositionManager
     )
         JBPermissioned(permissions)
         Ownable(msg.sender)
@@ -179,13 +171,11 @@ contract UniV3DeploymentSplitHook is IUniV3DeploymentSplitHook, IJBSplitHook, JB
         if (tokens == address(0)) revert UniV3DeploymentSplitHook_ZeroAddressNotAllowed();
         if (uniswapV3Factory == address(0)) revert UniV3DeploymentSplitHook_ZeroAddressNotAllowed();
         if (uniswapV3NonfungiblePositionManager == address(0)) revert UniV3DeploymentSplitHook_ZeroAddressNotAllowed();
-        if (revDeployer == address(0)) revert UniV3DeploymentSplitHook_ZeroAddressNotAllowed();
 
         DIRECTORY = directory;
         TOKENS = tokens;
         UNISWAP_V3_FACTORY = uniswapV3Factory;
         UNISWAP_V3_NONFUNGIBLE_POSITION_MANAGER = uniswapV3NonfungiblePositionManager;
-        REV_DEPLOYER = revDeployer;
     }
 
     /// @notice Initialize per-instance config on a clone. Can only be called once (clones start with owner = address(0)).
@@ -609,15 +599,16 @@ contract UniV3DeploymentSplitHook is IUniV3DeploymentSplitHook, IJBSplitHook, JB
     // --------------------- external transactions ----------------------- //
     //*********************************************************************//
 
-    /// @notice Claim fee tokens for a beneficiary (must be the project's revnet operator)
-    /// @dev Only the revnet operator for a project can claim fee tokens earned from LP fees
+    /// @notice Claim fee tokens for a beneficiary.
+    /// @dev Requires SET_BUYBACK_POOL permission from the project owner.
     /// @param projectId The Juicebox project ID
-    /// @param beneficiary The beneficiary address to claim tokens for (must be revnet operator)
+    /// @param beneficiary The beneficiary address to send claimed tokens to
     function claimFeeTokensFor(uint256 projectId, address beneficiary) external {
-        // Validate that the beneficiary is the revnet operator for this project
-        if (!IREVDeployer(REV_DEPLOYER).isSplitOperatorOf({projectId: projectId, operator: beneficiary})) {
-            revert UniV3DeploymentSplitHook_UnauthorizedBeneficiary();
-        }
+        _requirePermissionFrom({
+            account: IJBDirectory(DIRECTORY).PROJECTS().ownerOf(projectId),
+            projectId: projectId,
+            permissionId: JBPermissionIds.SET_BUYBACK_POOL
+        });
 
         // Get the claimable amount for this project
         uint256 claimableAmount = claimableFeeTokens[projectId];

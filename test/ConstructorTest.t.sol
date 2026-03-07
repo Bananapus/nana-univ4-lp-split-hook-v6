@@ -6,13 +6,13 @@ import {UniV3DeploymentSplitHook} from "../src/UniV3DeploymentSplitHook.sol";
 import {IJBPermissions} from "@bananapus/core/interfaces/IJBPermissions.sol";
 
 /// @notice Tests for UniV3DeploymentSplitHook constructor and initialize() behavior.
-/// @dev Verifies all immutables are set correctly by the constructor (6 params),
+/// @dev Verifies all immutables are set correctly by the constructor (5 params),
 ///      per-clone config is set by initialize(), zero-address checks revert,
 ///      fee percent validation works, feeProjectId=0 skips controllerOf check,
 ///      and double-initialization reverts.
 contract ConstructorTest is LPSplitHookTestBase {
     // ─────────────────────────────────────────────────────────────────────
-    // Constructor tests (6 immutable params)
+    // Constructor tests (5 immutable params)
     // ─────────────────────────────────────────────────────────────────────
 
     /// @notice Verify all immutables are correctly set after construction + initialize.
@@ -25,7 +25,6 @@ contract ConstructorTest is LPSplitHookTestBase {
             address(nfpm),
             "UNISWAP_V3_NONFUNGIBLE_POSITION_MANAGER mismatch"
         );
-        assertEq(hook.REV_DEPLOYER(), address(revDeployer), "REV_DEPLOYER mismatch");
     }
 
     /// @notice Verify initialize() sets per-clone config (owner, feeProjectId, feePercent).
@@ -43,8 +42,7 @@ contract ConstructorTest is LPSplitHookTestBase {
             IJBPermissions(address(permissions)),
             address(jbTokens),
             address(v3Factory),
-            address(nfpm),
-            address(revDeployer)
+            address(nfpm)
         );
     }
 
@@ -56,8 +54,7 @@ contract ConstructorTest is LPSplitHookTestBase {
             IJBPermissions(address(permissions)),
             address(0), // tokens = zero
             address(v3Factory),
-            address(nfpm),
-            address(revDeployer)
+            address(nfpm)
         );
     }
 
@@ -69,8 +66,7 @@ contract ConstructorTest is LPSplitHookTestBase {
             IJBPermissions(address(permissions)),
             address(jbTokens),
             address(0), // uniswapV3Factory = zero
-            address(nfpm),
-            address(revDeployer)
+            address(nfpm)
         );
     }
 
@@ -82,21 +78,7 @@ contract ConstructorTest is LPSplitHookTestBase {
             IJBPermissions(address(permissions)),
             address(jbTokens),
             address(v3Factory),
-            address(0), // nfpm = zero
-            address(revDeployer)
-        );
-    }
-
-    /// @notice Constructor reverts when revDeployer is address(0).
-    function test_Constructor_RevertsOn_ZeroRevDeployer() public {
-        vm.expectRevert(UniV3DeploymentSplitHook.UniV3DeploymentSplitHook_ZeroAddressNotAllowed.selector);
-        new UniV3DeploymentSplitHook(
-            address(directory),
-            IJBPermissions(address(permissions)),
-            address(jbTokens),
-            address(v3Factory),
-            address(nfpm),
-            address(0) // revDeployer = zero
+            address(0) // nfpm = zero
         );
     }
 
@@ -112,8 +94,7 @@ contract ConstructorTest is LPSplitHookTestBase {
             IJBPermissions(address(permissions)),
             address(jbTokens),
             address(v3Factory),
-            address(nfpm),
-            address(revDeployer)
+            address(nfpm)
         );
         // Zero out slot 0 (owner) so initialize() can be called
         vm.store(address(impl), bytes32(uint256(0)), bytes32(0));
@@ -131,8 +112,7 @@ contract ConstructorTest is LPSplitHookTestBase {
             IJBPermissions(address(permissions)),
             address(jbTokens),
             address(v3Factory),
-            address(nfpm),
-            address(revDeployer)
+            address(nfpm)
         );
         // Zero out slot 0 (owner) so initialize() can be called
         vm.store(address(impl), bytes32(uint256(0)), bytes32(0));
@@ -151,7 +131,6 @@ contract ConstructorTest is LPSplitHookTestBase {
             address(nfpm),
             "UNISWAP_V3_NONFUNGIBLE_POSITION_MANAGER mismatch"
         );
-        assertEq(impl.REV_DEPLOYER(), address(revDeployer), "REV_DEPLOYER mismatch");
     }
 
     /// @notice Calling initialize() a second time reverts with AlreadyInitialized.
@@ -162,8 +141,7 @@ contract ConstructorTest is LPSplitHookTestBase {
             IJBPermissions(address(permissions)),
             address(jbTokens),
             address(v3Factory),
-            address(nfpm),
-            address(revDeployer)
+            address(nfpm)
         );
         // Zero out slot 0 (owner) so initialize() can be called
         vm.store(address(impl), bytes32(uint256(0)), bytes32(0));

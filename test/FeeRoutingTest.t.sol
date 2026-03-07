@@ -3,6 +3,8 @@ pragma solidity 0.8.23;
 
 import {LPSplitHookTestBase} from "./TestBase.sol";
 import {UniV3DeploymentSplitHook} from "../src/UniV3DeploymentSplitHook.sol";
+import {JBPermissioned} from "@bananapus/core/abstract/JBPermissioned.sol";
+import {JBPermissionIds} from "@bananapus/permission-ids/JBPermissionIds.sol";
 import {IUniV3DeploymentSplitHook} from "../src/interfaces/IUniV3DeploymentSplitHook.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
@@ -240,11 +242,11 @@ contract FeeRoutingTest is LPSplitHookTestBase {
     }
 
     // -----------------------------------------------------------------------
-    // 10. claimFeeTokensFor -- valid operator receives tokens
+    // 10. claimFeeTokensFor -- authorized caller receives tokens
     // -----------------------------------------------------------------------
 
-    /// @notice A valid revnet operator can claim accumulated fee tokens.
-    function test_ClaimFeeTokens_ValidOperator() public {
+    /// @notice An authorized caller can claim accumulated fee tokens for a beneficiary.
+    function test_ClaimFeeTokens_AuthorizedCaller() public {
         // First generate claimable fee tokens
         uint256 feeAmount = 1000e18;
         _setTerminalTokenFees(feeAmount);
@@ -253,11 +255,10 @@ contract FeeRoutingTest is LPSplitHookTestBase {
         uint256 claimable = hook.claimableFeeTokens(PROJECT_ID);
         assertGt(claimable, 0, "Should have claimable fee tokens");
 
-        // Set user as the operator for PROJECT_ID
-        revDeployer.setOperator(PROJECT_ID, user, true);
-
         uint256 userBalanceBefore = feeProjectToken.balanceOf(user);
 
+        // Claim as project owner (has implicit permission)
+        vm.prank(owner);
         hook.claimFeeTokensFor(PROJECT_ID, user);
 
         uint256 userBalanceAfter = feeProjectToken.balanceOf(user);
@@ -265,18 +266,27 @@ contract FeeRoutingTest is LPSplitHookTestBase {
     }
 
     // -----------------------------------------------------------------------
-    // 11. claimFeeTokensFor -- reverts for non-operator
+    // 11. claimFeeTokensFor -- reverts for unauthorized caller
     // -----------------------------------------------------------------------
 
-    /// @notice claimFeeTokensFor should revert when beneficiary is not a valid revnet operator.
-    function test_ClaimFeeTokens_InvalidOperator_Reverts() public {
+    /// @notice claimFeeTokensFor should revert when called by an unauthorized address.
+    function test_ClaimFeeTokens_UnauthorizedCaller_Reverts() public {
         // Generate claimable fee tokens first
         uint256 feeAmount = 1000e18;
         _setTerminalTokenFees(feeAmount);
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
 
-        // Do NOT set user as operator
-        vm.expectRevert(UniV3DeploymentSplitHook.UniV3DeploymentSplitHook_UnauthorizedBeneficiary.selector);
+        // Call without permission -- should revert
+        vm.prank(user);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                JBPermissioned.JBPermissioned_Unauthorized.selector,
+                owner,
+                user,
+                PROJECT_ID,
+                JBPermissionIds.SET_BUYBACK_POOL
+            )
+        );
         hook.claimFeeTokensFor(PROJECT_ID, user);
     }
 
@@ -293,8 +303,8 @@ contract FeeRoutingTest is LPSplitHookTestBase {
 
         assertGt(hook.claimableFeeTokens(PROJECT_ID), 0, "Should have claimable fee tokens before claim");
 
-        // Set user as operator and claim
-        revDeployer.setOperator(PROJECT_ID, user, true);
+        // Claim as project owner
+        vm.prank(owner);
         hook.claimFeeTokensFor(PROJECT_ID, user);
 
         assertEq(hook.claimableFeeTokens(PROJECT_ID), 0, "claimableFeeTokens should be zero after claim");

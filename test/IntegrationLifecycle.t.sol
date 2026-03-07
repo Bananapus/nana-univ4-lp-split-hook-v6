@@ -185,11 +185,9 @@ contract IntegrationLifecycle is LPSplitHookTestBase {
         uint256 hookFeeBalance = feeProjectToken.balanceOf(address(hook));
         assertEq(hookFeeBalance, claimable, "hook should hold fee project tokens equal to claimable amount");
 
-        // Set user as operator for PROJECT_ID
-        revDeployer.setOperator(PROJECT_ID, user, true);
-
-        // Claim fee tokens
+        // Claim fee tokens as project owner
         uint256 userBalanceBefore = feeProjectToken.balanceOf(user);
+        vm.prank(owner);
         hook.claimFeeTokensFor(PROJECT_ID, user);
         uint256 userBalanceAfter = feeProjectToken.balanceOf(user);
 
