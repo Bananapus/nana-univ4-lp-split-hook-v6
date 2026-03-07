@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.23;
+pragma solidity 0.8.26;
 
 import {UniV3DeploymentSplitHook} from "../UniV3DeploymentSplitHook.sol";
 import {IUniV3DeploymentSplitHook} from "./IUniV3DeploymentSplitHook.sol";
