@@ -53,18 +53,17 @@ contract L25_FeeProjectIdValidationTest is Test {
         UniV4DeploymentSplitHook clone = UniV4DeploymentSplitHook(payable(LibClone.clone(address(hookImpl))));
 
         vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_FeePercentWithoutFeeProject.selector);
-        clone.initialize(address(this), 0, 3800); // feeProjectId=0, feePercent=38%
+        clone.initialize(0, 3800); // feeProjectId=0, feePercent=38%
     }
 
     /// @notice initialize succeeds when feePercent == 0 and feeProjectId == 0 (no fees configured).
     function test_initialize_succeeds_zero_feePercent_zero_feeProjectId() public {
         UniV4DeploymentSplitHook clone = UniV4DeploymentSplitHook(payable(LibClone.clone(address(hookImpl))));
 
-        clone.initialize(address(this), 0, 0); // both zero is fine
+        clone.initialize(0, 0); // both zero is fine
 
         assertEq(clone.FEE_PERCENT(), 0);
         assertEq(clone.FEE_PROJECT_ID(), 0);
-        assertEq(clone.owner(), address(this));
     }
 
     /// @notice initialize succeeds when feePercent > 0 and feeProjectId != 0 (valid fee config).
@@ -75,10 +74,9 @@ contract L25_FeeProjectIdValidationTest is Test {
 
         UniV4DeploymentSplitHook clone = UniV4DeploymentSplitHook(payable(LibClone.clone(address(hookImpl))));
 
-        clone.initialize(address(this), 2, 3800); // feeProjectId=2, feePercent=38%
+        clone.initialize(2, 3800); // feeProjectId=2, feePercent=38%
 
         assertEq(clone.FEE_PERCENT(), 3800);
         assertEq(clone.FEE_PROJECT_ID(), 2);
-        assertEq(clone.owner(), address(this));
     }
 }

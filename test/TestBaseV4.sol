@@ -142,7 +142,7 @@ contract LPSplitHookV4TestBase is Test {
             IPositionManager(address(positionManager))
         );
         hook = UniV4DeploymentSplitHook(payable(LibClone.clone(address(hookImpl))));
-        hook.initialize(owner, FEE_PROJECT_ID, FEE_PERCENT);
+        hook.initialize(FEE_PROJECT_ID, FEE_PERCENT);
     }
 
     // ─── Directory Helpers (write to fallback-based mock) ───────────────

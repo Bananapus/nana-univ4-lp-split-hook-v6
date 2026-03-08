@@ -66,7 +66,7 @@ contract UniV4DeploymentSplitHookDeployer is IUniV4DeploymentSplitHookDeployer {
                 })
         );
 
-        IUniV4DeploymentSplitHook(address(hook)).initialize(msg.sender, feeProjectId, feePercent);
+        IUniV4DeploymentSplitHook(address(hook)).initialize(feeProjectId, feePercent);
 
         emit HookDeployed(feeProjectId, feePercent, hook, msg.sender);
 

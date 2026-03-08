@@ -99,7 +99,6 @@ contract DeployerTest is Test {
         IUniV4DeploymentSplitHook hook = deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, bytes32(0));
 
         UniV4DeploymentSplitHook concreteHook = UniV4DeploymentSplitHook(payable(address(hook)));
-        assertEq(concreteHook.owner(), caller, "owner not set");
         assertEq(concreteHook.FEE_PROJECT_ID(), FEE_PROJECT_ID, "feeProjectId not set");
         assertEq(concreteHook.FEE_PERCENT(), FEE_PERCENT, "feePercent not set");
     }

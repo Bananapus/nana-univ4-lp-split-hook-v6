@@ -19,7 +19,6 @@ import {JBConstants} from "@bananapus/core/libraries/JBConstants.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {mulDiv, sqrt} from "@prb/math/src/Common.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
@@ -52,7 +51,7 @@ import {IUniV4DeploymentSplitHook} from "./interfaces/IUniV4DeploymentSplitHook.
  * @dev For any given Uniswap V4 pool, the contract will control a single LP position.
  * @dev Pool deployment requires SET_BUYBACK_POOL permission from the project owner.
  */
-contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JBPermissioned, Ownable {
+contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JBPermissioned {
     using JBRulesetMetadataResolver for JBRuleset;
     using SafeERC20 for IERC20;
     using PoolIdLibrary for PoolKey;
@@ -129,7 +128,7 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
     /// @notice ProjectID => Fee tokens claimable by that project
     mapping(uint256 projectId => uint256 claimableFeeTokens) public claimableFeeTokens;
 
-    /// @notice Whether this clone instance has been initialized (prevents re-initialization after renounceOwnership).
+    /// @notice Whether this clone instance has been initialized.
     bool public initialized;
 
     //*********************************************************************//
@@ -149,7 +148,6 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
         IPositionManager positionManager
     )
         JBPermissioned(permissions)
-        Ownable(msg.sender)
     {
         if (directory == address(0)) revert UniV4DeploymentSplitHook_ZeroAddressNotAllowed();
         if (tokens == address(0)) revert UniV4DeploymentSplitHook_ZeroAddressNotAllowed();
@@ -163,12 +161,9 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
     }
 
     /// @notice Initialize per-instance config on a clone. Can only be called once.
-    /// @dev Uses an explicit `initialized` flag rather than relying on owner() == address(0),
-    ///      which would allow re-initialization after renounceOwnership().
-    /// @param initialOwner The owner of this clone instance.
     /// @param feeProjectId Project ID to receive LP fees.
     /// @param feePercent Percentage of LP fees to route to fee project (in basis points, e.g., 3800 = 38%).
-    function initialize(address initialOwner, uint256 feeProjectId, uint256 feePercent) external {
+    function initialize(uint256 feeProjectId, uint256 feePercent) external {
         if (initialized) revert UniV4DeploymentSplitHook_AlreadyInitialized();
 
         if (feePercent > BPS) revert UniV4DeploymentSplitHook_InvalidFeePercent();
@@ -185,8 +180,6 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
         initialized = true;
         FEE_PROJECT_ID = feeProjectId;
         FEE_PERCENT = feePercent;
-
-        _transferOwnership(initialOwner);
     }
 
     /// @notice Accept ETH transfers (needed for cashOut with native ETH and V4 TAKE operations).
