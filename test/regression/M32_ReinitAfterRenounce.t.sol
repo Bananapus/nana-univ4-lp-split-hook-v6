@@ -21,10 +21,8 @@ import {
     MockJBPermissions
 } from "../mock/MockJBContracts.sol";
 
-/// @notice Regression test for M-32: Re-initialization after renounceOwnership.
-/// @dev After renounceOwnership() sets owner to address(0), the old owner() != address(0) check
-///      in initialize() would pass again, allowing an attacker to re-initialize with malicious
-///      fee parameters. The fix uses an explicit `initialized` boolean.
+/// @notice Regression test for M-32: Re-initialization protection.
+/// @dev The `initialized` boolean prevents calling initialize() more than once.
 contract M32_ReinitAfterRenounceTest is Test {
     UniV4DeploymentSplitHook public hookImpl;
     UniV4DeploymentSplitHook public hook;
@@ -34,11 +32,9 @@ contract M32_ReinitAfterRenounceTest is Test {
     MockJBPermissions public permissions;
     MockPositionManager public positionManager;
 
-    address public owner;
     address public attacker;
 
     function setUp() public {
-        owner = makeAddr("owner");
         attacker = makeAddr("attacker");
 
         directory = new MockJBDirectory();
@@ -61,38 +57,29 @@ contract M32_ReinitAfterRenounceTest is Test {
 
         // Clone and initialize
         hook = UniV4DeploymentSplitHook(payable(LibClone.clone(address(hookImpl))));
-        hook.initialize(owner, 2, 3800); // feeProjectId=2, feePercent=38%
+        hook.initialize(2, 3800); // feeProjectId=2, feePercent=38%
     }
 
-    /// @notice After renounceOwnership, re-initialization should still revert.
-    function test_reinitialize_after_renounce_reverts() public {
-        // Verify initial state
-        assertEq(hook.owner(), owner);
+    /// @notice Re-initialization should revert.
+    function test_reinitialize_reverts() public {
         assertEq(hook.FEE_PROJECT_ID(), 2);
         assertEq(hook.FEE_PERCENT(), 3800);
         assertTrue(hook.initialized());
 
-        // Owner renounces ownership
-        vm.prank(owner);
-        hook.renounceOwnership();
-
-        // owner() is now address(0)
-        assertEq(hook.owner(), address(0));
-
         // Attacker tries to re-initialize with malicious parameters
         vm.prank(attacker);
         vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_AlreadyInitialized.selector);
-        hook.initialize(attacker, 2, 10_000); // trying to set 100% fee
+        hook.initialize(2, 10_000); // trying to set 100% fee
     }
 
     /// @notice The `initialized` flag is set to true after first initialization.
-    function test_initialized_flag_set() public {
+    function test_initialized_flag_set() public view {
         assertTrue(hook.initialized(), "initialized should be true after initialize()");
     }
 
-    /// @notice Double initialization (without renounce) also still reverts.
+    /// @notice Double initialization also still reverts.
     function test_double_init_reverts() public {
         vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_AlreadyInitialized.selector);
-        hook.initialize(attacker, 2, 5000);
+        hook.initialize(2, 5000);
     }
 }

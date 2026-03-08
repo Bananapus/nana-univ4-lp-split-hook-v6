@@ -25,11 +25,10 @@ contract ConstructorTest is LPSplitHookV4TestBase {
         assertEq(address(hook.POSITION_MANAGER()), address(positionManager), "POSITION_MANAGER mismatch");
     }
 
-    /// @notice Verify initialize() sets per-clone config (owner, feeProjectId, feePercent).
+    /// @notice Verify initialize() sets per-clone config (feeProjectId, feePercent).
     function test_Initialize_SetsCloneConfig() public view {
         assertEq(hook.FEE_PROJECT_ID(), FEE_PROJECT_ID, "FEE_PROJECT_ID mismatch");
         assertEq(hook.FEE_PERCENT(), FEE_PERCENT, "FEE_PERCENT mismatch");
-        assertEq(hook.owner(), owner, "owner mismatch");
     }
 
     /// @notice Constructor reverts when directory is address(0).
@@ -94,11 +93,9 @@ contract ConstructorTest is LPSplitHookV4TestBase {
             IPoolManager(address(1)),
             IPositionManager(address(positionManager))
         );
-        // Zero out slot 0 (owner) so initialize() can be called
-        vm.store(address(impl), bytes32(uint256(0)), bytes32(0));
 
         vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_InvalidFeePercent.selector);
-        impl.initialize(owner, FEE_PROJECT_ID, 10_001);
+        impl.initialize(FEE_PROJECT_ID, 10_001);
     }
 
     /// @notice initialize() reverts when feeProjectId is 0 but feePercent > 0 (L-25 fix).
@@ -111,11 +108,9 @@ contract ConstructorTest is LPSplitHookV4TestBase {
             IPoolManager(address(1)),
             IPositionManager(address(positionManager))
         );
-        // Zero out slot 0 (owner) so initialize() can be called
-        vm.store(address(impl), bytes32(uint256(0)), bytes32(0));
 
         vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_FeePercentWithoutFeeProject.selector);
-        impl.initialize(owner, 0, FEE_PERCENT);
+        impl.initialize(0, FEE_PERCENT);
     }
 
     /// @notice When both feeProjectId and feePercent are 0, initialize() succeeds (no fees configured).
@@ -128,14 +123,11 @@ contract ConstructorTest is LPSplitHookV4TestBase {
             IPoolManager(address(1)),
             IPositionManager(address(positionManager))
         );
-        // Zero out slot 0 (owner) so initialize() can be called
-        vm.store(address(impl), bytes32(uint256(0)), bytes32(0));
 
-        impl.initialize(owner, 0, 0);
+        impl.initialize(0, 0);
 
         assertEq(impl.FEE_PROJECT_ID(), 0, "FEE_PROJECT_ID should be 0");
         assertEq(impl.FEE_PERCENT(), 0, "FEE_PERCENT should be 0");
-        assertEq(impl.owner(), owner, "owner mismatch");
     }
 
     /// @notice Calling initialize() a second time reverts with AlreadyInitialized.
@@ -148,14 +140,12 @@ contract ConstructorTest is LPSplitHookV4TestBase {
             IPoolManager(address(1)),
             IPositionManager(address(positionManager))
         );
-        // Zero out slot 0 (owner) so initialize() can be called
-        vm.store(address(impl), bytes32(uint256(0)), bytes32(0));
 
         // First init succeeds
-        impl.initialize(owner, FEE_PROJECT_ID, FEE_PERCENT);
+        impl.initialize(FEE_PROJECT_ID, FEE_PERCENT);
 
         // Second init reverts
         vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_AlreadyInitialized.selector);
-        impl.initialize(owner, FEE_PROJECT_ID, FEE_PERCENT);
+        impl.initialize(FEE_PROJECT_ID, FEE_PERCENT);
     }
 }

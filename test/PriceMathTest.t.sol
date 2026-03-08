@@ -137,8 +137,7 @@ contract PriceMathTest is LPSplitHookV4TestBase {
             IPoolManager(address(1)),
             IPositionManager(address(positionManager))
         );
-        vm.store(address(testableHook), bytes32(uint256(0)), bytes32(0));
-        testableHook.initialize(owner, FEE_PROJECT_ID, FEE_PERCENT);
+        testableHook.initialize(FEE_PROJECT_ID, FEE_PERCENT);
     }
 
     // ─────────────────────────────────────────────────────────────────────

@@ -8,7 +8,7 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 
 | Contract | Role |
 |----------|------|
-| `UniV4DeploymentSplitHook` | Core split hook. Implements `IJBSplitHook.processSplitWith` to accumulate or burn tokens. Manages V4 pool creation, LP position minting, fee collection, and liquidity rebalancing. Inherits `JBPermissioned`, `Ownable`. Deployed as clones via factory. |
+| `UniV4DeploymentSplitHook` | Core split hook. Implements `IJBSplitHook.processSplitWith` to accumulate or burn tokens. Manages V4 pool creation, LP position minting, fee collection, and liquidity rebalancing. Inherits `JBPermissioned`. Deployed as clones via factory. |
 | `UniV4DeploymentSplitHookDeployer` | Factory that deploys hook clones via `LibClone` (Solady). Supports CREATE2 deterministic deployment. Initializes clones with `feeProjectId` and `feePercent`. Registers each deployed clone in `JBAddressRegistry` so frontends can verify the deployer. |
 
 ## Key Functions
@@ -71,7 +71,7 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 | `@bananapus/permission-ids-v6` | `JBPermissionIds` | `SET_BUYBACK_POOL` permission ID |
 | `@uniswap/v4-core` | `IPoolManager`, `PoolKey`, `PoolId`, `Currency`, `TickMath`, `IHooks` | V4 pool creation, price math, currency handling |
 | `@uniswap/v4-periphery` | `IPositionManager`, `Actions`, `LiquidityAmounts` | V4 position management: mint, modify, burn, collect |
-| `@openzeppelin/contracts` | `IERC20`, `IERC20Metadata`, `SafeERC20`, `Ownable` | Token operations, ownership |
+| `@openzeppelin/contracts` | `IERC20`, `IERC20Metadata`, `SafeERC20` | Token operations |
 | `@prb/math` | `mulDiv`, `sqrt` | Overflow-safe arithmetic for sqrtPriceX96 calculations |
 | `@bananapus/address-registry-v6` | `IJBAddressRegistry` | On-chain registry mapping deployed hooks to their deployer contract |
 | `solady` | `LibClone` | Clone factory for deploying hook instances |
@@ -107,7 +107,7 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 | `UniV4DeploymentSplitHook_InvalidFeePercent` | `feePercent > BPS` (> 100%) |
 | `UniV4DeploymentSplitHook_InvalidTerminalToken` | No primary terminal found for project/token pair |
 | `UniV4DeploymentSplitHook_PoolAlreadyDeployed` | `deployPool` called for a pair that already has a position |
-| `UniV4DeploymentSplitHook_AlreadyInitialized` | `initialize` called on a clone that was already initialized (uses explicit `initialized` flag, safe against `renounceOwnership` re-init) |
+| `UniV4DeploymentSplitHook_AlreadyInitialized` | `initialize` called on a clone that was already initialized |
 | `UniV4DeploymentSplitHook_FeePercentWithoutFeeProject` | `initialize` called with `feePercent > 0` but `feeProjectId == 0` (fees would get stuck since `primaryTerminalOf(0, token)` returns `address(0)`) |
 
 ## Constants
@@ -127,7 +127,7 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 | `accumulatedProjectTokens` | `projectId => uint256` | Pre-deployment token accumulation |
 | `projectDeployed` | `projectId => bool` | Switches accumulate (Stage 1) to burn (Stage 2) |
 | `claimableFeeTokens` | `projectId => uint256` | Fee-project tokens claimable via `claimFeeTokensFor` |
-| `initialized` | `bool` | Prevents re-initialization after `renounceOwnership()` (explicit flag instead of relying on `owner() == address(0)`) |
+| `initialized` | `bool` | Prevents re-initialization of clone instances |
 
 ## Gotchas
 
