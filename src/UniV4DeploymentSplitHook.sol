@@ -584,6 +584,11 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
                 );
 
                 tokenIdOf[projectId][terminalToken] = newTokenId;
+            } else {
+                // Old position was burned but no new position can be created.
+                // Clear tokenIdOf so the position can be re-created via deployPool later,
+                // rather than leaving a stale reference to a burned NFT.
+                tokenIdOf[projectId][terminalToken] = 0;
             }
 
             // Handle leftover tokens
