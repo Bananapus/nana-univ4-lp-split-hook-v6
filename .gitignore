@@ -26,4 +26,8 @@ workspace.code-workspace
 backup/
 .secret
 
+# Stale/backup script directories (V3 leftovers)
+script/script/
+script/script.bak/
+
 publish.sh
