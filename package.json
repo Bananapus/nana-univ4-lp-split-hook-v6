@@ -1,6 +1,6 @@
 {
   "name": "@bananapus/univ4-lp-split-hook-v6",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -15,17 +15,11 @@
     "coverage": "forge coverage --report lcov --report summary"
   },
   "dependencies": {
-    "@bananapus/address-registry-v6": "^0.0.4",
-    "@bananapus/721-hook-v6": "^0.0.9",
-    "@bananapus/buyback-hook-v6": "^0.0.7",
-    "@bananapus/core-v6": "^0.0.9",
-    "@bananapus/ownable-v6": "^0.0.5",
-    "@bananapus/permission-ids-v6": "^0.0.4",
-    "@bananapus/suckers-v6": "^0.0.6",
-    "@croptop/core-v6": "^0.0.6",
+    "@bananapus/address-registry-v6": "^0.0.6",
+    "@bananapus/core-v6": "^0.0.11",
+    "@bananapus/permission-ids-v6": "^0.0.6",
     "@openzeppelin/contracts": "^5.2.0",
     "@prb/math": "^4.1.0",
-    "@rev-net/core-v6": "^0.0.6",
     "@uniswap/v4-core": "^1.0.2",
     "@uniswap/v4-periphery": "^1.0.3"
   }

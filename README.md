@@ -96,7 +96,7 @@ forge install
 # foundry.toml
 [profile.default]
 solc = '0.8.26'
-evm_version = 'paris'
+evm_version = 'cancun'
 optimizer_runs = 200
 via_ir = true
 

@@ -2,7 +2,7 @@
 
 How we write Solidity and organize repos across the Juicebox V6 ecosystem. `nana-core-v6` is the gold standard — when in doubt, match what it does.
 
-**This repo's deviations:** `via_ir = true` (stack depth). Standard EVM version (paris).
+**This repo's deviations:** `via_ir = true` (stack depth). Standard EVM version (cancun).
 
 ## File Organization
 
@@ -331,7 +331,7 @@ Standard config across all repos:
 ```toml
 [profile.default]
 solc = '0.8.26'
-evm_version = 'paris'
+evm_version = 'cancun'
 optimizer_runs = 200
 libs = ["node_modules", "lib"]
 fs_permissions = [{ access = "read-write", path = "./"}]
