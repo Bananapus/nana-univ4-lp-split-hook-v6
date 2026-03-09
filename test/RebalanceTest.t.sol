@@ -152,7 +152,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
     }
 
     // -----------------------------------------------------------------------
-    // 8. rebalanceLiquidity -- requires authorization (H-2 fix)
+    // 8. rebalanceLiquidity -- requires authorization
     // -----------------------------------------------------------------------
 
     /// @notice rebalanceLiquidity requires SET_BUYBACK_POOL permission. A random user

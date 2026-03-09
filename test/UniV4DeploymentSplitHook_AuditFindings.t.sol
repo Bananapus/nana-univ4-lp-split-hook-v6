@@ -8,7 +8,7 @@ import {JBSplitHookContext} from "@bananapus/core/structs/JBSplitHookContext.sol
 import {JBAccountingContext} from "@bananapus/core/structs/JBAccountingContext.sol";
 import {MockERC20} from "./mock/MockERC20.sol";
 
-/// @notice Regression tests for Nemesis audit findings H-2, M-1, and M-2.
+/// @notice Regression tests for rebalance authorization, fee routing, and per-token deployment flags.
 contract AuditFindingsTest is LPSplitHookV4TestBase {
     uint256 poolTokenId;
     bool terminalTokenIsToken0;
@@ -29,10 +29,10 @@ contract AuditFindingsTest is LPSplitHookV4TestBase {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // H-2: Permissionless Rebalance Can Permanently Brick Project LP
+    // Permissionless Rebalance Can Permanently Brick Project LP
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice H-2 Fix: rebalanceLiquidity reverts when called by an unauthorized account.
+    /// @notice rebalanceLiquidity reverts when called by an unauthorized account.
     function test_H2_rebalance_unauthorized_reverts() public {
         address attacker = makeAddr("attacker");
 
@@ -45,7 +45,7 @@ contract AuditFindingsTest is LPSplitHookV4TestBase {
         assertEq(tokenIdAfter, poolTokenId, "tokenIdOf should remain unchanged after unauthorized attempt");
     }
 
-    /// @notice H-2 Fix: rebalanceLiquidity succeeds when called by the project owner.
+    /// @notice rebalanceLiquidity succeeds when called by the project owner.
     function test_H2_rebalance_owner_succeeds() public {
         uint256 originalTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertTrue(originalTokenId != 0, "should have an active position");
@@ -58,7 +58,7 @@ contract AuditFindingsTest is LPSplitHookV4TestBase {
         assertTrue(newTokenId != originalTokenId, "tokenId should change after rebalance");
     }
 
-    /// @notice H-2 Fix: rebalanceLiquidity succeeds when called by an authorized operator.
+    /// @notice rebalanceLiquidity succeeds when called by an authorized operator.
     function test_H2_rebalance_authorizedOperator_succeeds() public {
         address operator = makeAddr("operator");
 
@@ -75,7 +75,7 @@ contract AuditFindingsTest is LPSplitHookV4TestBase {
         assertTrue(newTokenId != originalTokenId, "tokenId should change after authorized rebalance");
     }
 
-    /// @notice H-2 Fix: rebalanceLiquidity reverts with InsufficientLiquidity when the new
+    /// @notice rebalanceLiquidity reverts with InsufficientLiquidity when the new
     ///         position would have zero liquidity (prevents bricking via tokenIdOf=0).
     function test_H2_rebalance_zeroLiquidity_reverts() public {
         // Drain all tokens from PositionManager and hook so burn returns 0
@@ -107,10 +107,10 @@ contract AuditFindingsTest is LPSplitHookV4TestBase {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // M-1: Placeholder _getAmountForCurrency() Disables Fee Routing
+    // Placeholder _getAmountForCurrency() Disables Fee Routing
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice M-1 Fix: After the fix, fees collected during rebalanceLiquidity are properly
+    /// @notice Fees collected during rebalanceLiquidity are properly
     ///         routed via balance-delta tracking (same pattern as collectAndRouteLPFees).
     ///         Note: The balance delta includes both principal and fees from the burned position.
     ///         The fee-splitting is applied to the full terminal-token delta.
@@ -138,7 +138,7 @@ contract AuditFindingsTest is LPSplitHookV4TestBase {
         // Verify fees were routed: pay (for fee project) and/or addToBalance (for project)
         bool feesRouted =
             (terminal.payCallCount() > payCountBefore) || (terminal.addToBalanceCallCount() > addToBalanceCountBefore);
-        assertTrue(feesRouted, "Fees collected during rebalance burn should be routed (M-1 fix)");
+        assertTrue(feesRouted, "Fees collected during rebalance burn should be routed");
 
         // Verify routing targets the fee project
         if (terminal.payCallCount() > payCountBefore) {
@@ -149,7 +149,7 @@ contract AuditFindingsTest is LPSplitHookV4TestBase {
         }
     }
 
-    /// @notice M-1 Fix: Verify that claimable fee tokens are generated during rebalance.
+    /// @notice Verify that claimable fee tokens are generated during rebalance.
     function test_M1_rebalance_generatesClaimableFeeTokens() public {
         // Set up collectable fees on the terminal token side
         uint256 feeAmount = 100e18;
@@ -172,15 +172,15 @@ contract AuditFindingsTest is LPSplitHookV4TestBase {
 
         uint256 claimableAfter = hook.claimableFeeTokens(PROJECT_ID);
         assertGt(
-            claimableAfter, claimableBefore, "claimableFeeTokens should increase after rebalance with fees (M-1 fix)"
+            claimableAfter, claimableBefore, "claimableFeeTokens should increase after rebalance with fees"
         );
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // M-2: Per-Project projectDeployed Flag Prevents Multi-Terminal-Token Pools
+    // Per-Project projectDeployed Flag Prevents Multi-Terminal-Token Pools
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice M-2 Fix: projectDeployed is now keyed by [projectId][terminalToken].
+    /// @notice projectDeployed is now keyed by [projectId][terminalToken].
     ///         After deploying a pool for terminalToken, projectDeployed[projectId][terminalToken]
     ///         is true, but projectDeployed[projectId][otherToken] is false.
     function test_M2_projectDeployed_perTerminalToken() public {
@@ -198,13 +198,13 @@ contract AuditFindingsTest is LPSplitHookV4TestBase {
         );
     }
 
-    /// @notice M-2 Fix: deployedPoolCount increments per deployment.
+    /// @notice deployedPoolCount increments per deployment.
     function test_M2_deployedPoolCount_increments() public {
         // After the setUp, one pool is deployed for PROJECT_ID
         assertEq(hook.deployedPoolCount(PROJECT_ID), 1, "deployedPoolCount should be 1 after first deploy");
     }
 
-    /// @notice M-2 Fix: processSplitWith uses deployedPoolCount to decide accumulate vs burn.
+    /// @notice processSplitWith uses deployedPoolCount to decide accumulate vs burn.
     ///         After deploying a pool, new tokens are burned (count > 0).
     function test_M2_processSplitWith_burnsAfterDeploy() public {
         // PROJECT_ID has a deployed pool (deployedPoolCount == 1)
@@ -222,7 +222,7 @@ contract AuditFindingsTest is LPSplitHookV4TestBase {
         assertGt(controller.burnCallCount(), burnCountBefore, "Tokens should be burned after pool deployed");
     }
 
-    /// @notice M-2 Fix: processSplitWith accumulates when no pools are deployed (count == 0).
+    /// @notice processSplitWith accumulates when no pools are deployed (count == 0).
     function test_M2_processSplitWith_accumulatesBeforeDeploy() public {
         // Set up a fresh project with no pools deployed
         uint256 freshProjectId = 5;
@@ -250,7 +250,7 @@ contract AuditFindingsTest is LPSplitHookV4TestBase {
         );
     }
 
-    /// @notice M-2 Fix: Demonstrates that multiple terminal tokens can have independent
+    /// @notice Demonstrates that multiple terminal tokens can have independent
     ///         projectDeployed flags per the new mapping structure.
     function test_M2_multiTerminalToken_independentFlags() public {
         // PROJECT_ID already has a pool for terminalToken

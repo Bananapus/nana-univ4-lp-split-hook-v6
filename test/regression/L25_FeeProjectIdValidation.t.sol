@@ -21,7 +21,7 @@ import {
     MockJBPermissions
 } from "../mock/MockJBContracts.sol";
 
-/// @notice Regression test for L-25: feeProjectId=0 with non-zero feePercent locks fees.
+/// @notice feeProjectId=0 with non-zero feePercent locks fees.
 /// @dev When feePercent > 0 and feeProjectId == 0, primaryTerminalOf(0, token) returns address(0),
 ///      causing fee tokens to get stuck. The fix validates this combination in initialize().
 contract L25_FeeProjectIdValidationTest is Test {
