@@ -2,6 +2,7 @@
 pragma solidity 0.8.26;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
@@ -300,12 +301,13 @@ contract MockPositionManager {
         }
     }
 
+    IAllowanceTransfer constant PERMIT2 = IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3);
+
     function _handleSettle(bytes memory data) internal {
         (Currency currency, uint256 amount, bool payerIsUser) = abi.decode(data, (Currency, uint256, bool));
 
         if (payerIsUser) {
-            // Determine how much to pull: use the pending settle amount if available,
-            // otherwise fall back to allowance-based (backward compat).
+            // Determine how much to pull: use the pending settle amount if available.
             uint256 toPull;
             if (Currency.unwrap(currency) == Currency.unwrap(_settleCurrency0) && _pendingSettle0 > 0) {
                 toPull = _pendingSettle0;
@@ -315,26 +317,10 @@ contract MockPositionManager {
                 _pendingSettle1 = 0;
             }
 
-            if (!currency.isAddressZero()) {
+            if (!currency.isAddressZero() && toPull > 0) {
                 address token = Currency.unwrap(currency);
-                if (toPull > 0) {
-                    // Enforce that the caller has approved and has sufficient balance.
-                    uint256 allowance = IERC20(token).allowance(msg.sender, address(this));
-                    require(allowance >= toPull, "MockPM: insufficient allowance for settle");
-                    uint256 bal = IERC20(token).balanceOf(msg.sender);
-                    require(bal >= toPull, "MockPM: insufficient balance for settle");
-                    IERC20(token).transferFrom(msg.sender, address(this), toPull);
-                } else {
-                    // Fallback: pull whatever is approved (for flows that don't set pending).
-                    uint256 allowance = IERC20(token).allowance(msg.sender, address(this));
-                    if (allowance > 0) {
-                        uint256 bal = IERC20(token).balanceOf(msg.sender);
-                        uint256 transferAmount = allowance < bal ? allowance : bal;
-                        if (transferAmount > 0) {
-                            IERC20(token).transferFrom(msg.sender, address(this), transferAmount);
-                        }
-                    }
-                }
+                // Pull via Permit2, matching real PositionManager behavior.
+                PERMIT2.transferFrom(msg.sender, address(this), uint160(toPull), token);
             }
             // For native ETH: msg.value already received
         }

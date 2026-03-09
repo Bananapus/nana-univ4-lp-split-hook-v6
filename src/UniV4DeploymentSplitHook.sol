@@ -32,6 +32,8 @@ import {JBRulesetMetadata} from "@bananapus/core/structs/JBRulesetMetadata.sol";
 import {JBSplitHookContext} from "@bananapus/core/structs/JBSplitHookContext.sol";
 import {JBPermissionIds} from "@bananapus/permission-ids/JBPermissionIds.sol";
 
+import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
+
 import {IUniV4DeploymentSplitHook} from "./interfaces/IUniV4DeploymentSplitHook.sol";
 
 /// @custom:benediction DEVS BENEDICAT ET PROTEGAT CONTRACTVS MEAM
@@ -89,6 +91,9 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
 
     /// @notice Tick spacing for 1% fee tier (200 ticks)
     int24 public constant TICK_SPACING = 200;
+
+    /// @notice Canonical Permit2 contract used by PositionManager to pull ERC20 tokens
+    IAllowanceTransfer public constant PERMIT2 = IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3);
 
     //*********************************************************************//
     // --------------- public immutable stored properties ---------------- //
@@ -1033,14 +1038,14 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
             // currency0 is native ETH
             ethValue = amount0;
         } else if (amount0 > 0) {
-            IERC20(token0).forceApprove(address(POSITION_MANAGER), amount0);
+            _approveViaPermit2(token0, amount0);
         }
 
         if (token1 == address(0)) {
             // currency1 is native ETH (shouldn't happen since ETH is always currency0)
             ethValue = amount1;
         } else if (amount1 > 0) {
-            IERC20(token1).forceApprove(address(POSITION_MANAGER), amount1);
+            _approveViaPermit2(token1, amount1);
         }
 
         bytes memory actions = abi.encodePacked(
@@ -1065,6 +1070,12 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
         params[4] = abi.encode(key.currency1, address(this));
 
         POSITION_MANAGER.modifyLiquidities{value: ethValue}(abi.encode(actions, params), block.timestamp + 60);
+    }
+
+    /// @notice Approve an ERC20 token via Permit2 so PositionManager can pull it during SETTLE.
+    function _approveViaPermit2(address token, uint256 amount) internal {
+        IERC20(token).forceApprove(address(PERMIT2), amount);
+        PERMIT2.approve(token, address(POSITION_MANAGER), uint160(amount), uint48(block.timestamp + 60));
     }
 
     /// @notice Route collected fees from Uniswap position to project
