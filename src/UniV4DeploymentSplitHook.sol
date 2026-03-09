@@ -571,8 +571,7 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
             uint256 bal0Before = _currencyBalance(key.currency0);
             uint256 bal1Before = _currencyBalance(key.currency1);
 
-            bytes memory feeActions =
-                abi.encodePacked(uint8(Actions.DECREASE_LIQUIDITY), uint8(Actions.TAKE_PAIR));
+            bytes memory feeActions = abi.encodePacked(uint8(Actions.DECREASE_LIQUIDITY), uint8(Actions.TAKE_PAIR));
 
             bytes[] memory feeParams = new bytes[](2);
             feeParams[0] = abi.encode(tokenId, uint256(0), uint128(0), uint128(0), "");
