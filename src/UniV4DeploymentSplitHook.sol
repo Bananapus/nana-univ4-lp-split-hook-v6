@@ -566,11 +566,28 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
         address projectToken = address(IJBTokens(TOKENS).tokenOf(projectId));
         PoolKey memory key = _poolKeys[projectId][terminalToken];
 
-        // Track balances before burn to calculate fee deltas
-        uint256 bal0Before = _currencyBalance(key.currency0);
-        uint256 bal1Before = _currencyBalance(key.currency1);
+        // Step 1: Collect accrued fees via DECREASE_LIQUIDITY(0) + TAKE_PAIR
+        {
+            uint256 bal0Before = _currencyBalance(key.currency0);
+            uint256 bal1Before = _currencyBalance(key.currency1);
 
-        // Step 1: Burn old position (removes all liquidity + collects fees) and take all tokens
+            bytes memory feeActions =
+                abi.encodePacked(uint8(Actions.DECREASE_LIQUIDITY), uint8(Actions.TAKE_PAIR));
+
+            bytes[] memory feeParams = new bytes[](2);
+            feeParams[0] = abi.encode(tokenId, uint256(0), uint128(0), uint128(0), "");
+            feeParams[1] = abi.encode(key.currency0, key.currency1, address(this));
+
+            POSITION_MANAGER.modifyLiquidities(abi.encode(feeActions, feeParams), block.timestamp + 60);
+
+            uint256 feeAmount0 = _currencyBalance(key.currency0) - bal0Before;
+            uint256 feeAmount1 = _currencyBalance(key.currency1) - bal1Before;
+
+            _routeCollectedFees(projectId, projectToken, terminalToken, feeAmount0, feeAmount1);
+            _burnReceivedTokens(projectId, projectToken);
+        }
+
+        // Step 2: Burn position to recover principal via BURN_POSITION + TAKE_PAIR
         {
             bytes memory burnActions = abi.encodePacked(uint8(Actions.BURN_POSITION), uint8(Actions.TAKE_PAIR));
 
@@ -579,34 +596,6 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
             burnParams[1] = abi.encode(key.currency0, key.currency1, address(this));
 
             POSITION_MANAGER.modifyLiquidities(abi.encode(burnActions, burnParams), block.timestamp + 60);
-        }
-
-        // Route any fees collected during burn.
-        // NOTE: The balance delta from a BURN_POSITION includes both the locked principal
-        // and accrued fees. We cannot separate them without additional on-chain state.
-        // To avoid routing the principal through fee-splitting (which would reduce capital
-        // available for the new position), we only collect and route fees via a separate
-        // DECREASE_LIQUIDITY(0) call BEFORE the burn, similar to collectAndRouteLPFees.
-        // However, since the position is being fully burned, the fees were already included
-        // in the burn's TAKE_PAIR output. We track them here using the balance delta.
-        // TODO: For more precise fee isolation, consider a two-step approach:
-        //       1. DECREASE_LIQUIDITY(0) + TAKE_PAIR to collect fees only
-        //       2. BURN_POSITION + TAKE_PAIR for the principal
-        {
-            uint256 bal0After = _currencyBalance(key.currency0);
-            uint256 bal1After = _currencyBalance(key.currency1);
-            uint256 delta0 = bal0After > bal0Before ? bal0After - bal0Before : 0;
-            uint256 delta1 = bal1After > bal1Before ? bal1After - bal1Before : 0;
-
-            // Route terminal token fees back to the project.
-            // Note: the delta includes principal + fees from the burned position.
-            // The principal portion will be re-deposited into the new position below;
-            // _routeCollectedFees only routes the terminal-token side, and _handleLeftoverTokens
-            // takes care of any remaining tokens after the new mint.
-            _routeCollectedFees(projectId, projectToken, terminalToken, delta0, delta1);
-
-            // Burn collected project token fees
-            _burnReceivedTokens(projectId, projectToken);
         }
 
         // Step 2: Mint new position with updated tick bounds
