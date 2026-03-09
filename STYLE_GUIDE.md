@@ -387,6 +387,8 @@ jobs:
         uses: foundry-rs/foundry-toolchain@v1
       - name: Run tests
         run: forge test --fail-fast --summary --detailed --skip "*/script/**"
+        env:
+          RPC_ETHEREUM_MAINNET: ${{ secrets.RPC_ETHEREUM_MAINNET }}
       - name: Check contract sizes
         run: FOUNDRY_PROFILE=ci_sizes forge build --sizes --skip "*/test/**" --skip "*/script/**" --skip SphinxUtils
 ```
@@ -450,6 +452,15 @@ Run `forge fmt` before committing. The `[fmt]` config in `foundry.toml` enforces
 - Wrapped comments at reasonable width
 
 CI checks formatting via `forge fmt --check`.
+
+### CI Secrets
+
+| Secret | Purpose |
+|--------|--------|
+| `NPM_TOKEN` | npm publish access (used by `publish.yml`) |
+| `RPC_ETHEREUM_MAINNET` | Ethereum mainnet RPC URL for fork tests (used by `test.yml`) |
+
+Fork tests require `RPC_ETHEREUM_MAINNET` — they fail if it's missing.
 
 ### Branching
 
