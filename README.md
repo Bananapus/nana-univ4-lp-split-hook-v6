@@ -26,7 +26,7 @@ This ensures the AMM price always trades within the project's intrinsic economic
 2. Controller distributes reserved tokens → processSplitWith()
    → Tokens accumulate in accumulatedProjectTokens[projectId]
    |
-3. Project owner calls deployPool(projectId, terminalToken, ...)
+3. Project owner (or anyone after 10x weight decay) calls deployPool(...)
    → Creates V4 pool at geometric mean of [cashOut, issuance] rates
    → Cashes out optimal fraction of tokens for terminal tokens
    → Mints concentrated LP position bounded by rate-derived ticks
@@ -122,7 +122,9 @@ test/
   NativeETHTest.t.sol                        # Native ETH handling
   PriceMathTest.t.sol                        # Price conversion math
   SecurityTest.t.sol                         # Permission checks, access control
+  WeightDecayDeployTest.t.sol               # Permissionless deploy after 10x weight decay
   IntegrationLifecycle.t.sol                 # Full end-to-end workflow
+  Fork.t.sol                                 # Fork tests with real V4 + JB core
   TestBaseV4.sol                             # Shared test infrastructure
   regression/                               # Audit finding regression tests (M-31, M-32, L-25)
 script/
@@ -133,10 +135,12 @@ script/
 
 | Permission | Required For |
 |------------|-------------|
-| `SET_BUYBACK_POOL` | `deployPool` -- create V4 pool and mint LP position |
+| `SET_BUYBACK_POOL` | `deployPool` -- create V4 pool and mint LP position (unless weight has decayed 10x) |
 | `SET_BUYBACK_POOL` | `claimFeeTokensFor` -- claim accumulated fee-project tokens |
 
 Note: `collectAndRouteLPFees` and `rebalanceLiquidity` are **permissionless** -- anyone can call them. This is safe because they only operate on existing positions and route funds to verified project terminals.
+
+`deployPool` also becomes **permissionless** when the current ruleset's weight has decayed to 1/10th or less of the weight when the hook first started accumulating tokens. This prevents a stale owner from blocking LP deployment indefinitely.
 
 ## Risks
 

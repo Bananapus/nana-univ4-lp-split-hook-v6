@@ -23,7 +23,7 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 
 | Function | What it does |
 |----------|-------------|
-| `deployPool(projectId, terminalToken, amount0Min, amount1Min, minCashOutReturn)` | Requires `SET_BUYBACK_POOL` permission. Creates V4 pool at geometric mean of [cashOut, issuance] rates. Computes optimal cash-out fraction, cashes out tokens via terminal, mints concentrated LP position, handles leftovers (burns project tokens, adds terminal tokens to project balance). Sets `projectDeployed = true`. |
+| `deployPool(projectId, terminalToken, amount0Min, amount1Min, minCashOutReturn)` | Requires `SET_BUYBACK_POOL` permission unless the current ruleset's weight has decayed to 1/10th or less of `initialWeightOf[projectId]` (becomes permissionless). Creates V4 pool at geometric mean of [cashOut, issuance] rates. Computes optimal cash-out fraction, cashes out tokens via terminal, mints concentrated LP position, handles leftovers (burns project tokens, adds terminal tokens to project balance). Sets `projectDeployed = true`. |
 
 ### Fee Management
 
@@ -125,6 +125,7 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 | `_poolKeys` | `projectId => terminalToken => PoolKey` | V4 pool key per project/token pair |
 | `tokenIdOf` | `projectId => terminalToken => uint256` | V4 PositionManager NFT ID per pool |
 | `accumulatedProjectTokens` | `projectId => uint256` | Pre-deployment token accumulation |
+| `initialWeightOf` | `projectId => uint256` | Ruleset weight when first tokens were accumulated (for 10x decay check) |
 | `projectDeployed` | `projectId => bool` | Switches accumulate (Stage 1) to burn (Stage 2) |
 | `claimableFeeTokens` | `projectId => uint256` | Fee-project tokens claimable via `claimFeeTokensFor` |
 | `initialized` | `bool` | Prevents re-initialization of clone instances |
@@ -134,7 +135,7 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 1. **This is a V4 hook, not V3.** Despite the repo history, the current implementation uses Uniswap V4 (`IPoolManager`, `IPositionManager`, `PoolKey`, `Actions`). All V3 references in older docs are outdated.
 2. **Requires `via_ir = true` in foundry.toml.** Stack-too-deep errors occur without the IR pipeline, particularly in `_addUniswapLiquidity` and V4 `PositionManager` interactions.
 3. **Only accepts reserved-token splits (`groupId == 1`).** Reverts with `TerminalTokensNotAllowed` if called from a payout split (`groupId == 0`). This is intentional -- it only manages project tokens.
-4. **`deployPool` requires `SET_BUYBACK_POOL` permission.** The caller must be the project owner or have been granted this permission via `JBPermissions`.
+4. **`deployPool` requires `SET_BUYBACK_POOL` permission, unless weight has decayed 10x.** The caller must be the project owner or have been granted this permission via `JBPermissions`. However, if the current ruleset's weight has decayed to 1/10th or less of the weight when the hook first started accumulating tokens (`initialWeightOf`), anyone can call `deployPool`. This prevents a stale owner from blocking LP deployment indefinitely.
 5. **`collectAndRouteLPFees` and `rebalanceLiquidity` are permissionless.** Anyone can call them. Safe because they only operate on existing positions and route funds to verified project terminals.
 6. **`claimFeeTokensFor` requires `SET_BUYBACK_POOL` permission** from the project owner. It validates the caller, not the beneficiary.
 7. **Cash-out fraction is geometrically optimized, not 50/50.** `_computeOptimalCashOutAmount` uses concentrated liquidity math to compute the exact ratio needed, typically 15-30%. Safety-capped at 50%.

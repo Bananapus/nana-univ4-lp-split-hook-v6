@@ -136,6 +136,9 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
     /// @notice ProjectID => Fee tokens claimable by that project
     mapping(uint256 projectId => uint256 claimableFeeTokens) public claimableFeeTokens;
 
+    /// @notice ProjectID => The weight of the ruleset when the hook first started accumulating tokens.
+    mapping(uint256 projectId => uint256 weight) public initialWeightOf;
+
     /// @notice Whether this clone instance has been initialized.
     bool public initialized;
 
@@ -494,11 +497,19 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
     )
         external
     {
-        _requirePermissionFrom({
-            account: IJBDirectory(DIRECTORY).PROJECTS().ownerOf(projectId),
-            projectId: projectId,
-            permissionId: JBPermissionIds.SET_BUYBACK_POOL
-        });
+        // Allow anyone to deploy if the current ruleset's weight has decayed 10x from the initial weight.
+        // Otherwise, require SET_BUYBACK_POOL permission from the project owner.
+        address controller = address(IJBDirectory(DIRECTORY).controllerOf(projectId));
+        (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
+        uint256 initialWeight = initialWeightOf[projectId];
+
+        if (initialWeight == 0 || ruleset.weight * 10 > initialWeight) {
+            _requirePermissionFrom({
+                account: IJBDirectory(DIRECTORY).PROJECTS().ownerOf(projectId),
+                projectId: projectId,
+                permissionId: JBPermissionIds.SET_BUYBACK_POOL
+            });
+        }
 
         if (tokenIdOf[projectId][terminalToken] != 0) revert UniV4DeploymentSplitHook_PoolAlreadyDeployed();
 
@@ -532,6 +543,11 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
         address projectToken = context.token;
 
         if (deployedPoolCount[context.projectId] == 0) {
+            // Record the initial weight on first accumulation.
+            if (initialWeightOf[context.projectId] == 0) {
+                (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(context.projectId);
+                initialWeightOf[context.projectId] = ruleset.weight;
+            }
             _accumulateTokens(context.projectId, projectToken, context.amount);
         } else {
             _burnReceivedTokens(context.projectId, projectToken);
