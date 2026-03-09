@@ -5,8 +5,8 @@ import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
 import {UniV4DeploymentSplitHook} from "../../src/UniV4DeploymentSplitHook.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-/// @notice Regression test for M-31: tokenIdOf becomes stale when rebalance yields zero liquidity.
-/// @dev After the H-2 audit fix, rebalanceLiquidity now reverts with InsufficientLiquidity when
+/// @notice tokenIdOf becomes stale when rebalance yields zero liquidity.
+/// @dev rebalanceLiquidity now reverts with InsufficientLiquidity when
 ///      the new position would have zero liquidity, rather than silently zeroing tokenIdOf.
 ///      This prevents the bricking scenario where tokenIdOf=0 + projectDeployed=true creates
 ///      a permanent circular dependency.
@@ -41,7 +41,7 @@ contract M31_StaleTokenIdOfTest is LPSplitHookV4TestBase {
         if (hookTerminalBal > 0) terminalToken.transfer(address(0xdead), hookTerminalBal);
         vm.stopPrank();
 
-        // After H-2 fix: rebalance now reverts instead of zeroing tokenIdOf
+        // Rebalance now reverts instead of zeroing tokenIdOf
         vm.prank(owner);
         vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_InsufficientLiquidity.selector);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);

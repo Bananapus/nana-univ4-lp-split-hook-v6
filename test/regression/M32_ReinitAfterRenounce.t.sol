@@ -21,7 +21,7 @@ import {
     MockJBPermissions
 } from "../mock/MockJBContracts.sol";
 
-/// @notice Regression test for M-32: Re-initialization protection.
+/// @notice Re-initialization protection.
 /// @dev The `initialized` boolean prevents calling initialize() more than once.
 contract M32_ReinitAfterRenounceTest is Test {
     UniV4DeploymentSplitHook public hookImpl;

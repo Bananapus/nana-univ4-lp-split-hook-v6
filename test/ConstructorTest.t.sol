@@ -98,7 +98,7 @@ contract ConstructorTest is LPSplitHookV4TestBase {
         impl.initialize(FEE_PROJECT_ID, 10_001);
     }
 
-    /// @notice initialize() reverts when feeProjectId is 0 but feePercent > 0 (L-25 fix).
+    /// @notice initialize() reverts when feeProjectId is 0 but feePercent > 0.
     function test_Initialize_RevertsOn_FeePercentWithoutFeeProject() public {
         // Deploy a fresh implementation
         UniV4DeploymentSplitHook impl = new UniV4DeploymentSplitHook(
