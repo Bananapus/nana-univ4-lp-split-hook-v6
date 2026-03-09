@@ -171,9 +171,7 @@ contract AuditFindingsTest is LPSplitHookV4TestBase {
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
 
         uint256 claimableAfter = hook.claimableFeeTokens(PROJECT_ID);
-        assertGt(
-            claimableAfter, claimableBefore, "claimableFeeTokens should increase after rebalance with fees"
-        );
+        assertGt(claimableAfter, claimableBefore, "claimableFeeTokens should increase after rebalance with fees");
     }
 
     // ═══════════════════════════════════════════════════════════════════════
