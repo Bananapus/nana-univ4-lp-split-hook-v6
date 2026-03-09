@@ -257,6 +257,45 @@ contract LPSplitHookForkTest is Test {
         assertLt(supplyAfter, supplyBefore, "total supply should decrease from burn");
     }
 
+    /// @notice Verify that deployPool uses Permit2 (not direct ERC20 approval) to settle
+    ///         tokens with the real PositionManager. Without the Permit2 fix, this would
+    ///         revert with AllowanceExpired(0) because PositionManager's SETTLE action
+    ///         pulls tokens via Permit2, not via ERC20.transferFrom.
+    function test_fork_deployPool_usesPermit2NotDirectApproval() public {
+        address token = address(projectToken);
+
+        // Before deploy: hook has zero ERC20 allowance to both PositionManager and Permit2.
+        assertEq(
+            IERC20(token).allowance(address(hook), address(V4_POSITION_MANAGER)),
+            0,
+            "hook should have no direct allowance to PM before deploy"
+        );
+        assertEq(
+            IERC20(token).allowance(address(hook), address(PERMIT2)),
+            0,
+            "hook should have no allowance to Permit2 before deploy"
+        );
+
+        // Deploy succeeds — this is the proof the Permit2 flow works.
+        // With the old forceApprove(POSITION_MANAGER) approach, this would revert
+        // because the real PositionManager uses Permit2.transferFrom, not ERC20.transferFrom.
+        vm.prank(multisig);
+        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0, 0, 0);
+
+        // After deploy: hook should still have zero DIRECT allowance to PositionManager.
+        // This proves the hook routes approvals through Permit2, not directly.
+        assertEq(
+            IERC20(token).allowance(address(hook), address(V4_POSITION_MANAGER)),
+            0,
+            "hook should never directly approve PositionManager"
+        );
+
+        // Pool should be fully functional.
+        uint256 tokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+        uint128 liq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
+        assertTrue(liq > 0, "position should have liquidity via Permit2 flow");
+    }
+
     // ───────────────────────── Internal deployment helpers
     // ────────────────
 

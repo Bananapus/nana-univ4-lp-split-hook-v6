@@ -22,11 +22,6 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         uint256 hookProjectBefore = projectToken.balanceOf(address(hook));
         uint256 pmProjectBefore = projectToken.balanceOf(address(positionManager));
 
-        vm.startPrank(address(hook));
-        projectToken.approve(address(positionManager), type(uint256).max);
-        terminalToken.approve(address(positionManager), type(uint256).max);
-        vm.stopPrank();
-
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0, 0);
 
@@ -45,11 +40,6 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
     ///         then those terminal tokens get sent to PM via SETTLE.
     function test_Deploy_TerminalTokensFlowToPM() public {
         _accumulateTokens(PROJECT_ID, 100e18);
-
-        vm.startPrank(address(hook));
-        projectToken.approve(address(positionManager), type(uint256).max);
-        terminalToken.approve(address(positionManager), type(uint256).max);
-        vm.stopPrank();
 
         uint256 pmTermBefore = terminalToken.balanceOf(address(positionManager));
 
@@ -134,11 +124,6 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         uint256 totalTermBefore = terminalToken.balanceOf(address(hook))
             + terminalToken.balanceOf(address(positionManager)) + terminalToken.balanceOf(address(terminal));
 
-        vm.startPrank(address(hook));
-        projectToken.approve(address(positionManager), type(uint256).max);
-        terminalToken.approve(address(positionManager), type(uint256).max);
-        vm.stopPrank();
-
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0, 0);
 
@@ -199,11 +184,6 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         positionManager.setUsagePercent(8000);
 
         _accumulateTokens(PROJECT_ID, 100e18);
-
-        vm.startPrank(address(hook));
-        projectToken.approve(address(positionManager), type(uint256).max);
-        terminalToken.approve(address(positionManager), type(uint256).max);
-        vm.stopPrank();
 
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0, 0);

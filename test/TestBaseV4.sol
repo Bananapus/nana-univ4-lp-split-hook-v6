@@ -28,6 +28,20 @@ import {
     MockJBPermissions
 } from "./mock/MockJBContracts.sol";
 
+/// @notice Minimal mock so the hook can call PERMIT2.approve() in unit tests.
+contract MockPermit2 {
+    mapping(address owner => mapping(address token => mapping(address spender => uint256))) public allowances;
+
+    function approve(address token, address spender, uint160 amount, uint48) external {
+        allowances[msg.sender][token][spender] = amount;
+    }
+
+    function transferFrom(address from, address to, uint160 amount, address token) external {
+        allowances[from][token][msg.sender] -= amount;
+        IERC20(token).transferFrom(from, to, amount);
+    }
+}
+
 /// @notice Shared test harness for UniV4DeploymentSplitHook tests
 contract LPSplitHookV4TestBase is Test {
     // ─── Contracts Under Test
@@ -131,6 +145,9 @@ contract LPSplitHookV4TestBase is Test {
         // Add terminal to directory's terminal list
         _addDirectoryTerminal(PROJECT_ID, address(terminal));
 
+        // Deploy mock Permit2 at canonical address (used by hook's _approveViaPermit2)
+        vm.etch(0x000000000022D473030F116dDEE9F6B43aC78BA3, address(new MockPermit2()).code);
+
         // Deploy the hook (implementation + clone + initialize)
         // Use a mock address for PoolManager since the hook doesn't call it directly
         // (it calls PositionManager which handles PoolManager interaction)
@@ -217,12 +234,6 @@ contract LPSplitHookV4TestBase is Test {
 
     function _accumulateAndDeploy(uint256 projectId, uint256 amount) internal {
         _accumulateTokens(projectId, amount);
-
-        // Approve hook to spend project tokens (for PositionManager settle)
-        vm.startPrank(address(hook));
-        projectToken.approve(address(positionManager), type(uint256).max);
-        terminalToken.approve(address(positionManager), type(uint256).max);
-        vm.stopPrank();
 
         // Deploy pool as owner
         vm.prank(owner);
