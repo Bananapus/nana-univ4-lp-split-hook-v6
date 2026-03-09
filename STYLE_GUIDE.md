@@ -2,7 +2,7 @@
 
 How we write Solidity and organize repos across the Juicebox V6 ecosystem. `nana-core-v6` is the gold standard — when in doubt, match what it does.
 
-**This repo's deviations:** `via_ir = true` (stack depth).
+**This repo's deviations:** `via_ir = true` (stack depth). Standard EVM version (paris).
 
 ## File Organization
 
