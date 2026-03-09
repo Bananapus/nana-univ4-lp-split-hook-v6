@@ -7,7 +7,7 @@ import {MockERC20} from "./mock/MockERC20.sol";
 
 /// @notice Tests for UniV4DeploymentSplitHook.rebalanceLiquidity function.
 /// @dev Covers revert conditions, PositionManager interactions (modifyLiquidities with
-///      DECREASE_LIQUIDITY, BURN_POSITION, MINT_POSITION, TAKE_PAIR, SETTLE, SWEEP), and permissionlessness.
+///      DECREASE_LIQUIDITY, BURN_POSITION, MINT_POSITION, TAKE_PAIR, SETTLE, SWEEP), and access control.
 contract RebalanceTest is LPSplitHookV4TestBase {
     uint256 poolTokenId;
 
@@ -37,7 +37,9 @@ contract RebalanceTest is LPSplitHookV4TestBase {
         controller.setFirstWeight(newProjectId, DEFAULT_FIRST_WEIGHT);
         _setDirectoryController(newProjectId, address(controller));
         _setDirectoryTerminal(newProjectId, address(terminalToken), address(terminal));
+        jbProjects.setOwner(newProjectId, owner);
 
+        vm.prank(owner);
         vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_InvalidStageForAction.selector);
         hook.rebalanceLiquidity(newProjectId, address(terminalToken), 0, 0, 0, 0);
     }
@@ -56,6 +58,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
         // Set accounting context for the other token
         terminal.setAccountingContext(PROJECT_ID, address(otherToken), uint32(uint160(address(otherToken))), 18);
 
+        vm.prank(owner);
         vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_InvalidStageForAction.selector);
         hook.rebalanceLiquidity(PROJECT_ID, address(otherToken), 0, 0, 0, 0);
     }
@@ -69,6 +72,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
     function test_Rebalance_RevertsIfInvalidTerminal() public {
         address randomToken = makeAddr("randomToken");
 
+        vm.prank(owner);
         vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_InvalidTerminalToken.selector);
         hook.rebalanceLiquidity(PROJECT_ID, randomToken, 0, 0, 0, 0);
     }
@@ -82,6 +86,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
     function test_Rebalance_RemovesAllLiquidity() public {
         uint256 burnCountBefore = positionManager.burnCallCount();
 
+        vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
 
         assertEq(
@@ -100,6 +105,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
     function test_Rebalance_BurnsOldNFT() public {
         uint256 burnCountBefore = positionManager.burnCallCount();
 
+        vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
 
         assertEq(
@@ -117,6 +123,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
         uint256 mintCountBefore = positionManager.mintCallCount();
         // mintCountBefore should be 1 (from the initial _accumulateAndDeploy)
 
+        vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
 
         assertEq(
@@ -136,6 +143,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
         uint256 originalTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertTrue(originalTokenId != 0, "original tokenId should be nonzero");
 
+        vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
 
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
@@ -144,21 +152,17 @@ contract RebalanceTest is LPSplitHookV4TestBase {
     }
 
     // -----------------------------------------------------------------------
-    // 8. rebalanceLiquidity -- permissionless (anyone can call)
+    // 8. rebalanceLiquidity -- requires authorization (H-2 fix)
     // -----------------------------------------------------------------------
 
-    /// @notice rebalanceLiquidity is permissionless: a random user address can call it
-    ///         without any special permissions and it succeeds.
-    function test_Rebalance_Permissionless() public {
+    /// @notice rebalanceLiquidity requires SET_BUYBACK_POOL permission. A random user
+    ///         without permission should be rejected.
+    function test_Rebalance_RequiresAuthorization() public {
         address randomUser = makeAddr("randomRebalancer");
 
         vm.prank(randomUser);
+        vm.expectRevert();
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
-
-        // Verify it succeeded by checking the tokenId was updated
-        uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        assertTrue(newTokenId != 0, "rebalance should succeed from any caller");
-        assertTrue(newTokenId != poolTokenId, "tokenId should change after permissionless rebalance");
     }
 
     // -----------------------------------------------------------------------
@@ -196,6 +200,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
         uint256 payCountBefore = terminal.payCallCount();
         uint256 addToBalanceCountBefore = terminal.addToBalanceCallCount();
 
+        vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
 
         // Fees should have been routed: either pay (for fee project) or addToBalance (for original project)

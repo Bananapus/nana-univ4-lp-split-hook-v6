@@ -48,7 +48,9 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "accumulated should be 0 after deploy");
 
         // Verify projectDeployed is set
-        assertTrue(hook.projectDeployed(PROJECT_ID), "projectDeployed should be true after deploy");
+        assertTrue(
+            hook.projectDeployed(PROJECT_ID, address(terminalToken)), "projectDeployed should be true after deploy"
+        );
 
         // Verify isPoolDeployed returns true
         assertTrue(
@@ -124,7 +126,8 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         uint256 mintCountBefore = positionManager.mintCallCount();
         uint256 burnCountBefore = positionManager.burnCallCount();
 
-        // Rebalance
+        // Rebalance (requires owner permission)
+        vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
 
         // Verify old position was burned and new one minted
@@ -276,8 +279,8 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         assertEq(hook.accumulatedProjectTokens(PROJECT_3), 0, "PROJECT_3 accumulated should be 0 after deploy");
 
         // Verify both projects are marked as deployed
-        assertTrue(hook.projectDeployed(PROJECT_ID), "PROJECT_ID should be deployed");
-        assertTrue(hook.projectDeployed(PROJECT_3), "PROJECT_3 should be deployed");
+        assertTrue(hook.projectDeployed(PROJECT_ID, address(terminalToken)), "PROJECT_ID should be deployed");
+        assertTrue(hook.projectDeployed(PROJECT_3, address(terminalToken)), "PROJECT_3 should be deployed");
     }
 
     // -----------------------------------------------------------------------
@@ -346,6 +349,6 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "accumulated should be 0 after deploy");
 
         // Verify project is marked deployed
-        assertTrue(hook.projectDeployed(PROJECT_ID), "projectDeployed should be true");
+        assertTrue(hook.projectDeployed(PROJECT_ID, address(terminalToken)), "projectDeployed should be true");
     }
 }

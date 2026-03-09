@@ -79,6 +79,7 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         uint256 hookProjectBefore = projectToken.balanceOf(address(hook));
         uint256 hookTermBefore = terminalToken.balanceOf(address(hook));
 
+        vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
 
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
@@ -177,6 +178,7 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         uint256 payBefore = terminal.payCallCount();
         uint256 addBefore = terminal.addToBalanceCallCount();
 
+        vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
 
         // Verify fees were routed.
