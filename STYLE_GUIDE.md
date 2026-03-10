@@ -319,9 +319,6 @@ optimizer_runs = 200
 libs = ["node_modules", "lib"]
 fs_permissions = [{ access = "read-write", path = "./"}]
 
-[profile.ci_sizes]
-optimizer_runs = 200
-
 [fuzz]
 runs = 4096
 
@@ -334,16 +331,16 @@ fail_on_revert = false
 number_underscore = "thousands"
 multiline_func_header = "all"
 wrap_comments = true
-
-[rpc_endpoints]
-ethereum = "${RPC_ETHEREUM_MAINNET}"
 ```
 
-**Variations:**
-- `via_ir = true` for repos hitting stack-too-deep (buyback-hook, banny-retail, univ4-lp-split-hook, deploy-all, omnichain-deployers)
-- `optimizer = false` only for deploy-all-v6 (stack-too-deep with optimization)
-- `optimizer_runs = 100` for revnet-core-v6 (stack-too-deep at 200 runs due to deep struct nesting in `_deploy721RevnetFor`)
-- Additional `[rpc_endpoints]` for multi-chain repos (e.g. suckers adds `arbitrum`, `optimism`, `base`, `celo`)
+**Optional sections (add only when needed):**
+- `[rpc_endpoints]` — repos with fork tests. Maps named endpoints to env vars (e.g. `ethereum = "${RPC_ETHEREUM_MAINNET}"`).
+- `[profile.ci_sizes]` — only when CI needs different optimizer settings than defaults for the size check step (e.g. `optimizer_runs = 200` when the default profile uses a lower value).
+
+**Common variations:**
+- `via_ir = true` when hitting stack-too-deep
+- `optimizer = false` when optimization causes stack-too-deep
+- `optimizer_runs` reduced when deep struct nesting causes stack-too-deep at 200 runs
 
 ### CI Workflows
 
@@ -373,8 +370,10 @@ jobs:
         uses: foundry-rs/foundry-toolchain@v1
       - name: Run tests
         run: forge test --fail-fast --summary --detailed --skip "*/script/**"
+        env:
+          RPC_ETHEREUM_MAINNET: ${{ secrets.RPC_ETHEREUM_MAINNET }}
       - name: Check contract sizes
-        run: FOUNDRY_PROFILE=ci_sizes forge build --sizes --skip "*/test/**" --skip "*/script/**" --skip SphinxUtils
+        run: forge build --sizes --skip "*/test/**" --skip "*/script/**" --skip SphinxUtils
 ```
 
 **lint.yml:**
@@ -529,4 +528,4 @@ CI checks formatting via `forge fmt --check`.
 
 ### Contract Size Checks
 
-CI runs `forge build --sizes` to catch contracts approaching the 24KB limit.
+CI runs `forge build --sizes` to catch contracts approaching the 24KB limit. When the repo's default `optimizer_runs` differs from what you want for size checking, use `FOUNDRY_PROFILE=ci_sizes forge build --sizes` with a `[profile.ci_sizes]` section in `foundry.toml`.
