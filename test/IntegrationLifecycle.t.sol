@@ -6,7 +6,7 @@ import {MockERC20} from "./mock/MockERC20.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
 
-/// @notice End-to-end lifecycle integration tests for UniV4DeploymentSplitHook.
+/// @notice End-to-end lifecycle integration tests for JBUniswapV4LPSplitHook.
 /// @dev Exercises the full protocol flow: accumulate -> deploy -> collect fees -> rebalance -> claim.
 contract IntegrationLifecycle is LPSplitHookV4TestBase {
     // --- Helpers -----------------------------------------------------------

@@ -41,7 +41,7 @@ import {IPermit2} from "@uniswap/permit2/src/interfaces/IPermit2.sol";
 
 // Hook under test.
 import {LibClone} from "solady/src/utils/LibClone.sol";
-import {UniV4DeploymentSplitHook} from "../src/UniV4DeploymentSplitHook.sol";
+import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
 import {IJBSplitHook} from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
 import {JBSplit} from "@bananapus/core-v6/src/structs/JBSplit.sol";
@@ -49,7 +49,7 @@ import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookCont
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-/// @notice Fork tests for UniV4DeploymentSplitHook with real V4 PoolManager + PositionManager
+/// @notice Fork tests for JBUniswapV4LPSplitHook with real V4 PoolManager + PositionManager
 ///         and real JB core. Exercises the full lifecycle: accumulate → deploy pool → verify V4 state.
 contract LPSplitHookForkTest is Test {
     using StateLibrary for IPoolManager;
@@ -84,7 +84,7 @@ contract LPSplitHookForkTest is Test {
     // ───────────────────────── Hook under test
     // ────────────────────────────
 
-    UniV4DeploymentSplitHook hook;
+    JBUniswapV4LPSplitHook hook;
 
     // ───────────────────────── Project state
     // ──────────────────────────────
@@ -129,14 +129,15 @@ contract LPSplitHookForkTest is Test {
         });
 
         // Deploy the hook with real V4 contracts.
-        UniV4DeploymentSplitHook hookImpl = new UniV4DeploymentSplitHook(
+        JBUniswapV4LPSplitHook hookImpl = new JBUniswapV4LPSplitHook(
             address(jbDirectory),
             IJBPermissions(address(jbPermissions)),
             address(jbTokens),
             V4_POOL_MANAGER,
-            V4_POSITION_MANAGER
+            V4_POSITION_MANAGER,
+            IHooks(address(0))
         );
-        hook = UniV4DeploymentSplitHook(payable(LibClone.clone(address(hookImpl))));
+        hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize(feeProjectId, 3800); // 38% fee to fee project.
 
         // Mint project tokens to the hook (simulating reserved token split distribution).

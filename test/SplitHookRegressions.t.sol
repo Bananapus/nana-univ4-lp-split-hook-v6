@@ -2,7 +2,7 @@
 pragma solidity 0.8.26;
 
 import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
-import {UniV4DeploymentSplitHook} from "../src/UniV4DeploymentSplitHook.sol";
+import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 import {JBPermissionIds} from "@bananapus/permission-ids-v6/src/JBPermissionIds.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
@@ -99,7 +99,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
 
         // Should revert instead of zeroing tokenIdOf
         vm.prank(owner);
-        vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_InsufficientLiquidity.selector);
+        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientLiquidity.selector);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
 
         // tokenIdOf should remain unchanged (revert rolled back state)

@@ -2,15 +2,16 @@
 pragma solidity 0.8.26;
 
 import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
-import {UniV4DeploymentSplitHook} from "../src/UniV4DeploymentSplitHook.sol";
+import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
 import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 
 /// @notice Wrapper contract that exposes internal native-ETH helper functions for testing.
-contract TestableHookForETH is UniV4DeploymentSplitHook {
+contract TestableHookForETH is JBUniswapV4LPSplitHook {
     constructor(
         address _directory,
         IJBPermissions _permissions,
@@ -18,7 +19,7 @@ contract TestableHookForETH is UniV4DeploymentSplitHook {
         IPoolManager _poolManager,
         IPositionManager _positionManager
     )
-        UniV4DeploymentSplitHook(_directory, _permissions, _tokens, _poolManager, _positionManager)
+        JBUniswapV4LPSplitHook(_directory, _permissions, _tokens, _poolManager, _positionManager, IHooks(address(0)))
     {}
 
     function exposed_isNativeToken(address token) external pure returns (bool) {
@@ -26,7 +27,7 @@ contract TestableHookForETH is UniV4DeploymentSplitHook {
     }
 }
 
-/// @notice Tests for native ETH handling in UniV4DeploymentSplitHook.
+/// @notice Tests for native ETH handling in JBUniswapV4LPSplitHook.
 /// @dev In V4, native ETH uses Currency.wrap(address(0)) instead of WETH.
 ///      No WETH wrapping/unwrapping is needed.
 contract NativeETHTest is LPSplitHookV4TestBase {

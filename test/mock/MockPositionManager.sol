@@ -11,7 +11,7 @@ import {Actions} from "@uniswap/v4-periphery/src/libraries/Actions.sol";
 import {PositionInfo} from "@uniswap/v4-periphery/src/libraries/PositionInfoLibrary.sol";
 import {MockPoolManager} from "./MockPoolManager.sol";
 
-/// @notice Mock PositionManager for testing UniV4DeploymentSplitHook
+/// @notice Mock PositionManager for testing JBUniswapV4LPSplitHook
 /// @dev Simulates modifyLiquidities with realistic token flows:
 ///      - MINT_POSITION records how many tokens the position requires
 ///      - SETTLE pulls tokens from the caller (enforcing approval + balance)

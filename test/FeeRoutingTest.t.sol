@@ -2,11 +2,11 @@
 pragma solidity 0.8.26;
 
 import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
-import {UniV4DeploymentSplitHook} from "../src/UniV4DeploymentSplitHook.sol";
-import {IUniV4DeploymentSplitHook} from "../src/interfaces/IUniV4DeploymentSplitHook.sol";
+import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
+import {IJBUniswapV4LPSplitHook} from "../src/interfaces/IJBUniswapV4LPSplitHook.sol";
 import {JBPermissionIds} from "@bananapus/permission-ids-v6/src/JBPermissionIds.sol";
 
-/// @notice Tests for UniV4DeploymentSplitHook fee routing logic.
+/// @notice Tests for JBUniswapV4LPSplitHook fee routing logic.
 /// @dev Covers collectAndRouteLPFees, _routeFeesToProject, _routeCollectedFees, and claimFeeTokensFor.
 contract FeeRoutingTest is LPSplitHookV4TestBase {
     // --- Test State --------------------------------------------------------
@@ -135,7 +135,7 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
         controller.setFirstWeight(freshProjectId, DEFAULT_FIRST_WEIGHT);
         _setDirectoryController(freshProjectId, address(controller));
 
-        vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_InvalidStageForAction.selector);
+        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidStageForAction.selector);
         hook.collectAndRouteLPFees(freshProjectId, address(terminalToken));
     }
 
@@ -151,7 +151,7 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
         controller.setFirstWeight(noPoolProjectId, DEFAULT_FIRST_WEIGHT);
         _setDirectoryController(noPoolProjectId, address(controller));
 
-        vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_InvalidStageForAction.selector);
+        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidStageForAction.selector);
         hook.collectAndRouteLPFees(noPoolProjectId, address(terminalToken));
     }
 
@@ -171,7 +171,7 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
         bytes32 slot = keccak256(abi.encode(address(terminalToken), outerSlot));
         vm.store(address(hook), slot, bytes32(0));
 
-        vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_InvalidStageForAction.selector);
+        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidStageForAction.selector);
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
     }
 
@@ -320,7 +320,7 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
         uint256 expectedFeeTokensMinted = expectedFee;
 
         vm.expectEmit(true, true, false, true, address(hook));
-        emit IUniV4DeploymentSplitHook.LPFeesRouted(
+        emit IJBUniswapV4LPSplitHook.LPFeesRouted(
             PROJECT_ID, address(terminalToken), feeAmount, expectedFee, expectedRemaining, expectedFeeTokensMinted
         );
 

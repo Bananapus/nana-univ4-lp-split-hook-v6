@@ -2,13 +2,14 @@
 pragma solidity 0.8.26;
 
 import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
-import {UniV4DeploymentSplitHook} from "../src/UniV4DeploymentSplitHook.sol";
+import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 
 /// @notice Wrapper that exposes internal price math functions for testing.
-contract TestableUniV4DeploymentSplitHook is UniV4DeploymentSplitHook {
+contract TestableJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
     constructor(
         address _directory,
         IJBPermissions _permissions,
@@ -16,7 +17,7 @@ contract TestableUniV4DeploymentSplitHook is UniV4DeploymentSplitHook {
         IPoolManager _poolManager,
         IPositionManager _positionManager
     )
-        UniV4DeploymentSplitHook(_directory, _permissions, _tokens, _poolManager, _positionManager)
+        JBUniswapV4LPSplitHook(_directory, _permissions, _tokens, _poolManager, _positionManager, IHooks(address(0)))
     {}
 
     function exposed_getIssuanceRate(uint256 projectId, address terminalToken) external view returns (uint256) {
@@ -110,8 +111,8 @@ contract TestableUniV4DeploymentSplitHook is UniV4DeploymentSplitHook {
     }
 }
 
-/// @notice Tests for UniV4DeploymentSplitHook internal price math functions.
-/// @dev Uses TestableUniV4DeploymentSplitHook to expose internal view functions.
+/// @notice Tests for JBUniswapV4LPSplitHook internal price math functions.
+/// @dev Uses TestableJBUniswapV4LPSplitHook to expose internal view functions.
 ///
 /// Default mock setup (from LPSplitHookV4TestBase):
 ///   - weight = 1000e18, reservedPercent = 1000 (10%), baseCurrency = 1 (ETH)
@@ -125,11 +126,11 @@ contract TestableUniV4DeploymentSplitHook is UniV4DeploymentSplitHook {
 ///   issuanceRate = 1000e18 * (10000-1000)/10000 = 900e18
 ///   cashOutRate  = (0.5e18 * 1e18) / 1e18 = 0.5e18
 contract PriceMathTest is LPSplitHookV4TestBase {
-    TestableUniV4DeploymentSplitHook public testableHook;
+    TestableJBUniswapV4LPSplitHook public testableHook;
 
     function setUp() public override {
         super.setUp();
-        testableHook = new TestableUniV4DeploymentSplitHook(
+        testableHook = new TestableJBUniswapV4LPSplitHook(
             address(directory),
             IJBPermissions(address(permissions)),
             address(jbTokens),

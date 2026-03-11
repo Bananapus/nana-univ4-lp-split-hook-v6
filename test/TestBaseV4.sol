@@ -10,10 +10,11 @@ import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookCont
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {IJBSplitHook} from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 
 import {LibClone} from "solady/src/utils/LibClone.sol";
-import {UniV4DeploymentSplitHook} from "../src/UniV4DeploymentSplitHook.sol";
+import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 import {MockERC20} from "./mock/MockERC20.sol";
 import {MockPositionManager} from "./mock/MockPositionManager.sol";
 import {MockPoolManager} from "./mock/MockPoolManager.sol";
@@ -44,11 +45,11 @@ contract MockPermit2 {
     }
 }
 
-/// @notice Shared test harness for UniV4DeploymentSplitHook tests
+/// @notice Shared test harness for JBUniswapV4LPSplitHook tests
 contract LPSplitHookV4TestBase is Test {
 
     // ─── Contracts Under Test
-    UniV4DeploymentSplitHook public hook;
+    JBUniswapV4LPSplitHook public hook;
 
     // ─── Mock Infrastructure
     MockJBDirectory public directory;
@@ -155,14 +156,15 @@ contract LPSplitHookV4TestBase is Test {
         vm.etch(0x000000000022D473030F116dDEE9F6B43aC78BA3, address(new MockPermit2()).code);
 
         // Deploy the hook (implementation + clone + initialize)
-        UniV4DeploymentSplitHook hookImpl = new UniV4DeploymentSplitHook(
+        JBUniswapV4LPSplitHook hookImpl = new JBUniswapV4LPSplitHook(
             address(directory),
             IJBPermissions(address(permissions)),
             address(jbTokens),
             IPoolManager(address(poolManager)),
-            IPositionManager(address(positionManager))
+            IPositionManager(address(positionManager)),
+            IHooks(address(0))
         );
-        hook = UniV4DeploymentSplitHook(payable(LibClone.clone(address(hookImpl))));
+        hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize(FEE_PROJECT_ID, FEE_PERCENT);
     }
 

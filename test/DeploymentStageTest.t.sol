@@ -2,13 +2,13 @@
 pragma solidity 0.8.26;
 
 import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
-import {UniV4DeploymentSplitHook} from "../src/UniV4DeploymentSplitHook.sol";
-import {IUniV4DeploymentSplitHook} from "../src/interfaces/IUniV4DeploymentSplitHook.sol";
+import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
+import {IJBUniswapV4LPSplitHook} from "../src/interfaces/IJBUniswapV4LPSplitHook.sol";
 import {JBPermissioned} from "@bananapus/core-v6/src/abstract/JBPermissioned.sol";
 import {JBPermissionIds} from "@bananapus/permission-ids-v6/src/JBPermissionIds.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
 
-/// @notice Tests for UniV4DeploymentSplitHook deployment stage behavior.
+/// @notice Tests for JBUniswapV4LPSplitHook deployment stage behavior.
 /// @dev Covers deployPool access control, processSplitWith accumulation/burning, leftovers, and revert conditions.
 contract DeploymentStageTest is LPSplitHookV4TestBase {
     function setUp() public override {
@@ -104,7 +104,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         // Check indexed params: projectId (topic1) and terminalToken (topic2)
         // The poolId (topic3) is unknown ahead of time, so we only check the first two indexed params.
         vm.expectEmit(true, true, false, false);
-        emit IUniV4DeploymentSplitHook.ProjectDeployed(PROJECT_ID, address(terminalToken), bytes32(0));
+        emit IJBUniswapV4LPSplitHook.ProjectDeployed(PROJECT_ID, address(terminalToken), bytes32(0));
 
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0, 0);
@@ -116,7 +116,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
 
     /// @notice deployPool reverts with NoTokensAccumulated when no tokens have been accumulated.
     function test_DeployPool_RevertsIf_NoTokens() public {
-        vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_NoTokensAccumulated.selector);
+        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoTokensAccumulated.selector);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0, 0);
     }
@@ -134,7 +134,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         // Accumulate more tokens so NoTokensAccumulated wouldn't fire
         _accumulateTokens(PROJECT_ID, 50e18);
 
-        vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_PoolAlreadyDeployed.selector);
+        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PoolAlreadyDeployed.selector);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0, 0);
     }
@@ -151,7 +151,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         // Use an address with no terminal configured
         address invalidToken = makeAddr("invalidToken");
 
-        vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_InvalidTerminalToken.selector);
+        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidTerminalToken.selector);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, invalidToken, 0, 0, 0);
     }

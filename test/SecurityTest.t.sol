@@ -2,14 +2,14 @@
 pragma solidity 0.8.26;
 
 import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
-import {UniV4DeploymentSplitHook} from "../src/UniV4DeploymentSplitHook.sol";
+import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 import {JBSplit} from "@bananapus/core-v6/src/structs/JBSplit.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {IJBSplitHook} from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
 import {JBPermissionIds} from "@bananapus/permission-ids-v6/src/JBPermissionIds.sol";
 
-/// @notice Security-focused tests for UniV4DeploymentSplitHook.
+/// @notice Security-focused tests for JBUniswapV4LPSplitHook.
 /// @dev Covers access control on processSplitWith, claimFeeTokensFor authorization,
 ///      permissionless function access, cross-project isolation, and reentrancy safety.
 contract SecurityTest is LPSplitHookV4TestBase {
@@ -24,7 +24,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
 
         vm.prank(user); // NOT the controller
         vm.expectRevert(
-            UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_SplitSenderNotValidControllerOrTerminal.selector
+            JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_SplitSenderNotValidControllerOrTerminal.selector
         );
         hook.processSplitWith(context);
     }
@@ -56,7 +56,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
         });
 
         vm.prank(address(controller));
-        vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_NotHookSpecifiedInContext.selector);
+        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NotHookSpecifiedInContext.selector);
         hook.processSplitWith(context);
     }
 
@@ -73,7 +73,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
         JBSplitHookContext memory context = _buildContext(PROJECT_ID, address(projectToken), amount, 0);
 
         vm.prank(address(controller));
-        vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_TerminalTokensNotAllowed.selector);
+        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_TerminalTokensNotAllowed.selector);
         hook.processSplitWith(context);
     }
 
