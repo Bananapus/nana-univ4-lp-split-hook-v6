@@ -11,6 +11,7 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {Actions} from "@uniswap/v4-periphery/src/libraries/Actions.sol";
 import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
@@ -57,6 +58,7 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
     using SafeERC20 for IERC20;
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
+    using StateLibrary for IPoolManager;
 
     //*********************************************************************//
     // --------------------------- custom errors ------------------------- //
@@ -703,7 +705,10 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
 
         (int24 tickLower, int24 tickUpper) = _calculateTickBounds(projectId, terminalToken, projectToken);
 
-        uint160 sqrtPriceInit = _computeInitialSqrtPrice(projectId, terminalToken, projectToken);
+        // Read the pool's actual current price. The pool may have been initialized by another party
+        // (e.g. REVDeployer) at a different price than _computeInitialSqrtPrice would return.
+        PoolKey memory key = _poolKeys[projectId][terminalToken];
+        (uint160 sqrtPriceInit,,,) = POOL_MANAGER.getSlot0(key.toId());
 
         uint256 cashOutAmount = _computeOptimalCashOutAmount(
             projectId, terminalToken, projectToken, projectTokenBalance, sqrtPriceInit, tickLower, tickUpper
@@ -740,8 +745,6 @@ contract UniV4DeploymentSplitHook is IUniV4DeploymentSplitHook, IJBSplitHook, JB
         // Get balances after cash out
         uint256 projectTokenAmount = IERC20(projectToken).balanceOf(address(this));
         uint256 terminalTokenAmount = _getTerminalTokenBalance(terminalToken) - terminalTokenBalanceBefore;
-
-        PoolKey memory key = _poolKeys[projectId][terminalToken];
 
         // Sort amounts by currency order
         Currency terminalCurrency = _toCurrency(terminalToken);
