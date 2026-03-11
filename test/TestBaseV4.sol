@@ -16,6 +16,7 @@ import {LibClone} from "solady/src/utils/LibClone.sol";
 import {UniV4DeploymentSplitHook} from "../src/UniV4DeploymentSplitHook.sol";
 import {MockERC20} from "./mock/MockERC20.sol";
 import {MockPositionManager} from "./mock/MockPositionManager.sol";
+import {MockPoolManager} from "./mock/MockPoolManager.sol";
 import {
     MockJBDirectory,
     MockJBController,
@@ -45,6 +46,7 @@ contract MockPermit2 {
 
 /// @notice Shared test harness for UniV4DeploymentSplitHook tests
 contract LPSplitHookV4TestBase is Test {
+
     // ─── Contracts Under Test
     UniV4DeploymentSplitHook public hook;
 
@@ -56,6 +58,7 @@ contract LPSplitHookV4TestBase is Test {
     MockJBPrices public prices;
     MockJBTerminalStore public store;
     MockPositionManager public positionManager;
+    MockPoolManager public poolManager;
     MockJBProjects public jbProjects;
     MockJBPermissions public permissions;
 
@@ -98,7 +101,9 @@ contract LPSplitHookV4TestBase is Test {
         permissions = new MockJBPermissions();
 
         // Deploy mock V4 contracts
+        poolManager = new MockPoolManager();
         positionManager = new MockPositionManager();
+        positionManager.setPoolManager(poolManager);
 
         // Wire JB contracts
         controller.setPrices(address(prices));
@@ -150,13 +155,11 @@ contract LPSplitHookV4TestBase is Test {
         vm.etch(0x000000000022D473030F116dDEE9F6B43aC78BA3, address(new MockPermit2()).code);
 
         // Deploy the hook (implementation + clone + initialize)
-        // Use a mock address for PoolManager since the hook doesn't call it directly
-        // (it calls PositionManager which handles PoolManager interaction)
         UniV4DeploymentSplitHook hookImpl = new UniV4DeploymentSplitHook(
             address(directory),
             IJBPermissions(address(permissions)),
             address(jbTokens),
-            IPoolManager(address(1)), // placeholder — hook uses PositionManager.initializePool()
+            IPoolManager(address(poolManager)),
             IPositionManager(address(positionManager))
         );
         hook = UniV4DeploymentSplitHook(payable(LibClone.clone(address(hookImpl))));
@@ -236,7 +239,9 @@ contract LPSplitHookV4TestBase is Test {
     function _accumulateAndDeploy(uint256 projectId, uint256 amount) internal {
         _accumulateTokens(projectId, amount);
 
-        // Deploy pool as owner
+        // Deploy pool as owner.
+        // MockPositionManager automatically syncs Slot0 into MockPoolManager during
+        // initializePool, so StateLibrary.getSlot0 works in _addUniswapLiquidity.
         vm.prank(owner);
         hook.deployPool(projectId, address(terminalToken), 0, 0, 0);
     }

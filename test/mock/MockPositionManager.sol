@@ -4,10 +4,12 @@ pragma solidity 0.8.26;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {Actions} from "@uniswap/v4-periphery/src/libraries/Actions.sol";
 import {PositionInfo} from "@uniswap/v4-periphery/src/libraries/PositionInfoLibrary.sol";
+import {MockPoolManager} from "./MockPoolManager.sol";
 
 /// @notice Mock PositionManager for testing UniV4DeploymentSplitHook
 /// @dev Simulates modifyLiquidities with realistic token flows:
@@ -24,6 +26,9 @@ contract MockPositionManager {
 
     // Configurable usage percent (how much of desired amounts are used in mint)
     uint256 public usagePercent = 10_000; // 100%
+
+    // Reference to MockPoolManager for syncing Slot0 on pool init
+    MockPoolManager public poolManager;
 
     struct Position {
         PoolKey poolKey;
@@ -68,6 +73,10 @@ contract MockPositionManager {
     Currency private _settleCurrency0;
     Currency private _settleCurrency1;
 
+    function setPoolManager(MockPoolManager pm) external {
+        poolManager = pm;
+    }
+
     function setUsagePercent(uint256 percent) external {
         usagePercent = percent;
     }
@@ -85,7 +94,26 @@ contract MockPositionManager {
         }
         poolInitialized[id] = true;
         poolSqrtPrice[id] = sqrtPriceX96;
+
+        // Sync Slot0 into MockPoolManager so StateLibrary.getSlot0 works.
+        if (address(poolManager) != address(0)) {
+            _syncSlot0(key, sqrtPriceX96);
+        }
+
         return 0; // Simplified — return tick 0
+    }
+
+    /// @dev Write packed Slot0 data into MockPoolManager at the correct storage slot.
+    function _syncSlot0(PoolKey calldata key, uint160 sqrtPriceX96) internal {
+        bytes32 poolId = PoolId.unwrap(key.toId());
+        bytes32 stateSlot = keccak256(abi.encodePacked(poolId, bytes32(uint256(6))));
+        int24 tick = TickMath.getTickAtSqrtPrice(sqrtPriceX96);
+        uint24 lpFee = key.fee;
+        // Pack: lpFee (24) | protocolFee (24) | tick (24) | sqrtPriceX96 (160)
+        bytes32 packed = bytes32(
+            (uint256(lpFee) << 208) | (uint256(uint24(tick)) << 160) | uint256(sqrtPriceX96)
+        );
+        poolManager.writeSlot(stateSlot, packed);
     }
 
     /// @notice IPositionManager.getPositionLiquidity

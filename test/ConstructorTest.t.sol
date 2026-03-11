@@ -21,7 +21,7 @@ contract ConstructorTest is LPSplitHookV4TestBase {
     function test_Constructor_SetsAllImmutables() public view {
         assertEq(hook.DIRECTORY(), address(directory), "DIRECTORY mismatch");
         assertEq(hook.TOKENS(), address(jbTokens), "TOKENS mismatch");
-        assertEq(address(hook.POOL_MANAGER()), address(1), "POOL_MANAGER mismatch");
+        assertEq(address(hook.POOL_MANAGER()), address(poolManager), "POOL_MANAGER mismatch");
         assertEq(address(hook.POSITION_MANAGER()), address(positionManager), "POSITION_MANAGER mismatch");
     }
 
