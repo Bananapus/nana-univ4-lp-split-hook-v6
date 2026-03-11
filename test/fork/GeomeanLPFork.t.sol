@@ -122,6 +122,7 @@ contract GeomeanSwapHelper is IUnlockCallback {
             if (params.key.currency0.isAddressZero()) {
                 poolManager.settle{value: amountOwed}();
             } else {
+                poolManager.sync(params.key.currency0);
                 IERC20(Currency.unwrap(params.key.currency0)).transferFrom(params.sender, address(poolManager), amountOwed);
                 poolManager.settle();
             }
@@ -136,6 +137,7 @@ contract GeomeanSwapHelper is IUnlockCallback {
             if (params.key.currency1.isAddressZero()) {
                 poolManager.settle{value: amountOwed}();
             } else {
+                poolManager.sync(params.key.currency1);
                 IERC20(Currency.unwrap(params.key.currency1)).transferFrom(params.sender, address(poolManager), amountOwed);
                 poolManager.settle();
             }
@@ -402,8 +404,8 @@ contract GeomeanLPForkTest is Test {
             useReservedPercent: false
         });
 
-        // Approve project token for the swap helper's transferFrom within the callback.
-        IERC20(projTokenAddr).approve(address(V4_POOL_MANAGER), type(uint256).max);
+        // Approve the swap helper to pull project tokens via transferFrom in the callback.
+        IERC20(projTokenAddr).approve(address(swapHelper), type(uint256).max);
 
         // Execute swap: sell project tokens for the other currency.
         // zeroForOne = true means sell token0 for token1.
@@ -788,7 +790,10 @@ contract GeomeanLPForkTest is Test {
         JBRulesetConfig[] memory rulesetConfigs = new JBRulesetConfig[](1);
         rulesetConfigs[0].mustStartAtOrAfter = 0;
         rulesetConfigs[0].duration = 0;
-        rulesetConfigs[0].weight = 1_000_000e18;
+        // Use a realistic weight for 6-decimal tokens (1 USDC = 1000 project tokens).
+        // High weights (1e24) cause _getCashOutRate precision loss since the per-token
+        // cashout value falls below 1 USDC unit (10^-6).
+        rulesetConfigs[0].weight = 1000e18;
         rulesetConfigs[0].weightCutPercent = 0;
         rulesetConfigs[0].approvalHook = IJBRulesetApprovalHook(address(0));
         rulesetConfigs[0].metadata = metadata;

@@ -253,7 +253,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 terminals: new IJBTerminal[](0),
                 accountingContexts: new JBAccountingContext[](0),
                 decimals: _getTokenDecimals(terminalToken),
-                currency: uint256(uint160(terminalToken))
+                currency: uint256(uint32(uint160(terminalToken)))
             }) returns (
             uint256 reclaimableAmount
         ) {
@@ -276,6 +276,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         (address token0,) = _sortTokens(terminalToken, projectToken);
 
         uint256 terminalTokensPerProjectToken = _getCashOutRate(projectId, terminalToken);
+
+        // If the cash out rate is 0 (no surplus or negligible surplus), return the minimum price.
+        if (terminalTokensPerProjectToken == 0) return TickMath.MIN_SQRT_PRICE;
 
         uint256 token0Amount = 10 ** 18;
         uint256 token1Amount;
@@ -822,11 +825,31 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         view
         returns (int24 tickLower, int24 tickUpper)
     {
+        // Check if the cash out rate can be computed (may round to 0 with low-decimal tokens like USDC).
+        uint256 cashOutRate = _getCashOutRate(projectId, terminalToken);
+
+        if (cashOutRate == 0) {
+            // Cash out rate rounds to 0 due to precision loss (e.g. 6-decimal USDC with large token supply).
+            // Center the LP range around the issuance price with minimal width.
+            int24 issuanceTick =
+                TickMath.getTickAtSqrtPrice(_getIssuanceRateSqrtPriceX96(projectId, terminalToken, projectToken));
+            issuanceTick = _alignTickToSpacing(issuanceTick, TICK_SPACING);
+            tickLower = issuanceTick - TICK_SPACING;
+            tickUpper = issuanceTick + TICK_SPACING;
+            return (tickLower, tickUpper);
+        }
+
         tickLower = TickMath.getTickAtSqrtPrice(_getCashOutRateSqrtPriceX96(projectId, terminalToken, projectToken));
         tickUpper = TickMath.getTickAtSqrtPrice(_getIssuanceRateSqrtPriceX96(projectId, terminalToken, projectToken));
 
         tickLower = _alignTickToSpacing(tickLower, TICK_SPACING);
         tickUpper = _alignTickToSpacing(tickUpper, TICK_SPACING);
+
+        // Clamp to valid V4 tick range after alignment.
+        int24 minUsable = _alignTickToSpacing(TickMath.MIN_TICK, TICK_SPACING) + TICK_SPACING;
+        int24 maxUsable = _alignTickToSpacing(TickMath.MAX_TICK, TICK_SPACING) - TICK_SPACING;
+        if (tickLower < minUsable) tickLower = minUsable;
+        if (tickUpper > maxUsable) tickUpper = maxUsable;
 
         if (tickLower >= tickUpper) {
             uint160 currentSqrtPrice = _getSqrtPriceX96ForCurrentJuiceboxPrice(projectId, terminalToken, projectToken);
