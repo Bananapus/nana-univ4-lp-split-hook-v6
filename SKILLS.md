@@ -8,8 +8,8 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 
 | Contract | Role |
 |----------|------|
-| `UniV4DeploymentSplitHook` | Core split hook. Implements `IJBSplitHook.processSplitWith` to accumulate or burn tokens. Manages V4 pool creation, LP position minting, fee collection, and liquidity rebalancing. Inherits `JBPermissioned`. Deployed as clones via factory. |
-| `UniV4DeploymentSplitHookDeployer` | Factory that deploys hook clones via `LibClone` (Solady). Supports CREATE2 deterministic deployment. Initializes clones with `feeProjectId` and `feePercent`. Registers each deployed clone in `JBAddressRegistry` so frontends can verify the deployer. |
+| `JBUniswapV4LPSplitHook` | Core split hook. Implements `IJBSplitHook.processSplitWith` to accumulate or burn tokens. Manages V4 pool creation (with `ORACLE_HOOK` for TWAP), LP position minting, fee collection, and liquidity rebalancing. Constructor takes 6 params: `directory`, `permissions`, `tokens`, `poolManager`, `positionManager`, `oracleHook`. Inherits `JBPermissioned`. Deployed as clones via factory. |
+| `JBUniswapV4LPSplitHookDeployer` | Factory that deploys hook clones via `LibClone` (Solady). Supports CREATE2 deterministic deployment. Initializes clones with `feeProjectId` and `feePercent`. Registers each deployed clone in `JBAddressRegistry` so frontends can verify the deployer. |
 
 ## Key Functions
 
@@ -44,13 +44,13 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 |----------|-------------|
 | `isPoolDeployed(projectId, terminalToken)` | Returns whether a V4 position exists for this project/token pair. |
 | `poolKeyOf(projectId, terminalToken)` | Returns the V4 `PoolKey` for a deployed pool. |
-| `supportsInterface(interfaceId)` | Returns `true` for `IUniV4DeploymentSplitHook` and `IJBSplitHook`. |
+| `supportsInterface(interfaceId)` | Returns `true` for `IJBUniswapV4LPSplitHook` and `IJBSplitHook`. |
 
 ### Factory
 
 | Function | What it does |
 |----------|-------------|
-| `UniV4DeploymentSplitHookDeployer.deployHookFor(feeProjectId, feePercent, salt)` | Deploys a new hook clone. Salt is scoped to `msg.sender` via `keccak256(abi.encode(msg.sender, salt))`. Pass `bytes32(0)` for plain CREATE. Calls `initialize()` on the new clone. Registers the clone in `JBAddressRegistry` (CREATE via nonce, CREATE2 via salt+bytecode). |
+| `JBUniswapV4LPSplitHookDeployer.deployHookFor(feeProjectId, feePercent, salt)` | Deploys a new hook clone. Salt is scoped to `msg.sender` via `keccak256(abi.encode(msg.sender, salt))`. Pass `bytes32(0)` for plain CREATE. Calls `initialize()` on the new clone. Registers the clone in `JBAddressRegistry` (CREATE via nonce, CREATE2 via salt+bytecode). |
 
 ### Internal Pricing
 
@@ -69,7 +69,7 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 |------------|--------|----------|
 | `@bananapus/core-v6` | `IJBController`, `IJBDirectory`, `IJBMultiTerminal`, `IJBPermissions`, `IJBSplitHook`, `IJBTerminal`, `IJBTerminalStore`, `IJBTokens`, `JBSplitHookContext`, `JBRuleset`, `JBRulesetMetadataResolver`, `JBConstants` | Juicebox protocol: controller queries, terminal pay/cashOut/addToBalance, permission checks, ruleset weight and pricing |
 | `@bananapus/permission-ids-v6` | `JBPermissionIds` | `SET_BUYBACK_POOL` permission ID |
-| `@uniswap/v4-core` | `IPoolManager`, `PoolKey`, `PoolId`, `Currency`, `TickMath`, `IHooks` | V4 pool creation, price math, currency handling |
+| `@uniswap/v4-core` | `IPoolManager`, `PoolKey`, `PoolId`, `Currency`, `TickMath`, `IHooks` | V4 pool creation, price math, currency handling. `IHooks` used for the `ORACLE_HOOK` (provides TWAP via `observe()`). |
 | `@uniswap/v4-periphery` | `IPositionManager`, `Actions`, `LiquidityAmounts` | V4 position management: mint, modify, burn, collect |
 | `@openzeppelin/contracts` | `IERC20`, `IERC20Metadata`, `SafeERC20` | Token operations |
 | `@prb/math` | `mulDiv`, `sqrt` | Overflow-safe arithmetic for sqrtPriceX96 calculations |
@@ -97,18 +97,18 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 
 | Error | When |
 |-------|------|
-| `UniV4DeploymentSplitHook_ZeroAddressNotAllowed` | Constructor receives zero address for required parameter |
-| `UniV4DeploymentSplitHook_InvalidProjectId` | Fee project ID doesn't have a controller |
-| `UniV4DeploymentSplitHook_NotHookSpecifiedInContext` | `processSplitWith` called but `context.split.hook != address(this)` |
-| `UniV4DeploymentSplitHook_SplitSenderNotValidControllerOrTerminal` | `processSplitWith` called by non-controller |
-| `UniV4DeploymentSplitHook_NoTokensAccumulated` | `deployPool` called with zero accumulated tokens |
-| `UniV4DeploymentSplitHook_InvalidStageForAction` | Operation requires deployed pool but none exists |
-| `UniV4DeploymentSplitHook_TerminalTokensNotAllowed` | `processSplitWith` called with `groupId != 1` (payout splits not supported) |
-| `UniV4DeploymentSplitHook_InvalidFeePercent` | `feePercent > BPS` (> 100%) |
-| `UniV4DeploymentSplitHook_InvalidTerminalToken` | No primary terminal found for project/token pair |
-| `UniV4DeploymentSplitHook_PoolAlreadyDeployed` | `deployPool` called for a pair that already has a position |
-| `UniV4DeploymentSplitHook_AlreadyInitialized` | `initialize` called on a clone that was already initialized |
-| `UniV4DeploymentSplitHook_FeePercentWithoutFeeProject` | `initialize` called with `feePercent > 0` but `feeProjectId == 0` (fees would get stuck since `primaryTerminalOf(0, token)` returns `address(0)`) |
+| `JBUniswapV4LPSplitHook_ZeroAddressNotAllowed` | Constructor receives zero address for required parameter |
+| `JBUniswapV4LPSplitHook_InvalidProjectId` | Fee project ID doesn't have a controller |
+| `JBUniswapV4LPSplitHook_NotHookSpecifiedInContext` | `processSplitWith` called but `context.split.hook != address(this)` |
+| `JBUniswapV4LPSplitHook_SplitSenderNotValidControllerOrTerminal` | `processSplitWith` called by non-controller |
+| `JBUniswapV4LPSplitHook_NoTokensAccumulated` | `deployPool` called with zero accumulated tokens |
+| `JBUniswapV4LPSplitHook_InvalidStageForAction` | Operation requires deployed pool but none exists |
+| `JBUniswapV4LPSplitHook_TerminalTokensNotAllowed` | `processSplitWith` called with `groupId != 1` (payout splits not supported) |
+| `JBUniswapV4LPSplitHook_InvalidFeePercent` | `feePercent > BPS` (> 100%) |
+| `JBUniswapV4LPSplitHook_InvalidTerminalToken` | No primary terminal found for project/token pair |
+| `JBUniswapV4LPSplitHook_PoolAlreadyDeployed` | `deployPool` called for a pair that already has a position |
+| `JBUniswapV4LPSplitHook_AlreadyInitialized` | `initialize` called on a clone that was already initialized |
+| `JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject` | `initialize` called with `feePercent > 0` but `feeProjectId == 0` (fees would get stuck since `primaryTerminalOf(0, token)` returns `address(0)`) |
 
 ## Constants
 
@@ -126,9 +126,11 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 | `tokenIdOf` | `projectId => terminalToken => uint256` | V4 PositionManager NFT ID per pool |
 | `accumulatedProjectTokens` | `projectId => uint256` | Pre-deployment token accumulation |
 | `initialWeightOf` | `projectId => uint256` | Ruleset weight when first tokens were accumulated (for 10x decay check) |
-| `projectDeployed` | `projectId => bool` | Switches accumulate (Stage 1) to burn (Stage 2) |
+| `projectDeployed` | `projectId => terminalToken => bool` | Whether a V4 pool has been deployed for this project/token pair |
+| `deployedPoolCount` | `projectId => uint256` | Number of pools deployed for project (used for accumulate vs burn decision in processSplitWith) |
 | `claimableFeeTokens` | `projectId => uint256` | Fee-project tokens claimable via `claimFeeTokensFor` |
 | `initialized` | `bool` | Prevents re-initialization of clone instances |
+| `ORACLE_HOOK` | `IHooks` (immutable) | Oracle hook for all JB V4 pools. Set in constructor. All pools are created with this hook in the `PoolKey.hooks` field, providing TWAP via `observe()`. |
 
 ## Gotchas
 
@@ -140,25 +142,26 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 6. **`claimFeeTokensFor` requires `SET_BUYBACK_POOL` permission** from the project owner. It validates the caller, not the beneficiary.
 7. **Cash-out fraction is geometrically optimized, not 50/50.** `_computeOptimalCashOutAmount` uses concentrated liquidity math to compute the exact ratio needed, typically 15-30%. Safety-capped at 50%.
 8. **Pool initialization price is the geometric mean** of [cashOutRate, issuanceRate] in tick space. Falls back to issuance rate if cash-out rate is 0 or ticks are equal.
-9. **One LP position per project/terminal-token pair.** The hook manages a single V4 NFT position. Rebalancing burns the old NFT and mints a new one, briefly leaving no active position.
-10. **After deployment, newly received reserved tokens are burned.** This is intentional -- prevents inflating the project token supply without corresponding LP rebalancing.
-11. **Native ETH handling:** Juicebox uses `JBConstants.NATIVE_TOKEN` (`0x000000000000000000000000000000000000EEEe`), V4 uses `Currency.wrap(address(0))`. The hook converts between them via `_toCurrency()`. The contract has `receive() external payable {}` to accept ETH during cash-outs and V4 TAKE operations.
-12. **Deployed as clones via factory.** `UniV4DeploymentSplitHookDeployer` uses Solady's `LibClone`. The constructor sets shared infrastructure (directory, tokens, V4 contracts). Per-clone config (fee project, fee percent) is set via `initialize()`, which can only be called once.
-13. **Tick alignment:** All ticks are aligned to `TICK_SPACING = 200`. Negative ticks use floor semantics in `_alignTickToSpacing()`.
-14. **`minCashOutReturn = 0` defaults to 1% tolerance.** If no minimum is specified for `deployPool`, the hook applies a 1% slippage tolerance on the cash-out automatically.
-15. **Fee routing splits terminal token fees only.** Project token fees are always burned. Terminal token fees are split: `FEE_PERCENT` to fee project via `terminal.pay()`, remainder to original project via `addToBalanceOf()`.
-16. **Deterministic clone deployment** via CREATE2 uses `keccak256(abi.encode(msg.sender, salt))`, so different callers with the same salt get different addresses.
+9. **All pools are created with `ORACLE_HOOK`.** The `PoolKey.hooks` field is set to the immutable `ORACLE_HOOK` (an `IHooks` providing TWAP via `observe()`), not `IHooks(address(0))`. This means all deployed pools go through the oracle hook for swap callbacks.
+10. **One LP position per project/terminal-token pair.** The hook manages a single V4 NFT position. Rebalancing burns the old NFT and mints a new one, briefly leaving no active position.
+11. **After deployment, newly received reserved tokens are burned.** This is intentional -- prevents inflating the project token supply without corresponding LP rebalancing.
+12. **Native ETH handling:** Juicebox uses `JBConstants.NATIVE_TOKEN` (`0x000000000000000000000000000000000000EEEe`), V4 uses `Currency.wrap(address(0))`. The hook converts between them via `_toCurrency()`. The contract has `receive() external payable {}` to accept ETH during cash-outs and V4 TAKE operations.
+13. **Deployed as clones via factory.** `JBUniswapV4LPSplitHookDeployer` uses Solady's `LibClone`. The constructor takes 6 params (`directory`, `permissions`, `tokens`, `poolManager`, `positionManager`, `oracleHook`) and sets shared infrastructure. Per-clone config (fee project, fee percent) is set via `initialize()`, which can only be called once.
+14. **Tick alignment:** All ticks are aligned to `TICK_SPACING = 200`. Negative ticks use floor semantics in `_alignTickToSpacing()`.
+15. **`minCashOutReturn = 0` defaults to 1% tolerance.** If no minimum is specified for `deployPool`, the hook applies a 1% slippage tolerance on the cash-out automatically.
+16. **Fee routing splits terminal token fees only.** Project token fees are always burned. Terminal token fees are split: `FEE_PERCENT` to fee project via `terminal.pay()`, remainder to original project via `addToBalanceOf()`.
+17. **Deterministic clone deployment** via CREATE2 uses `keccak256(abi.encode(msg.sender, salt))`, so different callers with the same salt get different addresses.
 
 ## Example Integration
 
 ```solidity
-import {UniV4DeploymentSplitHook} from "@bananapus/univ4-lp-split-hook-v6/src/UniV4DeploymentSplitHook.sol";
-import {UniV4DeploymentSplitHookDeployer} from "@bananapus/univ4-lp-split-hook-v6/src/UniV4DeploymentSplitHookDeployer.sol";
-import {IUniV4DeploymentSplitHook} from "@bananapus/univ4-lp-split-hook-v6/src/interfaces/IUniV4DeploymentSplitHook.sol";
+import {JBUniswapV4LPSplitHook} from "@bananapus/univ4-lp-split-hook-v6/src/JBUniswapV4LPSplitHook.sol";
+import {JBUniswapV4LPSplitHookDeployer} from "@bananapus/univ4-lp-split-hook-v6/src/JBUniswapV4LPSplitHookDeployer.sol";
+import {IJBUniswapV4LPSplitHook} from "@bananapus/univ4-lp-split-hook-v6/src/interfaces/IJBUniswapV4LPSplitHook.sol";
 
 // --- Deploy a hook clone via the factory ---
 
-IUniV4DeploymentSplitHook hook = deployer.deployHookFor({
+IJBUniswapV4LPSplitHook hook = deployer.deployHookFor({
     feeProjectId: 1,             // fee-project receives share of LP fees
     feePercent: 3800,            // 38% of LP fees to fee project
     salt: bytes32("my-hook")     // deterministic address (or bytes32(0) for CREATE)

@@ -2,10 +2,8 @@
 pragma solidity 0.8.26;
 
 import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
-import {UniV4DeploymentSplitHook} from "../src/UniV4DeploymentSplitHook.sol";
-import {JBPermissioned} from "@bananapus/core/abstract/JBPermissioned.sol";
-import {JBPermissionIds} from "@bananapus/permission-ids/JBPermissionIds.sol";
-import {JBSplitHookContext} from "@bananapus/core/structs/JBSplitHookContext.sol";
+import {JBPermissioned} from "@bananapus/core-v6/src/abstract/JBPermissioned.sol";
+import {JBPermissionIds} from "@bananapus/permission-ids-v6/src/JBPermissionIds.sol";
 
 /// @notice Tests for permissionless deployPool when weight has decayed 10x.
 contract WeightDecayDeployTest is LPSplitHookV4TestBase {

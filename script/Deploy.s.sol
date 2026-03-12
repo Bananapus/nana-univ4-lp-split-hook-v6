@@ -1,18 +1,24 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import "@bananapus/core-v6/script/helpers/CoreDeploymentLib.sol";
-import "@bananapus/address-registry-v6/script/helpers/AddressRegistryDeploymentLib.sol";
+import {CoreDeployment, CoreDeploymentLib} from "@bananapus/core-v6/script/helpers/CoreDeploymentLib.sol";
+import {
+    AddressRegistryDeployment,
+    AddressRegistryDeploymentLib
+} from "@bananapus/address-registry-v6/script/helpers/AddressRegistryDeploymentLib.sol";
+import {
+    Univ4RouterDeployment,
+    Univ4RouterDeploymentLib
+} from "@bananapus/univ4-router-v6/script/helpers/Univ4RouterDeploymentLib.sol";
 
-import {Sphinx} from "@sphinx-labs/contracts/SphinxPlugin.sol";
+import {Sphinx} from "@sphinx-labs/contracts/contracts/foundry/SphinxPlugin.sol";
 import {Script} from "forge-std/Script.sol";
 
-import {IJBPermissions} from "@bananapus/core/interfaces/IJBPermissions.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 
-import {UniV4DeploymentSplitHook} from "../src/UniV4DeploymentSplitHook.sol";
-import {UniV4DeploymentSplitHookDeployer} from "../src/UniV4DeploymentSplitHookDeployer.sol";
+import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
+import {JBUniswapV4LPSplitHookDeployer} from "../src/JBUniswapV4LPSplitHookDeployer.sol";
 
 contract DeployScript is Script, Sphinx {
     /// @notice tracks the deployment of the core contracts for the chain we are deploying to.
@@ -21,9 +27,12 @@ contract DeployScript is Script, Sphinx {
     /// @notice tracks the deployment of the address registry for the chain we are deploying to.
     AddressRegistryDeployment registry;
 
+    /// @notice tracks the deployment of the univ4-router contracts for the chain we are deploying to.
+    Univ4RouterDeployment router;
+
     /// @notice the salts used to deploy the contracts.
-    bytes32 HOOK_SALT = "UniV4DeploymentSplitHookV6";
-    bytes32 DEPLOYER_SALT = "UniV4SplitHookDeployerV6";
+    bytes32 hookSalt = "JBUniswapV4LPSplitHookV6";
+    bytes32 deployerSalt = "JBUniswapV4LPSplitHookDeployerV6";
 
     /// @notice Uniswap V4 addresses (same on all chains)
     IPoolManager poolManager;
@@ -47,6 +56,11 @@ contract DeployScript is Script, Sphinx {
                 "NANA_ADDRESS_REGISTRY_DEPLOYMENT_PATH",
                 string("node_modules/@bananapus/address-registry-v6/deployments/")
             )
+        );
+
+        // Get the deployment addresses for the univ4-router for this chain.
+        router = Univ4RouterDeploymentLib.getDeployment(
+            vm.envOr("NANA_CORE_DEPLOYMENT_PATH", string("node_modules/@bananapus/core-v6/deployments/"))
         );
 
         // Uniswap V4 PoolManager — canonical address on all chains
@@ -86,15 +100,11 @@ contract DeployScript is Script, Sphinx {
     }
 
     function deploy() public sphinx {
-        UniV4DeploymentSplitHook hookImpl = new UniV4DeploymentSplitHook{salt: HOOK_SALT}(
-            address(core.directory),
-            IJBPermissions(address(core.permissions)),
-            address(core.tokens),
-            poolManager,
-            positionManager
+        JBUniswapV4LPSplitHook hookImpl = new JBUniswapV4LPSplitHook{salt: hookSalt}(
+            address(core.directory), core.permissions, address(core.tokens), poolManager, positionManager, router.hook
         );
 
-        new UniV4DeploymentSplitHookDeployer{salt: DEPLOYER_SALT}(hookImpl, registry.registry);
+        new JBUniswapV4LPSplitHookDeployer{salt: deployerSalt}(hookImpl, registry.registry);
     }
 
     function _isDeployed(bytes32 salt, bytes memory creationCode, bytes memory arguments) internal view returns (bool) {

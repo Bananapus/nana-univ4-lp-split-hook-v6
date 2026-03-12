@@ -2,10 +2,10 @@
 pragma solidity 0.8.26;
 
 import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
-import {UniV4DeploymentSplitHook} from "../src/UniV4DeploymentSplitHook.sol";
+import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 import {MockERC20} from "./mock/MockERC20.sol";
 
-/// @notice Tests for UniV4DeploymentSplitHook.rebalanceLiquidity function.
+/// @notice Tests for JBUniswapV4LPSplitHook.rebalanceLiquidity function.
 /// @dev Covers revert conditions, PositionManager interactions (modifyLiquidities with
 ///      DECREASE_LIQUIDITY, BURN_POSITION, MINT_POSITION, TAKE_PAIR, SETTLE, SWEEP), and access control.
 contract RebalanceTest is LPSplitHookV4TestBase {
@@ -40,7 +40,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
         jbProjects.setOwner(newProjectId, owner);
 
         vm.prank(owner);
-        vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_InvalidStageForAction.selector);
+        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidStageForAction.selector);
         hook.rebalanceLiquidity(newProjectId, address(terminalToken), 0, 0, 0, 0);
     }
 
@@ -59,7 +59,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
         terminal.setAccountingContext(PROJECT_ID, address(otherToken), uint32(uint160(address(otherToken))), 18);
 
         vm.prank(owner);
-        vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_InvalidStageForAction.selector);
+        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidStageForAction.selector);
         hook.rebalanceLiquidity(PROJECT_ID, address(otherToken), 0, 0, 0, 0);
     }
 
@@ -73,7 +73,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
         address randomToken = makeAddr("randomToken");
 
         vm.prank(owner);
-        vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_InvalidTerminalToken.selector);
+        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidTerminalToken.selector);
         hook.rebalanceLiquidity(PROJECT_ID, randomToken, 0, 0, 0, 0);
     }
 

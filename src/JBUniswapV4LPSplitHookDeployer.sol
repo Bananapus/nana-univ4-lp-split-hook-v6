@@ -4,14 +4,14 @@ pragma solidity 0.8.26;
 import {LibClone} from "solady/src/utils/LibClone.sol";
 import {IJBAddressRegistry} from "@bananapus/address-registry-v6/src/interfaces/IJBAddressRegistry.sol";
 
-import {UniV4DeploymentSplitHook} from "./UniV4DeploymentSplitHook.sol";
-import {IUniV4DeploymentSplitHook} from "./interfaces/IUniV4DeploymentSplitHook.sol";
-import {IUniV4DeploymentSplitHookDeployer} from "./interfaces/IUniV4DeploymentSplitHookDeployer.sol";
+import {JBUniswapV4LPSplitHook} from "./JBUniswapV4LPSplitHook.sol";
+import {IJBUniswapV4LPSplitHook} from "./interfaces/IJBUniswapV4LPSplitHook.sol";
+import {IJBUniswapV4LPSplitHookDeployer} from "./interfaces/IJBUniswapV4LPSplitHookDeployer.sol";
 
-/// @notice Deploys `UniV4DeploymentSplitHook` clones with shared infrastructure baked into the implementation.
+/// @notice Deploys `JBUniswapV4LPSplitHook` clones with shared infrastructure baked into the implementation.
 /// @dev Anyone can deploy a hook by providing only `feeProjectId` and `feePercent`.
 /// @dev Supports deterministic deployment via CREATE2 when a non-zero salt is provided.
-contract UniV4DeploymentSplitHookDeployer is IUniV4DeploymentSplitHookDeployer {
+contract JBUniswapV4LPSplitHookDeployer is IJBUniswapV4LPSplitHookDeployer {
     //*********************************************************************//
     // --------------- public immutable stored properties ---------------- //
     //*********************************************************************//
@@ -20,7 +20,7 @@ contract UniV4DeploymentSplitHookDeployer is IUniV4DeploymentSplitHookDeployer {
     IJBAddressRegistry public immutable override ADDRESS_REGISTRY;
 
     /// @notice The hook implementation that all clones delegate to.
-    UniV4DeploymentSplitHook public immutable override HOOK;
+    JBUniswapV4LPSplitHook public immutable override HOOK;
 
     //*********************************************************************//
     // ----------------------- internal properties ----------------------- //
@@ -35,7 +35,7 @@ contract UniV4DeploymentSplitHookDeployer is IUniV4DeploymentSplitHookDeployer {
 
     /// @param hook The hook implementation contract.
     /// @param addressRegistry A registry which stores references to contracts and their deployers.
-    constructor(UniV4DeploymentSplitHook hook, IJBAddressRegistry addressRegistry) {
+    constructor(JBUniswapV4LPSplitHook hook, IJBAddressRegistry addressRegistry) {
         HOOK = hook;
         ADDRESS_REGISTRY = addressRegistry;
     }
@@ -44,7 +44,7 @@ contract UniV4DeploymentSplitHookDeployer is IUniV4DeploymentSplitHookDeployer {
     // ---------------------- external transactions ---------------------- //
     //*********************************************************************//
 
-    /// @notice Deploy a new `UniV4DeploymentSplitHook` clone with the caller as its initial owner.
+    /// @notice Deploy a new `JBUniswapV4LPSplitHook` clone with the caller as its initial owner.
     /// @param feeProjectId The Juicebox project ID that receives a share of LP fees.
     /// @param feePercent The percentage of LP fees routed to the fee project (in basis points, e.g. 3800 = 38%).
     /// @param salt An optional salt for deterministic CREATE2 deployment. Pass `bytes32(0)` for a plain CREATE.
@@ -56,9 +56,9 @@ contract UniV4DeploymentSplitHookDeployer is IUniV4DeploymentSplitHookDeployer {
     )
         external
         override
-        returns (IUniV4DeploymentSplitHook hook)
+        returns (IJBUniswapV4LPSplitHook hook)
     {
-        hook = IUniV4DeploymentSplitHook(
+        hook = IJBUniswapV4LPSplitHook(
             salt == bytes32(0)
                 ? LibClone.clone(address(HOOK))
                 : LibClone.cloneDeterministic({
@@ -66,7 +66,7 @@ contract UniV4DeploymentSplitHookDeployer is IUniV4DeploymentSplitHookDeployer {
                 })
         );
 
-        IUniV4DeploymentSplitHook(address(hook)).initialize(feeProjectId, feePercent);
+        IJBUniswapV4LPSplitHook(address(hook)).initialize(feeProjectId, feePercent);
 
         emit HookDeployed(feeProjectId, feePercent, hook, msg.sender);
 

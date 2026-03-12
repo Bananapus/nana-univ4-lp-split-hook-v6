@@ -2,8 +2,6 @@
 
 How we write Solidity and organize repos across the Juicebox V6 ecosystem. `nana-core-v6` is the gold standard — when in doubt, match what it does.
 
-**This repo's deviations:** `via_ir = true` (stack depth). Standard EVM version (cancun).
-
 ## File Organization
 
 ```
@@ -18,8 +16,6 @@ src/
 ```
 
 One contract/interface/struct/enum per file. Name the file after the type it contains.
-
-**Structs, enums, libraries, and interfaces always go in their subdirectories** (`src/structs/`, `src/enums/`, `src/libraries/`, `src/interfaces/`) — never inline in contract files or placed in `src/` root. This keeps type definitions discoverable and import paths consistent across repos.
 
 ## Pragma Versions
 
@@ -109,14 +105,6 @@ contract JBExample is JBPermissioned, IJBExample {
     //*********************************************************************//
 
     //*********************************************************************//
-    // ---------------------- receive / fallback ------------------------- //
-    //*********************************************************************//
-
-    //*********************************************************************//
-    // --------------------------- modifiers ----------------------------- //
-    //*********************************************************************//
-
-    //*********************************************************************//
     // ---------------------- external transactions ---------------------- //
     //*********************************************************************//
 
@@ -143,27 +131,22 @@ contract JBExample is JBPermissioned, IJBExample {
 ```
 
 **Section order:**
-1. `using` declarations
-2. Custom errors
-3. Public constants
-4. Internal constants
-5. Public immutable stored properties
-6. Internal immutable stored properties
-7. Public stored properties
-8. Internal stored properties
-9. Constructor
-10. `receive` / `fallback`
-11. Modifiers
-12. External transactions
-13. External views
-14. Public transactions
-15. Internal helpers
-16. Internal views
-17. Private helpers
+1. Custom errors
+2. Public constants
+3. Internal constants
+4. Public immutable stored properties
+5. Internal immutable stored properties
+6. Public stored properties
+7. Internal stored properties
+8. Constructor
+9. External transactions
+10. External views
+11. Public transactions
+12. Internal helpers
+13. Internal views
+14. Private helpers
 
 Functions are alphabetized within each section.
-
-**Events:** Events are declared in interfaces only, never in implementation contracts. Implementations inherit events from their interface and emit them unqualified. This keeps the ABI definition in one place and allows tests to use interface-qualified event expectations (e.g., `emit IJBController.LaunchProject(...)`).
 
 ## Interface Structure
 
@@ -335,10 +318,6 @@ evm_version = 'cancun'
 optimizer_runs = 200
 libs = ["node_modules", "lib"]
 fs_permissions = [{ access = "read-write", path = "./"}]
-via_ir = true
-
-[profile.ci_sizes]
-optimizer_runs = 200
 
 [fuzz]
 runs = 4096
@@ -354,10 +333,14 @@ multiline_func_header = "all"
 wrap_comments = true
 ```
 
-**Variations:**
-- `evm_version = 'cancun'` for repos using transient storage (buyback-hook, router-terminal, univ4-router)
-- `via_ir = true` for repos hitting stack-too-deep (buyback-hook, banny-retail, univ4-lp-split-hook, deploy-all)
-- `optimizer = false` only for deploy-all-v6 (stack-too-deep with optimization)
+**Optional sections (add only when needed):**
+- `[rpc_endpoints]` — repos with fork tests. Maps named endpoints to env vars (e.g. `ethereum = "${RPC_ETHEREUM_MAINNET}"`).
+- `[profile.ci_sizes]` — only when CI needs different optimizer settings than defaults for the size check step (e.g. `optimizer_runs = 200` when the default profile uses a lower value).
+
+**Common variations:**
+- `via_ir = true` when hitting stack-too-deep
+- `optimizer = false` when optimization causes stack-too-deep
+- `optimizer_runs` reduced when deep struct nesting causes stack-too-deep at 200 runs
 
 ### CI Workflows
 
@@ -390,7 +373,7 @@ jobs:
         env:
           RPC_ETHEREUM_MAINNET: ${{ secrets.RPC_ETHEREUM_MAINNET }}
       - name: Check contract sizes
-        run: FOUNDRY_PROFILE=ci_sizes forge build --sizes --skip "*/test/**" --skip "*/script/**" --skip SphinxUtils
+        run: forge build --sizes --skip "*/test/**" --skip "*/script/**" --skip SphinxUtils
 ```
 
 **lint.yml:**
@@ -412,11 +395,60 @@ jobs:
         run: forge fmt --check
 ```
 
+**slither.yml** (repos with `src/` contracts only):
+```yaml
+name: slither
+on:
+    pull_request:
+      branches:
+        - main
+    push:
+      branches:
+        - main
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: latest
+      - name: Install npm dependencies
+        run: npm install --omit=dev
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+      - name: Run slither
+        uses: crytic/slither-action@v0.3.1
+        with:
+            slither-config: slither-ci.config.json
+            fail-on: medium
+```
+
+**slither-ci.config.json:**
+```json
+{
+  "detectors_to_exclude": "timestamp,uninitialized-local,naming-convention,solc-version,shadowing-local",
+  "exclude_informational": true,
+  "exclude_low": false,
+  "exclude_medium": false,
+  "exclude_high": false,
+  "disable_color": false,
+  "filter_paths": "(mocks/|test/|node_modules/|lib/)",
+  "legacy_ast": false
+}
+```
+
+**Variations:**
+- Deployer-only repos (no `src/`, only `script/`) skip slither entirely — the action's internal `forge build` skips `test/` and `script/` by default, leaving nothing to compile.
+- Use inline `// slither-disable-next-line <detector>` to suppress known false positives rather than adding to `detectors_to_exclude` in the config. The comment must be on the line immediately before the flagged expression.
+
 ### package.json
 
 ```json
 {
-  "name": "@bananapus/univ4-lp-split-hook-v6",
+  "name": "@bananapus/package-name-v6",
   "version": "x.x.x",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/Org/repo.git" },
@@ -436,13 +468,62 @@ jobs:
 
 ### remappings.txt
 
-Every repo has a `remappings.txt`. Minimal content:
+Every repo has a `remappings.txt` as the **single source of truth** for import remappings. Never add remappings to `foundry.toml`.
+
+**Principle:** Import paths in Solidity source must match npm package names exactly. With `libs = ["node_modules", "lib"]`, Foundry auto-resolves `@scope/package/path/File.sol` → `node_modules/@scope/package/path/File.sol`. No remapping needed for packages installed as real directories.
+
+**Note:** Auto-resolution does **not** work for symlinked packages (e.g. npm workspace links). Workspace repos like `deploy-all-v6` and `nana-cli-v6` need explicit `@scope/package/=node_modules/@scope/package/` remappings for each symlinked dependency.
+
+**Minimal content** (most repos):
 
 ```
-@sphinx-labs/contracts/=lib/sphinx/packages/contracts/contracts/foundry
+forge-std/=lib/forge-std/src/
 ```
 
-Additional mappings as needed for repo-specific dependencies.
+Only add extra remappings for:
+- **`forge-std`** — always needed (git submodule with `src/` subdirectory)
+- **Repo-specific `lib/` submodules** that have no npm package (e.g., `hookmate/=lib/hookmate/src/`)
+- **Symlinked npm packages** — need explicit `@scope/package/=node_modules/@scope/package/` entries
+- **Nested transitive deps** — e.g., `@chainlink/contracts-ccip/` nested inside `@bananapus/suckers-v6/node_modules/`
+
+**Never add remappings for:**
+- npm packages that match their import path and are installed as real directories — they auto-resolve
+- Short-form aliases (e.g., `@bananapus/core/` → `@bananapus/core-v6/src/`) — fix the import instead
+- Packages available via npm that are also git submodules — remove the submodule, use npm
+
+**Import path convention:**
+
+| Package | Import path | Resolves to |
+|---------|------------|-------------|
+| `@bananapus/core-v6` | `@bananapus/core-v6/src/libraries/JBConstants.sol` | `node_modules/@bananapus/core-v6/src/...` |
+| `@openzeppelin/contracts` | `@openzeppelin/contracts/token/ERC20/IERC20.sol` | `node_modules/@openzeppelin/contracts/...` |
+| `@uniswap/v4-core` | `@uniswap/v4-core/src/interfaces/IPoolManager.sol` | `node_modules/@uniswap/v4-core/src/...` |
+
+### Linting
+
+Solar (Foundry's built-in linter) runs automatically during `forge build`. It scans all `.sol` files in `libs` directories, including `node_modules`.
+
+**All test helpers must use relative imports** (e.g. `../../src/structs/JBRuleset.sol`), not bare `src/` imports. This ensures solar can resolve paths when the helper is consumed via npm in downstream repos.
+
+### Fork Tests
+
+Fork tests use named RPC endpoints defined in `[rpc_endpoints]` of `foundry.toml`. No skip guards — fork tests should hard-fail if the RPC endpoint is unavailable, making CI failures explicit.
+
+```solidity
+function setUp() public {
+    vm.createSelectFork("ethereum");
+    // ... setup code
+}
+```
+
+The endpoint name (e.g. `"ethereum"`) maps to an env var via `foundry.toml`:
+
+```toml
+[rpc_endpoints]
+ethereum = "${RPC_ETHEREUM_MAINNET}"
+```
+
+For multi-chain fork tests, add all needed endpoints.
 
 ### Formatting
 
@@ -452,15 +533,6 @@ Run `forge fmt` before committing. The `[fmt]` config in `foundry.toml` enforces
 - Wrapped comments at reasonable width
 
 CI checks formatting via `forge fmt --check`.
-
-### CI Secrets
-
-| Secret | Purpose |
-|--------|--------|
-| `NPM_TOKEN` | npm publish access (used by `publish.yml`) |
-| `RPC_ETHEREUM_MAINNET` | Ethereum mainnet RPC URL for fork tests (used by `test.yml`) |
-
-Fork tests require `RPC_ETHEREUM_MAINNET` — they fail if it's missing.
 
 ### Branching
 
@@ -479,4 +551,8 @@ Fork tests require `RPC_ETHEREUM_MAINNET` — they fail if it's missing.
 
 ### Contract Size Checks
 
-CI runs `FOUNDRY_PROFILE=ci_sizes forge build --sizes` to catch contracts approaching the 24KB limit. The `ci_sizes` profile uses `optimizer_runs = 200` for realistic size measurement even when the default profile has different optimizer settings.
+CI runs `forge build --sizes` to catch contracts approaching the 24KB limit. When the repo's default `optimizer_runs` differs from what you want for size checking, use `FOUNDRY_PROFILE=ci_sizes forge build --sizes` with a `[profile.ci_sizes]` section in `foundry.toml`.
+
+## Repo-Specific Deviations
+
+None. This repo follows the standard configuration exactly.

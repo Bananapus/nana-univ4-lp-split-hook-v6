@@ -4,19 +4,20 @@ pragma solidity 0.8.26;
 import "forge-std/Test.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IJBPermissions} from "@bananapus/core/interfaces/IJBPermissions.sol";
-import {JBSplit} from "@bananapus/core/structs/JBSplit.sol";
-import {JBSplitHookContext} from "@bananapus/core/structs/JBSplitHookContext.sol";
-import {JBAccountingContext} from "@bananapus/core/structs/JBAccountingContext.sol";
-import {IJBSplitHook} from "@bananapus/core/interfaces/IJBSplitHook.sol";
-import {JBConstants} from "@bananapus/core/libraries/JBConstants.sol";
+import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
+import {JBSplit} from "@bananapus/core-v6/src/structs/JBSplit.sol";
+import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
+import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
+import {IJBSplitHook} from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 
 import {LibClone} from "solady/src/utils/LibClone.sol";
-import {UniV4DeploymentSplitHook} from "../src/UniV4DeploymentSplitHook.sol";
+import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 import {MockERC20} from "./mock/MockERC20.sol";
 import {MockPositionManager} from "./mock/MockPositionManager.sol";
+import {MockPoolManager} from "./mock/MockPoolManager.sol";
 import {
     MockJBDirectory,
     MockJBController,
@@ -38,14 +39,16 @@ contract MockPermit2 {
 
     function transferFrom(address from, address to, uint160 amount, address token) external {
         allowances[from][token][msg.sender] -= amount;
+        // forge-lint: disable-next-line(erc20-unchecked-transfer)
+        // Test mock: return value not checked intentionally.
         IERC20(token).transferFrom(from, to, amount);
     }
 }
 
-/// @notice Shared test harness for UniV4DeploymentSplitHook tests
+/// @notice Shared test harness for JBUniswapV4LPSplitHook tests
 contract LPSplitHookV4TestBase is Test {
     // ─── Contracts Under Test
-    UniV4DeploymentSplitHook public hook;
+    JBUniswapV4LPSplitHook public hook;
 
     // ─── Mock Infrastructure
     MockJBDirectory public directory;
@@ -55,6 +58,7 @@ contract LPSplitHookV4TestBase is Test {
     MockJBPrices public prices;
     MockJBTerminalStore public store;
     MockPositionManager public positionManager;
+    MockPoolManager public poolManager;
     MockJBProjects public jbProjects;
     MockJBPermissions public permissions;
 
@@ -97,7 +101,9 @@ contract LPSplitHookV4TestBase is Test {
         permissions = new MockJBPermissions();
 
         // Deploy mock V4 contracts
+        poolManager = new MockPoolManager();
         positionManager = new MockPositionManager();
+        positionManager.setPoolManager(poolManager);
 
         // Wire JB contracts
         controller.setPrices(address(prices));
@@ -149,16 +155,15 @@ contract LPSplitHookV4TestBase is Test {
         vm.etch(0x000000000022D473030F116dDEE9F6B43aC78BA3, address(new MockPermit2()).code);
 
         // Deploy the hook (implementation + clone + initialize)
-        // Use a mock address for PoolManager since the hook doesn't call it directly
-        // (it calls PositionManager which handles PoolManager interaction)
-        UniV4DeploymentSplitHook hookImpl = new UniV4DeploymentSplitHook(
+        JBUniswapV4LPSplitHook hookImpl = new JBUniswapV4LPSplitHook(
             address(directory),
             IJBPermissions(address(permissions)),
             address(jbTokens),
-            IPoolManager(address(1)), // placeholder — hook uses PositionManager.initializePool()
-            IPositionManager(address(positionManager))
+            IPoolManager(address(poolManager)),
+            IPositionManager(address(positionManager)),
+            IHooks(address(0))
         );
-        hook = UniV4DeploymentSplitHook(payable(LibClone.clone(address(hookImpl))));
+        hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize(FEE_PROJECT_ID, FEE_PERCENT);
     }
 
@@ -235,7 +240,9 @@ contract LPSplitHookV4TestBase is Test {
     function _accumulateAndDeploy(uint256 projectId, uint256 amount) internal {
         _accumulateTokens(projectId, amount);
 
-        // Deploy pool as owner
+        // Deploy pool as owner.
+        // MockPositionManager automatically syncs Slot0 into MockPoolManager during
+        // initializePool, so StateLibrary.getSlot0 works in _addUniswapLiquidity.
         vm.prank(owner);
         hook.deployPool(projectId, address(terminalToken), 0, 0, 0);
     }

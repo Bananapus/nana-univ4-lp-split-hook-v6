@@ -5,7 +5,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 
 /// @notice Manages a two-stage Uniswap V4 pool deployment process for Juicebox projects, routing LP fees back to the
 /// project.
-interface IUniV4DeploymentSplitHook {
+interface IJBUniswapV4LPSplitHook {
     /// @notice Emitted when fee tokens are claimed for a beneficiary.
     /// @param projectId The Juicebox project ID.
     /// @param beneficiary The address receiving the claimed tokens.
@@ -60,6 +60,7 @@ interface IUniV4DeploymentSplitHook {
     /// @notice Collect LP fees and route them back to the project.
     /// @param projectId The Juicebox project ID.
     /// @param terminalToken The terminal token address.
+    // forge-lint: disable-next-line(mixed-case-function)
     function collectAndRouteLPFees(uint256 projectId, address terminalToken) external;
 
     /// @notice Deploy a Uniswap V4 pool using accumulated project tokens.

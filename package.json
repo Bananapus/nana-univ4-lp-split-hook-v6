@@ -1,6 +1,6 @@
 {
   "name": "@bananapus/univ4-lp-split-hook-v6",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -16,11 +16,14 @@
   },
   "dependencies": {
     "@bananapus/address-registry-v6": "^0.0.6",
-    "@bananapus/core-v6": "^0.0.11",
-    "@bananapus/permission-ids-v6": "^0.0.6",
-    "@openzeppelin/contracts": "^5.2.0",
+    "@bananapus/core-v6": "^0.0.15",
+    "@bananapus/univ4-router-v6": "^0.0.6",
+    "@bananapus/permission-ids-v6": "^0.0.7",
+    "@openzeppelin/contracts": "^5.6.1",
     "@prb/math": "^4.1.0",
+    "@uniswap/permit2": "github:Uniswap/permit2",
     "@uniswap/v4-core": "^1.0.2",
-    "@uniswap/v4-periphery": "^1.0.3"
+    "@uniswap/v4-periphery": "^1.0.3",
+    "solmate": "^6.8.0"
   }
 }

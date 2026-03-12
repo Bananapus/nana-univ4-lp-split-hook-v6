@@ -2,19 +2,17 @@
 pragma solidity 0.8.26;
 
 import {IJBAddressRegistry} from "@bananapus/address-registry-v6/src/interfaces/IJBAddressRegistry.sol";
-import {IUniV4DeploymentSplitHook} from "./IUniV4DeploymentSplitHook.sol";
-import {UniV4DeploymentSplitHook} from "../UniV4DeploymentSplitHook.sol";
+import {IJBUniswapV4LPSplitHook} from "./IJBUniswapV4LPSplitHook.sol";
+import {JBUniswapV4LPSplitHook} from "../JBUniswapV4LPSplitHook.sol";
 
-/// @notice Deploys clones of the UniV4DeploymentSplitHook contract.
-interface IUniV4DeploymentSplitHookDeployer {
+/// @notice Deploys clones of the JBUniswapV4LPSplitHook contract.
+interface IJBUniswapV4LPSplitHookDeployer {
     /// @notice Emitted when a new hook clone is deployed.
     /// @param feeProjectId The project ID that receives LP fees.
     /// @param feePercent The percentage of LP fees routed to the fee project.
     /// @param hook The deployed hook clone.
     /// @param caller The address that deployed the hook.
-    event HookDeployed(
-        uint256 indexed feeProjectId, uint256 feePercent, IUniV4DeploymentSplitHook hook, address caller
-    );
+    event HookDeployed(uint256 indexed feeProjectId, uint256 feePercent, IJBUniswapV4LPSplitHook hook, address caller);
 
     /// @notice The address registry used to register deployed hooks.
     /// @return The address registry contract.
@@ -22,7 +20,7 @@ interface IUniV4DeploymentSplitHookDeployer {
 
     /// @notice The implementation contract used as the base for clones.
     /// @return The hook implementation contract.
-    function HOOK() external view returns (UniV4DeploymentSplitHook);
+    function HOOK() external view returns (JBUniswapV4LPSplitHook);
 
     /// @notice Deploy a new hook clone for a fee project.
     /// @param feeProjectId The project ID to receive LP fees.
@@ -35,5 +33,5 @@ interface IUniV4DeploymentSplitHookDeployer {
         bytes32 salt
     )
         external
-        returns (IUniV4DeploymentSplitHook hook);
+        returns (IJBUniswapV4LPSplitHook hook);
 }

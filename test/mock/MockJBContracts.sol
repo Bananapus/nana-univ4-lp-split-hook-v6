@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {JBRuleset} from "@bananapus/core/structs/JBRuleset.sol";
-import {JBRulesetMetadata} from "@bananapus/core/structs/JBRulesetMetadata.sol";
-import {JBRulesetWithMetadata} from "@bananapus/core/structs/JBRulesetWithMetadata.sol";
-import {JBRulesetMetadataResolver} from "@bananapus/core/libraries/JBRulesetMetadataResolver.sol";
-import {JBAccountingContext} from "@bananapus/core/structs/JBAccountingContext.sol";
-import {IJBRulesetApprovalHook} from "@bananapus/core/interfaces/IJBRulesetApprovalHook.sol";
-import {IJBTerminal} from "@bananapus/core/interfaces/IJBTerminal.sol";
+import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
+import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
+import {JBRulesetWithMetadata} from "@bananapus/core-v6/src/structs/JBRulesetWithMetadata.sol";
+import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
+import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
+import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
+import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 import {MockERC20} from "./MockERC20.sol";
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -272,6 +271,8 @@ contract MockJBController {
                 basedOnId: 0,
                 start: uint48(block.timestamp),
                 duration: 0,
+                // forge-lint: disable-next-line(unsafe-typecast)
+                // Safe: test weights are set by test code and always fit in uint112.
                 weight: uint112(fw),
                 weightCutPercent: 0,
                 approvalHook: IJBRulesetApprovalHook(address(0)),

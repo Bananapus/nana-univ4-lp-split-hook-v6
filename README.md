@@ -27,7 +27,7 @@ This ensures the AMM price always trades within the project's intrinsic economic
    → Tokens accumulate in accumulatedProjectTokens[projectId]
    |
 3. Project owner (or anyone after 10x weight decay) calls deployPool(...)
-   → Creates V4 pool at geometric mean of [cashOut, issuance] rates
+   → Creates V4 pool (with ORACLE_HOOK for TWAP) at geometric mean of [cashOut, issuance] rates
    → Cashes out optimal fraction of tokens for terminal tokens
    → Mints concentrated LP position bounded by rate-derived ticks
    → Sets projectDeployed[projectId] = true
@@ -50,7 +50,7 @@ This ensures the AMM price always trades within the project's intrinsic economic
 
 ### Pool Pricing
 
-The initial pool price is set at the **geometric mean** of the cash-out and issuance rate ticks. This centers the LP position in the economic range, creating balanced exposure to both sides. If the cash-out rate is zero (no surplus), the pool initializes at the issuance rate.
+The initial pool price is set at the **geometric mean** of the cash-out and issuance rate ticks. This centers the LP position in the economic range, creating balanced exposure to both sides. If the cash-out rate is zero (no surplus), the pool initializes at the issuance rate. When the pool is already initialized (e.g., by REVDeployer at 1:1 price), the hook reads the actual pool price via `getSlot0` instead of computing a new initial price. All pools are created with `ORACLE_HOOK` (an `IHooks` oracle hook set in the constructor) which provides TWAP pricing via `observe()`.
 
 ### Optimal Cash-Out Calculation
 
@@ -60,15 +60,15 @@ V4 concentrated liquidity positions aren't 50/50 -- the token ratio depends on w
 
 | Contract | Description |
 |----------|-------------|
-| `UniV4DeploymentSplitHook` | `IJBSplitHook` implementation with a two-stage lifecycle. Accumulates project tokens before deployment, burns them after. Creates V4 pools, mints/rebalances LP positions, collects and routes fees. Inherits `JBPermissioned`, `Ownable`. |
-| `UniV4DeploymentSplitHookDeployer` | Factory that deploys hook clones via `LibClone`. Supports deterministic CREATE2 deployment with caller-scoped salts. Anyone can deploy a new hook by providing `feeProjectId` and `feePercent`. |
+| `JBUniswapV4LPSplitHook` | `IJBSplitHook` implementation with a two-stage lifecycle. Accumulates project tokens before deployment, burns them after. Creates V4 pools (with `ORACLE_HOOK` for TWAP), mints/rebalances LP positions, collects and routes fees. Constructor takes 6 params: `directory`, `permissions`, `tokens`, `poolManager`, `positionManager`, `oracleHook`. Inherits `JBPermissioned`, `Ownable`. |
+| `JBUniswapV4LPSplitHookDeployer` | Factory that deploys hook clones via `LibClone`. Supports deterministic CREATE2 deployment with caller-scoped salts. Anyone can deploy a new hook by providing `feeProjectId` and `feePercent`. |
 
 ### Interfaces
 
 | Interface | Description |
 |-----------|-------------|
-| `IUniV4DeploymentSplitHook` | Public interface: `initialize`, `isPoolDeployed`, `poolKeyOf`, `deployPool`, `collectAndRouteLPFees`, `claimFeeTokensFor`, plus events. |
-| `IUniV4DeploymentSplitHookDeployer` | Factory interface: `HOOK`, `deployHookFor`, plus `HookDeployed` event. |
+| `IJBUniswapV4LPSplitHook` | Public interface: `initialize`, `isPoolDeployed`, `poolKeyOf`, `deployPool`, `collectAndRouteLPFees`, `claimFeeTokensFor`, plus events. |
+| `IJBUniswapV4LPSplitHookDeployer` | Factory interface: `HOOK`, `deployHookFor`, plus `HookDeployed` event. |
 
 ## Install
 
@@ -108,11 +108,11 @@ runs = 4096
 
 ```
 src/
-  UniV4DeploymentSplitHook.sol               # Main split hook (1125 lines)
-  UniV4DeploymentSplitHookDeployer.sol       # Clone factory (61 lines)
+  JBUniswapV4LPSplitHook.sol               # Main split hook (1125 lines)
+  JBUniswapV4LPSplitHookDeployer.sol       # Clone factory (61 lines)
   interfaces/
-    IUniV4DeploymentSplitHook.sol            # Hook interface + events
-    IUniV4DeploymentSplitHookDeployer.sol    # Factory interface
+    IJBUniswapV4LPSplitHook.sol            # Hook interface + events
+    IJBUniswapV4LPSplitHookDeployer.sol    # Factory interface
 test/
   ConstructorTest.t.sol                      # Constructor validation
   AccumulationStageTest.t.sol                # Stage 1: token accumulation

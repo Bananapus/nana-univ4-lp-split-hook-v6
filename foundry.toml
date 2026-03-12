@@ -6,9 +6,6 @@ libs = ["node_modules", "lib"]
 fs_permissions = [{ access = "read-write", path = "./"}]
 via_ir = true
 
-[profile.ci_sizes]
-optimizer_runs = 200
-
 [fuzz]
 runs = 4096
 
@@ -16,6 +13,9 @@ runs = 4096
 runs = 1024
 depth = 100
 fail_on_revert = false
+
+[rpc_endpoints]
+ethereum = "${RPC_ETHEREUM_MAINNET}"
 
 [fmt]
 number_underscore = "thousands"

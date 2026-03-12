@@ -1,13 +1,13 @@
 # univ4-lp-split-hook-v6 -- Risks
 
-Deep implementation-level risk analysis. Line references are to `src/UniV4DeploymentSplitHook.sol` unless otherwise noted.
+Deep implementation-level risk analysis. Line references are to `src/JBUniswapV4LPSplitHook.sol` unless otherwise noted.
 
 ## Trust Assumptions
 
 1. **Project Owner** -- Can trigger pool deployment (`deployPool`, line 491) and manage LP positions (`rebalanceLiquidity`, line 559). Has `SET_BUYBACK_POOL` permission and can delegate it. Cannot modify fee configuration post-initialization.
-2. **Uniswap V4 Pool Manager + Position Manager** -- LP positions are managed through V4 PositionManager (immutable at line 107). Pool manager bugs or governance changes could affect all positions managed by this hook. The hook has no way to migrate positions to a different V4 deployment.
+2. **Uniswap V4 Pool Manager + Position Manager + Oracle Hook** -- LP positions are managed through V4 PositionManager (immutable at line 107). All pools are created with `ORACLE_HOOK` (immutable at line 114), which is set in the `PoolKey.hooks` field. Pool manager, position manager, or oracle hook bugs or governance changes could affect all positions managed by this hook. The hook has no way to migrate positions to a different V4 deployment or change the oracle hook.
 3. **JB Core Protocol** -- The hook trusts that `controllerOf(projectId)` returns the legitimate controller (line 537-539), that `processSplitWith` is called with accurate `context.amount` (line 534), and that `primaryTerminalOf` resolves correctly (line 236, 346-347, 521-522). Compromise of the JB directory would break all assumptions.
-4. **Price Oracle (Implicit)** -- Initial pool price is derived from the project's bonding curve rates via `currentReclaimableSurplusOf` (line 238) and `currentRulesetOf` weight (line 290, 344, 401). These are on-chain reads, not external oracle feeds. Manipulation requires changing the project's actual surplus or ruleset weight.
+4. **Price Oracle** -- Initial pool price is derived from the project's bonding curve rates via `currentReclaimableSurplusOf` (line 238) and `currentRulesetOf` weight (line 290, 344, 401). These are on-chain reads, not external oracle feeds. Manipulation requires changing the project's actual surplus or ruleset weight. All pools are created with `ORACLE_HOOK` (an `IHooks` set in the constructor, line 114/183) which provides TWAP pricing via `observe()`. The oracle hook is set in the `PoolKey.hooks` field (line 966) and processes swap callbacks for all deployed pools. A bug or governance change in the oracle hook could affect swap behavior for all pools.
 5. **Fee Project** -- The `FEE_PROJECT_ID` must have a functioning terminal that accepts the terminal token. If the fee project's terminal disappears or reverts, fee routing silently fails (the terminal check at line 1105 returns early, and the fee amount is retained in the contract).
 
 ## Audit History
@@ -90,7 +90,7 @@ A Nemesis audit (`.audit/findings/nemesis-verified.md`) identified 6 true positi
 #### M-4. Rebalance Reverts: Temporary Position Gap
 
 - **Severity:** MEDIUM
-- **Tested:** `M31_StaleTokenIdOf.t.sol` tests the `InsufficientLiquidity` revert. `UniV4DeploymentSplitHook_AuditFindings.t.sol` (test_H2_rebalance_zeroLiquidity_reverts) confirms the guard.
+- **Tested:** `StaleTokenIdOf.t.sol` tests the `InsufficientLiquidity` revert. `SplitHookRegressions.t.sol` (test_H2_rebalance_zeroLiquidity_reverts) confirms the guard.
 - **Lines:** 605-614 (BURN_POSITION in rebalanceLiquidity), 638-653 (liquidity check and revert)
 - **Description:** `rebalanceLiquidity` burns the old position (line 607-613) before minting the new one (line 641-643). If the MINT_POSITION step fails (e.g., due to price moving outside tick bounds causing zero liquidity), the transaction reverts with `InsufficientLiquidity` (line 652), rolling back the burn. This is the correct behavior (prevents bricking), but it means the rebalance cannot succeed until conditions change. During the revert, no state changes occur, and the old position remains intact.
 - **Edge case:** If the V4 PositionManager itself has a bug or is paused, neither burn nor mint would succeed, effectively freezing the position in place.
@@ -98,7 +98,7 @@ A Nemesis audit (`.audit/findings/nemesis-verified.md`) identified 6 true positi
 #### M-5. Fee Project Terminal Disappearance
 
 - **Severity:** MEDIUM
-- **Tested:** `L25_FeeProjectIdValidation.t.sol` tests the `initialize` validation. Fee routing is tested in `FeeRoutingTest.t.sol`.
+- **Tested:** `FeeProjectIdValidation.t.sol` tests the `initialize` validation. Fee routing is tested in `FeeRoutingTest.t.sol`.
 - **Lines:** 1103-1137 (_routeFeesToProject), specifically 1103-1105 (fee terminal lookup)
 - **Description:** If the fee project's primary terminal for the terminal token is removed or changed to `address(0)`, the fee routing silently skips the fee payment (line 1105: `if (feeTerminal != address(0))`). The `feeAmount` is computed (line 1098) but never transferred. The terminal token fee amount is retained in the contract and eventually gets absorbed into the next liquidity operation.
 - **Mitigation:** The `initialize` validation (line 184-188) checks that the fee project has a controller at initialization time. However, the terminal could be removed later. This is a graceful degradation -- the project's share (`remainingAmount`) is still routed correctly.
@@ -107,13 +107,13 @@ A Nemesis audit (`.audit/findings/nemesis-verified.md`) identified 6 true positi
 
 #### L-1. Implementation Contract Initializable
 
-- **Tested:** `M32_ReinitAfterRenounce.t.sol` tests clone re-initialization prevention.
+- **Tested:** `ReinitAfterRenounce.t.sol` tests clone re-initialization prevention.
 - **Lines:** 177-194 (initialize)
 - **Description:** The implementation contract deployed by the factory never calls `initialize` in its constructor. Anyone can call `initialize()` on the implementation with arbitrary parameters. This has no practical impact because clones have separate storage, and the implementation is not used directly.
 
 #### L-2. processSplitWith Burns for All Terminal Tokens After First Pool
 
-- **Tested:** `UniV4DeploymentSplitHook_AuditFindings.t.sol` (test_M2_processSplitWith_burnsAfterDeploy, test_M2_multiTerminalToken_independentFlags).
+- **Tested:** `SplitHookRegressions.t.sol` (test_M2_processSplitWith_burnsAfterDeploy, test_M2_multiTerminalToken_independentFlags).
 - **Lines:** 545 (deployedPoolCount check), 134 (deployedPoolCount mapping)
 - **Description:** `processSplitWith` uses `deployedPoolCount[projectId]` (per-project, not per-terminal-token) to decide whether to accumulate or burn (line 545). Once any pool is deployed for a project, all subsequent reserved token splits burn tokens. This prevents accumulation for a second terminal token's pool. The `JBSplitHookContext` does not include the terminal token, so per-token accumulation is not possible with the current interface.
 - **Mitigation:** This is a known architectural constraint. To deploy pools for multiple terminal tokens, the project must deploy separate hook clones.
@@ -201,7 +201,7 @@ A Nemesis audit (`.audit/findings/nemesis-verified.md`) identified 6 true positi
 |------|-----------|----------|
 | Access control (processSplitWith) | SecurityTest, AccumulationStageTest | Comprehensive: controller-only, wrong hook, wrong groupId, invalid project |
 | Access control (deployPool) | DeploymentStageTest, WeightDecayDeployTest, SecurityTest | Comprehensive: unauthorized, owner, operator, weight-decay permissionless, edge cases |
-| Access control (rebalanceLiquidity) | AuditFindingsTest, RebalanceTest | Comprehensive: unauthorized reverts, owner succeeds, operator succeeds, zero-liquidity revert |
+| Access control (rebalanceLiquidity) | SplitHookRegressionsTest, RebalanceTest | Comprehensive: unauthorized reverts, owner succeeds, operator succeeds, zero-liquidity revert |
 | Access control (claimFeeTokensFor) | SecurityTest, FeeRoutingTest | Comprehensive: valid operator, invalid operator, zero-balance no-op |
 | Fee routing arithmetic | FeeRoutingTest | Thorough: 38/62 split verified, zero-fee no-op, claimable tracking, event emission |
 | Accumulation mechanics | AccumulationStageTest | Thorough: single, multiple, zero-amount, cross-project isolation |
@@ -209,7 +209,7 @@ A Nemesis audit (`.audit/findings/nemesis-verified.md`) identified 6 true positi
 | Price math | PriceMathTest | Thorough: issuance rate (0/10/100% reserved), cashout rate (0/positive surplus), sqrtPriceX96, tick bounds, alignment, geometric mean, optimal cashout |
 | Native ETH handling | NativeETHTest | Good: isNativeToken, receive(), accounting setup, end-to-end deploy with NATIVE_TOKEN |
 | Clone deployment | DeployerTest | Good: CREATE, CREATE2, address registry, initialization, events |
-| Re-initialization prevention | M32_ReinitAfterRenounce, ConstructorTest | Good: double-init reverts, initialized flag |
+| Re-initialization prevention | ReinitAfterRenounce, ConstructorTest | Good: double-init reverts, initialized flag |
 | Fork integration | Fork.t.sol | Good: real V4 contracts, full lifecycle with real JB core, weight-decay permissionless deploy |
 | Token conservation | PositionManagerIntegrationTest | Good: token flows, no creation from thin air, partial usage with sweep |
 

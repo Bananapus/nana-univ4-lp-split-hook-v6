@@ -34,19 +34,22 @@ import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionMa
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {IPermit2} from "@uniswap/permit2/src/interfaces/IPermit2.sol";
 
 // Hook under test.
 import {LibClone} from "solady/src/utils/LibClone.sol";
-import {UniV4DeploymentSplitHook} from "../src/UniV4DeploymentSplitHook.sol";
-import {IJBPermissions} from "@bananapus/core/interfaces/IJBPermissions.sol";
-import {IJBSplitHook} from "@bananapus/core/interfaces/IJBSplitHook.sol";
-import {JBSplit} from "@bananapus/core/structs/JBSplit.sol";
-import {JBSplitHookContext} from "@bananapus/core/structs/JBSplitHookContext.sol";
+import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
+import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
+import {IJBSplitHook} from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
+import {JBSplit} from "@bananapus/core-v6/src/structs/JBSplit.sol";
+import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-/// @notice Fork tests for UniV4DeploymentSplitHook with real V4 PoolManager + PositionManager
+/// @notice Fork tests for JBUniswapV4LPSplitHook with real V4 PoolManager + PositionManager
 ///         and real JB core. Exercises the full lifecycle: accumulate → deploy pool → verify V4 state.
 contract LPSplitHookForkTest is Test {
     using StateLibrary for IPoolManager;
@@ -81,7 +84,7 @@ contract LPSplitHookForkTest is Test {
     // ───────────────────────── Hook under test
     // ────────────────────────────
 
-    UniV4DeploymentSplitHook hook;
+    JBUniswapV4LPSplitHook hook;
 
     // ───────────────────────── Project state
     // ──────────────────────────────
@@ -94,14 +97,7 @@ contract LPSplitHookForkTest is Test {
     receive() external payable {}
 
     function setUp() public {
-        // Skip fork tests when the RPC URL is not available.
-        string memory rpcUrl = vm.envOr("RPC_ETHEREUM_MAINNET", string(""));
-        if (bytes(rpcUrl).length == 0) {
-            vm.skip(true);
-            return;
-        }
-
-        vm.createSelectFork(rpcUrl);
+        vm.createSelectFork("ethereum", 21_700_000);
 
         // Verify V4 contracts exist on this fork.
         require(address(V4_POOL_MANAGER).code.length > 0, "PoolManager not deployed");
@@ -133,14 +129,15 @@ contract LPSplitHookForkTest is Test {
         });
 
         // Deploy the hook with real V4 contracts.
-        UniV4DeploymentSplitHook hookImpl = new UniV4DeploymentSplitHook(
+        JBUniswapV4LPSplitHook hookImpl = new JBUniswapV4LPSplitHook(
             address(jbDirectory),
             IJBPermissions(address(jbPermissions)),
             address(jbTokens),
             V4_POOL_MANAGER,
-            V4_POSITION_MANAGER
+            V4_POSITION_MANAGER,
+            IHooks(address(0))
         );
-        hook = UniV4DeploymentSplitHook(payable(LibClone.clone(address(hookImpl))));
+        hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize(feeProjectId, 3800); // 38% fee to fee project.
 
         // Mint project tokens to the hook (simulating reserved token split distribution).
@@ -391,6 +388,61 @@ contract LPSplitHookForkTest is Test {
             terminalConfigurations: terminalConfigs,
             memo: ""
         });
+    }
+
+    // ───────────────────────── Existing Pool (pre-initialized)
+    // ─────────────
+
+    /// @notice When the pool was already initialized by another party (e.g. REVDeployer)
+    ///         at a different sqrtPrice than _computeInitialSqrtPrice would return,
+    ///         deployPool should still succeed by reading the pool's actual price via getSlot0.
+    function test_fork_deployPool_existingPool_addsLiquidity() public {
+        // Build the same pool key the hook will use.
+        address projToken = address(projectToken);
+        Currency termCurrency = Currency.wrap(address(0)); // native ETH
+        Currency projCurrency = Currency.wrap(projToken);
+
+        (Currency currency0, Currency currency1) =
+            termCurrency < projCurrency ? (termCurrency, projCurrency) : (projCurrency, termCurrency);
+
+        PoolKey memory key = PoolKey({
+            currency0: currency0,
+            currency1: currency1,
+            fee: hook.POOL_FEE(),
+            tickSpacing: hook.TICK_SPACING(),
+            hooks: IHooks(address(0))
+        });
+
+        // Initialize the pool externally at the issuance rate price (different from the
+        // geometric mean that _computeInitialSqrtPrice would compute).
+        // Use a price that's clearly different from the midpoint.
+        uint160 externalSqrtPrice = TickMath.getSqrtPriceAtTick(int24(69_000));
+        V4_POSITION_MANAGER.initializePool(key, externalSqrtPrice);
+
+        // Verify pool is initialized with our external price.
+        PoolId poolId = key.toId();
+        (uint160 sqrtPriceBefore,,,) = V4_POOL_MANAGER.getSlot0(poolId);
+        assertEq(sqrtPriceBefore, externalSqrtPrice, "pool should be at external price");
+
+        // Now deploy via the hook — it should detect the existing pool and use its actual price.
+        vm.prank(multisig);
+        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0, 0, 0);
+
+        // Verify deployment succeeded.
+        assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should be deployed");
+        uint256 tokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+        assertTrue(tokenId != 0, "should hold a position NFT");
+
+        // Verify position has liquidity.
+        uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
+        assertTrue(posLiq > 0, "position should have liquidity in existing pool");
+
+        // Verify the pool price didn't change (adding liquidity doesn't move the price).
+        (uint160 sqrtPriceAfter,,,) = V4_POOL_MANAGER.getSlot0(poolId);
+        assertEq(sqrtPriceAfter, sqrtPriceBefore, "pool price should not change from liquidity add");
+
+        // Accumulated tokens should be cleared.
+        assertEq(hook.accumulatedProjectTokens(projectId), 0, "accumulated should be 0 after deploy");
     }
 
     // ───────────────────────── Weight Decay Permissionless Deploy

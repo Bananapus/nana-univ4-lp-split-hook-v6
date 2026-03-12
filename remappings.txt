@@ -1,17 +1,1 @@
-@bananapus/721-hook-v6/=node_modules/@bananapus/721-hook-v6/
-@bananapus/address-registry-v6/=node_modules/@bananapus/address-registry-v6/
-@bananapus/buyback-hook-v6/=node_modules/@bananapus/buyback-hook-v6/
-@bananapus/core-v6/=node_modules/@bananapus/core-v6/
-@bananapus/core/=node_modules/@bananapus/core-v6/src/
-@bananapus/ownable-v6/=node_modules/@bananapus/ownable-v6/
-@bananapus/permission-ids-v6/=node_modules/@bananapus/permission-ids-v6/
-@bananapus/permission-ids/=node_modules/@bananapus/permission-ids-v6/src/
-@bananapus/suckers-v6/=node_modules/@bananapus/suckers-v6/
-@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/
-@prb/math/=lib/prb-math/
-@rev-net/core-v6/=node_modules/@rev-net/core-v6/
-@sphinx-labs/contracts/=lib/nana-core/lib/sphinx/packages/contracts/contracts/foundry/
-@uniswap/permit2/=node_modules/@uniswap/permit2/
-@uniswap/v4-core/=node_modules/@uniswap/v4-core/
-@uniswap/v4-periphery/=node_modules/@uniswap/v4-periphery/
 forge-std/=lib/forge-std/src/

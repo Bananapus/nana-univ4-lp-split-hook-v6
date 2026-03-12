@@ -8,10 +8,10 @@ Uniswap V4 liquidity pool deployment hook for Juicebox V6. Receives project toke
 
 ```
 src/
-├── UniV4DeploymentSplitHook.sol         — Split hook: token accumulation, pool deployment, LP management
-├── UniV4DeploymentSplitHookDeployer.sol — Factory for deploying split hooks
+├── JBUniswapV4LPSplitHook.sol         — Split hook: token accumulation, pool deployment (with oracle hook), LP management
+├── JBUniswapV4LPSplitHookDeployer.sol — Factory for deploying split hooks
 └── interfaces/
-    └── IUniV4DeploymentSplitHook.sol
+    └── IJBUniswapV4LPSplitHook.sol
 ```
 
 ## Key Data Flows
@@ -19,13 +19,13 @@ src/
 ### Pre-Deployment (Accumulation)
 ```
 Reserved token distribution → JBMultiTerminal.sendPayoutsOf()
-  → Split to UniV4DeploymentSplitHook.processSplitWith()
+  → Split to JBUniswapV4LPSplitHook.processSplitWith()
     → Accumulate project tokens
     → Track accumulated balance
 
 Owner/Operator → deployPool()
   → Validate: enough tokens accumulated
-  → Create Uniswap V4 pool (projectToken/terminalToken)
+  → Create Uniswap V4 pool (projectToken/terminalToken) with ORACLE_HOOK (TWAP via observe())
   → Provide initial liquidity from accumulated tokens
   → Set up LP position
 ```
@@ -45,7 +45,7 @@ Anyone → rebalanceLiquidity()
 | Point | Interface | Purpose |
 |-------|-----------|---------|
 | Split hook | `IJBSplitHook` | Receives tokens from reserved distribution |
-| Pool deployment | Uniswap V4 PositionManager | Creates and manages LP positions |
+| Pool deployment | Uniswap V4 PositionManager | Creates and manages LP positions. Pools use `ORACLE_HOOK` (`IHooks`) for TWAP via `observe()`. |
 
 ## Dependencies
 - `@bananapus/core-v6` — Core protocol

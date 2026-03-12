@@ -2,15 +2,14 @@
 pragma solidity 0.8.26;
 
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
-import {UniV4DeploymentSplitHook} from "../../src/UniV4DeploymentSplitHook.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
 
 /// @notice tokenIdOf becomes stale when rebalance yields zero liquidity.
 /// @dev rebalanceLiquidity now reverts with InsufficientLiquidity when
 ///      the new position would have zero liquidity, rather than silently zeroing tokenIdOf.
 ///      This prevents the bricking scenario where tokenIdOf=0 + projectDeployed=true creates
 ///      a permanent circular dependency.
-contract M31_StaleTokenIdOfTest is LPSplitHookV4TestBase {
+contract StaleTokenIdOfTest is LPSplitHookV4TestBase {
     uint256 poolTokenId;
 
     function setUp() public override {
@@ -43,7 +42,7 @@ contract M31_StaleTokenIdOfTest is LPSplitHookV4TestBase {
 
         // Rebalance now reverts instead of zeroing tokenIdOf
         vm.prank(owner);
-        vm.expectRevert(UniV4DeploymentSplitHook.UniV4DeploymentSplitHook_InsufficientLiquidity.selector);
+        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientLiquidity.selector);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
 
         // tokenIdOf should remain unchanged (revert rolled back state)
