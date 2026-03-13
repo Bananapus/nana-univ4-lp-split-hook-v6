@@ -110,6 +110,8 @@ contract MockPositionManager {
         int24 tick = TickMath.getTickAtSqrtPrice(sqrtPriceX96);
         uint24 lpFee = key.fee;
         // Pack: lpFee (24) | protocolFee (24) | tick (24) | sqrtPriceX96 (160)
+        // Safe: tick fits in uint24 after masking; uint24(tick) is standard V4 packing.
+        // forge-lint: disable-next-line(unsafe-typecast)
         bytes32 packed = bytes32((uint256(lpFee) << 208) | (uint256(uint24(tick)) << 160) | uint256(sqrtPriceX96));
         poolManager.writeSlot(stateSlot, packed);
     }
@@ -175,6 +177,7 @@ contract MockPositionManager {
             address posOwner,
             /* hookData */
         ) = abi.decode(data, (PoolKey, int24, int24, uint256, uint128, uint128, address, bytes));
+        posOwner; // Silence unused variable warning.
 
         mintCallCount++;
         uint256 tokenId = nextTokenId++;
@@ -184,12 +187,12 @@ contract MockPositionManager {
         uint256 amount0Used = (uint256(amount0Max) * usagePercent) / 10_000;
         uint256 amount1Used = (uint256(amount1Max) * usagePercent) / 10_000;
 
-        // forge-lint: disable-next-line(unsafe-typecast)
-        // Safe: test mock; liquidity values in tests are always within uint128 range.
         _positions[tokenId] = Position({
             poolKey: key,
             tickLower: tickLower,
             tickUpper: tickUpper,
+            // Safe: test mock; values in tests always fit in target type.
+            // forge-lint: disable-next-line(unsafe-typecast)
             liquidity: uint128(liquidity),
             amount0Locked: amount0Used,
             amount1Locked: amount1Used,
@@ -215,6 +218,8 @@ contract MockPositionManager {
             uint128 amount0Min,
             uint128 amount1Min, /* hookData */
         ) = abi.decode(data, (uint256, uint128, uint128, bytes));
+        amount0Min; // Silence unused variable warning.
+        amount1Min; // Silence unused variable warning.
 
         burnCallCount++;
         Position storage pos = _positions[tokenId];
@@ -248,6 +253,8 @@ contract MockPositionManager {
             uint128 amount0Min,
             uint128 amount1Min, /* hookData */
         ) = abi.decode(data, (uint256, uint256, uint128, uint128, bytes));
+        amount0Min; // Silence unused variable warning.
+        amount1Min; // Silence unused variable warning.
 
         decreaseLiquidityCallCount++;
 
@@ -260,14 +267,16 @@ contract MockPositionManager {
         address token0 = Currency.unwrap(pos.poolKey.currency0);
         address token1 = Currency.unwrap(pos.poolKey.currency1);
 
-        // forge-lint: disable-next-line(unsafe-typecast)
-        // Safe: test mock; liquidity values in tests always fit in uint128.
         if (liquidity > 0) {
             // Calculate the pro-rata share of locked tokens being removed.
             uint256 fraction0;
             uint256 fraction1;
             if (pos.liquidity > 0) {
+                // Safe: test mock; values in tests always fit in target type.
+                // forge-lint: disable-next-line(unsafe-typecast)
                 fraction0 = (pos.amount0Locked * uint128(liquidity)) / pos.liquidity;
+                // Safe: test mock; values in tests always fit in target type.
+                // forge-lint: disable-next-line(unsafe-typecast)
                 fraction1 = (pos.amount1Locked * uint128(liquidity)) / pos.liquidity;
             }
             _pendingOwed0 += fraction0;
@@ -279,9 +288,13 @@ contract MockPositionManager {
             poolLocked[token0] -= fraction0;
             poolLocked[token1] -= fraction1;
 
+            // Safe: test mock; values in tests always fit in target type.
+            // forge-lint: disable-next-line(unsafe-typecast)
             if (uint128(liquidity) >= pos.liquidity) {
                 pos.liquidity = 0;
             } else {
+                // Safe: test mock; values in tests always fit in target type.
+                // forge-lint: disable-next-line(unsafe-typecast)
                 pos.liquidity -= uint128(liquidity);
             }
         }
@@ -311,6 +324,8 @@ contract MockPositionManager {
                 uint256 bal = IERC20(token0).balanceOf(address(this));
                 uint256 toSend = owed0 > bal ? bal : owed0;
                 if (toSend > 0) {
+                    // Test mock: return value not checked intentionally.
+                    // forge-lint: disable-next-line(erc20-unchecked-transfer)
                     IERC20(token0).transfer(recipient, toSend);
                 }
             }
@@ -325,6 +340,8 @@ contract MockPositionManager {
                 uint256 bal = IERC20(token1).balanceOf(address(this));
                 uint256 toSend = owed1 > bal ? bal : owed1;
                 if (toSend > 0) {
+                    // Test mock: return value not checked intentionally.
+                    // forge-lint: disable-next-line(erc20-unchecked-transfer)
                     IERC20(token1).transfer(recipient, toSend);
                 }
             }
@@ -335,6 +352,7 @@ contract MockPositionManager {
 
     function _handleSettle(bytes memory data) internal {
         (Currency currency, uint256 amount, bool payerIsUser) = abi.decode(data, (Currency, uint256, bool));
+        amount; // Silence unused variable warning.
 
         if (payerIsUser) {
             // Determine how much to pull: use the pending settle amount if available.
@@ -350,6 +368,8 @@ contract MockPositionManager {
             if (!currency.isAddressZero() && toPull > 0) {
                 address token = Currency.unwrap(currency);
                 // Pull via Permit2, matching real PositionManager behavior.
+                // Safe: test mock; values in tests always fit in target type.
+                // forge-lint: disable-next-line(unsafe-typecast)
                 PERMIT2.transferFrom(msg.sender, address(this), uint160(toPull), token);
             }
             // For native ETH: msg.value already received
@@ -375,6 +395,8 @@ contract MockPositionManager {
             uint256 locked = poolLocked[token];
             uint256 sweepable = balance > locked ? balance - locked : 0;
             if (sweepable > 0) {
+                // Test mock: return value not checked intentionally.
+                // forge-lint: disable-next-line(erc20-unchecked-transfer)
                 IERC20(token).transfer(to, sweepable);
             }
         }

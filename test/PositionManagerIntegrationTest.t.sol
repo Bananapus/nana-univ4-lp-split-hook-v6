@@ -63,9 +63,6 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         projectToken.mint(address(positionManager), 50e18);
         terminalToken.mint(address(positionManager), 50e18);
 
-        uint256 hookProjectBefore = projectToken.balanceOf(address(hook));
-        uint256 hookTermBefore = terminalToken.balanceOf(address(hook));
-
         vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
 
@@ -95,8 +92,6 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
             positionManager.setCollectableFees(tokenId, 0, feeAmount);
             terminalToken.mint(address(positionManager), feeAmount);
         }
-
-        uint256 hookTermBefore = terminalToken.balanceOf(address(hook));
 
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
 

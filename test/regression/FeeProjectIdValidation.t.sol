@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";

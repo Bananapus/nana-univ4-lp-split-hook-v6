@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
@@ -39,8 +39,8 @@ contract MockPermit2 {
 
     function transferFrom(address from, address to, uint160 amount, address token) external {
         allowances[from][token][msg.sender] -= amount;
-        // forge-lint: disable-next-line(erc20-unchecked-transfer)
         // Test mock: return value not checked intentionally.
+        // forge-lint: disable-next-line(erc20-unchecked-transfer)
         IERC20(token).transferFrom(from, to, amount);
     }
 }

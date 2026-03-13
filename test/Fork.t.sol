@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 
 // JB core — deploy fresh within fork.
 import {JBPermissions} from "@bananapus/core-v6/src/JBPermissions.sol";
@@ -296,6 +296,7 @@ contract LPSplitHookForkTest is Test {
     // ───────────────────────── Internal deployment helpers
     // ────────────────
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function _deployJBCore() internal {
         jbPermissions = new JBPermissions(trustedForwarder);
         jbProjects = new JBProjects(multisig, address(0), trustedForwarder);

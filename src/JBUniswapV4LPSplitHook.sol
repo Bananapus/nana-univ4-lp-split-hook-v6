@@ -252,6 +252,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 terminals: new IJBTerminal[](0),
                 accountingContexts: new JBAccountingContext[](0),
                 decimals: _getTokenDecimals(terminalToken),
+                // Safe: truncation to uint32 is the standard Juicebox currency encoding.
+                // forge-lint: disable-next-line(unsafe-typecast)
                 currency: uint256(uint32(uint160(terminalToken)))
             }) returns (
             uint256 reclaimableAmount
@@ -479,8 +481,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     }
 
     /// @notice Collect LP fees and route them back to the project
-    // forge-lint: disable-next-line(mixed-case-function)
     // slither-disable-next-line reentrancy-events
+    // forge-lint: disable-next-line(mixed-case-function)
     function collectAndRouteLPFees(uint256 projectId, address terminalToken) external {
         uint256 tokenId = tokenIdOf[projectId][terminalToken];
         if (tokenId == 0) revert JBUniswapV4LPSplitHook_InvalidStageForAction();
@@ -588,7 +590,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(context.projectId);
                 initialWeightOf[context.projectId] = ruleset.weight;
             }
-            _accumulateTokens({projectId: context.projectId, projectToken: projectToken, amount: context.amount});
+            _accumulateTokens({projectId: context.projectId, amount: context.amount});
         } else {
             _burnReceivedTokens({projectId: context.projectId, projectToken: projectToken});
         }
@@ -607,6 +609,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     )
         external
     {
+        // Reserved for future mint slippage protection.
+        increaseAmount0Min;
+        increaseAmount1Min;
+
         _requirePermissionFrom({
             account: IJBDirectory(DIRECTORY).PROJECTS().ownerOf(projectId),
             projectId: projectId,
@@ -705,9 +711,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                     tickUpper: tickUpper,
                     liquidity: liquidity,
                     amount0: amount0,
-                    amount1: amount1,
-                    amount0Min: increaseAmount0Min,
-                    amount1Min: increaseAmount1Min
+                    amount1: amount1
                 });
 
                 tokenIdOf[projectId][terminalToken] = newTokenId;
@@ -730,7 +734,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     //*********************************************************************//
 
     /// @notice Accumulate project tokens in accumulation stage
-    function _accumulateTokens(uint256 projectId, address projectToken, uint256 amount) internal {
+    function _accumulateTokens(uint256 projectId, uint256 amount) internal {
         accumulatedProjectTokens[projectId] += amount;
     }
 
@@ -763,6 +767,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     )
         internal
     {
+        // Reserved for future mint slippage protection.
+        amount0Min;
+        amount1Min;
+
         uint256 projectTokenBalance = accumulatedProjectTokens[projectId];
 
         if (projectTokenBalance == 0) return;
@@ -843,9 +851,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             tickUpper: tickUpper,
             liquidity: liquidity,
             amount0: amount0,
-            amount1: amount1,
-            amount0Min: amount0Min,
-            amount1Min: amount1Min
+            amount1: amount1
         });
 
         tokenIdOf[projectId][terminalToken] = tokenId;
@@ -1175,9 +1181,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         int24 tickUpper,
         uint128 liquidity,
         uint256 amount0,
-        uint256 amount1,
-        uint256 amount0Min,
-        uint256 amount1Min
+        uint256 amount1
     )
         internal
     {
@@ -1210,10 +1214,18 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         );
 
         bytes[] memory params = new bytes[](5);
-        // Safe: amount0/amount1 are bounded by token balances which fit in uint128.
-        // forge-lint: disable-next-line(unsafe-typecast)
         params[0] = abi.encode(
-            key, tickLower, tickUpper, uint256(liquidity), uint128(amount0), uint128(amount1), address(this), ""
+            key,
+            tickLower,
+            tickUpper,
+            uint256(liquidity),
+            // Safe: amount0/amount1 are bounded by token balances which fit in uint128.
+            // forge-lint: disable-next-line(unsafe-typecast)
+            uint128(amount0),
+            // forge-lint: disable-next-line(unsafe-typecast)
+            uint128(amount1),
+            address(this),
+            ""
         );
         // SETTLE currency0: payerIsUser=true means PositionManager pulls from msg.sender (this contract) via approve
         params[1] = abi.encode(key.currency0, uint256(0), true);
@@ -1233,11 +1245,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     function _approveViaPermit2(address token, uint256 amount) internal {
         IERC20(token).forceApprove({spender: address(PERMIT2), value: amount});
         // Safe: amount is bounded by token balance (fits uint160); block.timestamp + 60 fits uint48.
-        // forge-lint: disable-next-line(unsafe-typecast)
         PERMIT2.approve({
             token: token,
             spender: address(POSITION_MANAGER),
+            // forge-lint: disable-next-line(unsafe-typecast)
             amount: uint160(amount),
+            // forge-lint: disable-next-line(unsafe-typecast)
             expiration: uint48(block.timestamp + 60)
         });
     }

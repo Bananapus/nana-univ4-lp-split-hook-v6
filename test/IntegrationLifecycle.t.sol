@@ -210,6 +210,7 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
     ///         verify they have independent token IDs.
     function test_FullLifecycle_MultipleProjects() public {
         // --- Set up project 3 ---
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 PROJECT_3 = 3;
         MockERC20 projectToken3 = new MockERC20("Project3 Token", "P3", 18);
 

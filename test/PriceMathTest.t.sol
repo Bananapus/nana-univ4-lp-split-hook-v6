@@ -20,14 +20,17 @@ contract TestableJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
         JBUniswapV4LPSplitHook(_directory, _permissions, _tokens, _poolManager, _positionManager, IHooks(address(0)))
     {}
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function exposed_getIssuanceRate(uint256 projectId, address terminalToken) external view returns (uint256) {
         return _getIssuanceRate(projectId, terminalToken);
     }
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function exposed_getCashOutRate(uint256 projectId, address terminalToken) external view returns (uint256) {
         return _getCashOutRate(projectId, terminalToken);
     }
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function exposed_getIssuanceRateSqrtPriceX96(
         uint256 projectId,
         address terminalToken,
@@ -40,6 +43,7 @@ contract TestableJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
         return _getIssuanceRateSqrtPriceX96(projectId, terminalToken, projectToken);
     }
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function exposed_getCashOutRateSqrtPriceX96(
         uint256 projectId,
         address terminalToken,
@@ -52,6 +56,7 @@ contract TestableJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
         return _getCashOutRateSqrtPriceX96(projectId, terminalToken, projectToken);
     }
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function exposed_calculateTickBounds(
         uint256 projectId,
         address terminalToken,
@@ -64,10 +69,12 @@ contract TestableJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
         return _calculateTickBounds(projectId, terminalToken, projectToken);
     }
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function exposed_alignTickToSpacing(int24 tick, int24 spacing) external pure returns (int24) {
         return _alignTickToSpacing(tick, spacing);
     }
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function exposed_getSqrtPriceX96ForCurrentJuiceboxPrice(
         uint256 projectId,
         address terminalToken,
@@ -80,6 +87,7 @@ contract TestableJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
         return _getSqrtPriceX96ForCurrentJuiceboxPrice(projectId, terminalToken, projectToken);
     }
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function exposed_computeInitialSqrtPrice(
         uint256 projectId,
         address terminalToken,
@@ -92,6 +100,7 @@ contract TestableJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
         return _computeInitialSqrtPrice(projectId, terminalToken, projectToken);
     }
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function exposed_computeOptimalCashOutAmount(
         uint256 projectId,
         address terminalToken,
@@ -230,6 +239,7 @@ contract PriceMathTest is LPSplitHookV4TestBase {
         );
 
         // We confirm it is > 2^96 (since there are 1000 projectTokens per terminalToken)
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 Q96 = 2 ** 96;
 
         // Determine sort order to know which branch is taken
