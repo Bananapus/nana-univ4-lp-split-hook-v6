@@ -30,7 +30,7 @@ This ensures the AMM price always trades within the project's intrinsic economic
    → Creates V4 pool (with ORACLE_HOOK for TWAP) at geometric mean of [cashOut, issuance] rates
    → Cashes out optimal fraction of tokens for terminal tokens
    → Mints concentrated LP position bounded by rate-derived ticks
-   → Sets projectDeployed[projectId] = true
+   → Sets projectDeployed[projectId][terminalToken] = true
    |
 4. Future reserved token distributions → burn received tokens
    |
@@ -39,7 +39,8 @@ This ensures the AMM price always trades within the project's intrinsic economic
    → Routes terminal token fees: FEE_PERCENT to fee project, rest to original project
    → Burns collected project token fees
    |
-6. Anyone calls rebalanceLiquidity(projectId, terminalToken, ...)
+6. Project owner calls rebalanceLiquidity(projectId, terminalToken, ...)
+   → Collects accrued fees and routes them
    → Removes old position, burns NFT
    → Recalculates tick bounds from current rates
    → Mints new position with updated bounds
@@ -60,15 +61,15 @@ V4 concentrated liquidity positions aren't 50/50 -- the token ratio depends on w
 
 | Contract | Description |
 |----------|-------------|
-| `JBUniswapV4LPSplitHook` | `IJBSplitHook` implementation with a two-stage lifecycle. Accumulates project tokens before deployment, burns them after. Creates V4 pools (with `ORACLE_HOOK` for TWAP), mints/rebalances LP positions, collects and routes fees. Constructor takes 6 params: `directory`, `permissions`, `tokens`, `poolManager`, `positionManager`, `oracleHook`. Inherits `JBPermissioned`, `Ownable`. |
-| `JBUniswapV4LPSplitHookDeployer` | Factory that deploys hook clones via `LibClone`. Supports deterministic CREATE2 deployment with caller-scoped salts. Anyone can deploy a new hook by providing `feeProjectId` and `feePercent`. |
+| `JBUniswapV4LPSplitHook` | `IJBSplitHook` implementation with a two-stage lifecycle. Accumulates project tokens before deployment, burns them after. Creates V4 pools (with `ORACLE_HOOK` for TWAP), mints/rebalances LP positions, collects and routes fees. Constructor takes 6 params: `directory`, `permissions`, `tokens`, `poolManager`, `positionManager`, `oracleHook`. Inherits `JBPermissioned`. Each clone is initialized with `feeProjectId` and `feePercent`. |
+| `JBUniswapV4LPSplitHookDeployer` | Factory that deploys hook clones via `LibClone`. Supports deterministic CREATE2 deployment with caller-scoped salts. Registers each deployment in `JBAddressRegistry`. Anyone can deploy a new hook by providing `feeProjectId` and `feePercent`. |
 
 ### Interfaces
 
 | Interface | Description |
 |-----------|-------------|
-| `IJBUniswapV4LPSplitHook` | Public interface: `initialize`, `isPoolDeployed`, `poolKeyOf`, `deployPool`, `collectAndRouteLPFees`, `claimFeeTokensFor`, plus events. |
-| `IJBUniswapV4LPSplitHookDeployer` | Factory interface: `HOOK`, `deployHookFor`, plus `HookDeployed` event. |
+| `IJBUniswapV4LPSplitHook` | Public interface: `initialize`, `isPoolDeployed`, `poolKeyOf`, `deployPool`, `collectAndRouteLPFees`, `claimFeeTokensFor`. Events: `ProjectDeployed`, `LPFeesRouted`, `FeeTokensClaimed`, `TokensBurned`. |
+| `IJBUniswapV4LPSplitHookDeployer` | Factory interface: `HOOK`, `ADDRESS_REGISTRY`, `deployHookFor`. Event: `HookDeployed`. |
 
 ## Install
 
@@ -87,7 +88,7 @@ forge install
 | Command | Description |
 |---------|-------------|
 | `forge build` | Compile (requires `via_ir = true` due to stack depth) |
-| `forge test` | Run all tests (9 test files covering full lifecycle) |
+| `forge test` | Run all tests (14 test files + fork tests covering full lifecycle) |
 | `forge test -vvv` | Run tests with full trace |
 
 ### Settings
@@ -108,8 +109,8 @@ runs = 4096
 
 ```
 src/
-  JBUniswapV4LPSplitHook.sol               # Main split hook (1125 lines)
-  JBUniswapV4LPSplitHookDeployer.sol       # Clone factory (61 lines)
+  JBUniswapV4LPSplitHook.sol               # Main split hook (~1300 lines)
+  JBUniswapV4LPSplitHookDeployer.sol       # Clone factory (86 lines)
   interfaces/
     IJBUniswapV4LPSplitHook.sol            # Hook interface + events
     IJBUniswapV4LPSplitHookDeployer.sol    # Factory interface
@@ -117,16 +118,20 @@ test/
   ConstructorTest.t.sol                      # Constructor validation
   AccumulationStageTest.t.sol                # Stage 1: token accumulation
   DeploymentStageTest.t.sol                  # Pool creation, LP minting
+  DeployerTest.t.sol                         # Clone factory + address registry
   FeeRoutingTest.t.sol                       # Fee collection and routing
   RebalanceTest.t.sol                        # Liquidity rebalancing
   NativeETHTest.t.sol                        # Native ETH handling
   PriceMathTest.t.sol                        # Price conversion math
   SecurityTest.t.sol                         # Permission checks, access control
   WeightDecayDeployTest.t.sol               # Permissionless deploy after 10x weight decay
+  PositionManagerIntegrationTest.t.sol      # PositionManager interaction tests
+  SplitHookRegressions.t.sol                # Audit finding regressions (H-2, M-1, M-2)
   IntegrationLifecycle.t.sol                 # Full end-to-end workflow
   Fork.t.sol                                 # Fork tests with real V4 + JB core
+  fork/GeomeanLPFork.t.sol                  # Geometric mean pricing fork tests
   TestBaseV4.sol                             # Shared test infrastructure
-  regression/                               # Audit finding regression tests (M-31, M-32, L-25)
+  regression/                               # Targeted regression tests
 script/
   Deploy.s.sol                               # Sphinx deployment script
 ```
@@ -136,16 +141,18 @@ script/
 | Permission | Required For |
 |------------|-------------|
 | `SET_BUYBACK_POOL` | `deployPool` -- create V4 pool and mint LP position (unless weight has decayed 10x) |
+| `SET_BUYBACK_POOL` | `rebalanceLiquidity` -- burn old position, mint new one with updated tick bounds |
 | `SET_BUYBACK_POOL` | `claimFeeTokensFor` -- claim accumulated fee-project tokens |
 
-Note: `collectAndRouteLPFees` and `rebalanceLiquidity` are **permissionless** -- anyone can call them. This is safe because they only operate on existing positions and route funds to verified project terminals.
+`collectAndRouteLPFees` is **permissionless** -- anyone can call it. This is safe because it only collects fees from the existing position and routes them to verified project terminals.
 
-`deployPool` also becomes **permissionless** when the current ruleset's weight has decayed to 1/10th or less of the weight when the hook first started accumulating tokens. This prevents a stale owner from blocking LP deployment indefinitely.
+`deployPool` becomes **permissionless** when the current ruleset's weight has decayed to 1/10th or less of the weight when the hook first started accumulating tokens. This prevents a stale owner from blocking LP deployment indefinitely.
 
 ## Risks
 
 - **Impermanent loss:** The LP position is subject to standard concentrated liquidity IL. If the market price moves outside the [cashOut, issuance] range, the position becomes single-sided.
-- **Stale tick bounds:** If the project's issuance or cash-out rates change significantly (e.g., new ruleset with different weight), the LP position bounds become stale. `rebalanceLiquidity` must be called to update them.
+- **Stale tick bounds:** If the project's issuance or cash-out rates change significantly (e.g., new ruleset with different weight), the LP position bounds become stale. The project owner must call `rebalanceLiquidity` to update them.
 - **Cash-out price impact:** The initial `deployPool` cashes out a fraction of accumulated tokens, which affects the bonding curve. Large accumulations may create meaningful price impact.
 - **One position per pool:** The hook manages a single V4 NFT position per project/terminal-token pair. Rebalancing destroys and recreates it, temporarily leaving no active position.
 - **Fee-project token accumulation:** Fee-project tokens are held by the hook until claimed via `claimFeeTokensFor`. If the fee project token changes or is not deployed, tokens may be stuck.
+- **Rebalance to zero liquidity:** If both token balances are zero when rebalancing, the transaction reverts with `InsufficientLiquidity` to prevent bricking the position (tokenIdOf would become zero while projectDeployed remains true).
