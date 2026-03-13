@@ -66,17 +66,8 @@ interface IJBUniswapV4LPSplitHook {
     /// @notice Deploy a Uniswap V4 pool using accumulated project tokens.
     /// @param projectId The Juicebox project ID.
     /// @param terminalToken The terminal token address.
-    /// @param amount0Min Minimum amount of token0 to add (slippage protection, defaults to 0).
-    /// @param amount1Min Minimum amount of token1 to add (slippage protection, defaults to 0).
     /// @param minCashOutReturn Minimum terminal tokens from cash-out (slippage protection, 0 = auto 1% tolerance).
-    function deployPool(
-        uint256 projectId,
-        address terminalToken,
-        uint256 amount0Min,
-        uint256 amount1Min,
-        uint256 minCashOutReturn
-    )
-        external;
+    function deployPool(uint256 projectId, address terminalToken, uint256 minCashOutReturn) external;
 
     /// @notice Initialize per-instance config on a clone.
     /// @param feeProjectId Project ID to receive LP fees.

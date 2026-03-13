@@ -244,6 +244,6 @@ contract LPSplitHookV4TestBase is Test {
         // MockPositionManager automatically syncs Slot0 into MockPoolManager during
         // initializePool, so StateLibrary.getSlot0 works in _addUniswapLiquidity.
         vm.prank(owner);
-        hook.deployPool(projectId, address(terminalToken), 0, 0, 0);
+        hook.deployPool(projectId, address(terminalToken), 0);
     }
 }

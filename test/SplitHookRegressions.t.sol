@@ -38,7 +38,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
 
         vm.prank(attacker);
         vm.expectRevert();
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
 
         // Verify the position was not disturbed
         uint256 tokenIdAfter = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
@@ -51,7 +51,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         assertTrue(originalTokenId != 0, "should have an active position");
 
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
 
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertTrue(newTokenId != 0, "new tokenId should be nonzero");
@@ -68,7 +68,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         uint256 originalTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
 
         vm.prank(operator);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
 
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertTrue(newTokenId != 0, "new tokenId should be nonzero");
@@ -102,7 +102,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         // Should revert instead of zeroing tokenIdOf
         vm.prank(owner);
         vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientLiquidity.selector);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
 
         // tokenIdOf should remain unchanged (revert rolled back state)
         assertEq(
@@ -139,7 +139,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         uint256 addToBalanceCountBefore = terminal.addToBalanceCallCount();
 
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
 
         // Verify fees were routed: pay (for fee project) and/or addToBalance (for project)
         bool feesRouted =
@@ -174,7 +174,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         uint256 claimableBefore = hook.claimableFeeTokens(PROJECT_ID);
 
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
 
         uint256 claimableAfter = hook.claimableFeeTokens(PROJECT_ID);
         assertGt(claimableAfter, claimableBefore, "claimableFeeTokens should increase after rebalance with fees");

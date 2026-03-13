@@ -59,7 +59,7 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
             )
         );
         vm.prank(randomUser);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0, 0);
+        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
     }
 
     /// @notice deployPool reverts for unauthorized user when weight has decayed just under 10x.
@@ -82,7 +82,7 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
             )
         );
         vm.prank(randomUser);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0, 0);
+        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -104,7 +104,7 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
 
         // Random user can deploy — no permission needed
         vm.prank(randomUser);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0, 0);
+        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
 
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertTrue(tokenId != 0, "pool should be deployed by random user after 10x decay");
@@ -123,7 +123,7 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
         vm.stopPrank();
 
         vm.prank(randomUser);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0, 0);
+        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
 
         assertTrue(hook.tokenIdOf(PROJECT_ID, address(terminalToken)) != 0, "pool should be deployed after 100x decay");
     }
@@ -147,7 +147,7 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
         // The key assertion: it does NOT revert with JBPermissioned_Unauthorized.
         vm.prank(randomUser);
         vm.expectRevert(); // InvalidSqrtPrice(0), not Unauthorized
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0, 0);
+        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -169,7 +169,7 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
             )
         );
         vm.prank(randomUser);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0, 0);
+        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -187,7 +187,7 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
         vm.stopPrank();
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0, 0);
+        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
 
         assertTrue(hook.tokenIdOf(PROJECT_ID, address(terminalToken)) != 0, "owner should deploy without decay");
     }
@@ -205,7 +205,7 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
         vm.stopPrank();
 
         vm.prank(operator);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0, 0);
+        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
 
         assertTrue(
             hook.tokenIdOf(PROJECT_ID, address(terminalToken)) != 0, "permitted operator should deploy without decay"
@@ -252,6 +252,6 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
             )
         );
         vm.prank(randomUser);
-        hook.deployPool(projectB, address(terminalToken), 0, 0, 0);
+        hook.deployPool(projectB, address(terminalToken), 0);
     }
 }

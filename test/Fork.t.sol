@@ -188,7 +188,7 @@ contract LPSplitHookForkTest is Test {
         //   3. Initialize a real V4 pool via PositionManager
         //   4. Mint a real LP position NFT
         vm.prank(multisig);
-        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0, 0, 0);
+        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
 
         // Verify pool was deployed.
         assertTrue(hook.projectDeployed(projectId, JBConstants.NATIVE_TOKEN), "project should be deployed");
@@ -216,7 +216,7 @@ contract LPSplitHookForkTest is Test {
     function test_fork_burnAfterDeploy() public {
         // Deploy pool first.
         vm.prank(multisig);
-        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0, 0, 0);
+        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
 
         // Mint more tokens to the hook.
         vm.prank(multisig);
@@ -277,7 +277,7 @@ contract LPSplitHookForkTest is Test {
         // With the old forceApprove(POSITION_MANAGER) approach, this would revert
         // because the real PositionManager uses Permit2.transferFrom, not ERC20.transferFrom.
         vm.prank(multisig);
-        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0, 0, 0);
+        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
 
         // After deploy: hook should still have zero DIRECT allowance to PositionManager.
         // This proves the hook routes approvals through Permit2, not directly.
@@ -427,7 +427,7 @@ contract LPSplitHookForkTest is Test {
 
         // Now deploy via the hook — it should detect the existing pool and use its actual price.
         vm.prank(multisig);
-        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0, 0, 0);
+        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
 
         // Verify deployment succeeded.
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should be deployed");
@@ -502,7 +502,7 @@ contract LPSplitHookForkTest is Test {
         // Random user should be able to deploy permissionlessly
         address randomUser = makeAddr("randomDeployer");
         vm.prank(randomUser);
-        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0, 0, 0);
+        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
 
         // Verify pool was deployed
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should be deployed by random user");
@@ -519,6 +519,6 @@ contract LPSplitHookForkTest is Test {
         address randomUser = makeAddr("randomDeployer");
         vm.prank(randomUser);
         vm.expectRevert();
-        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0, 0, 0);
+        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
     }
 }

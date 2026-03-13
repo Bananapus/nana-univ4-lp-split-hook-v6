@@ -47,7 +47,7 @@ contract StaleTokenIdOfTest is LPSplitHookV4TestBase {
         // Rebalance now reverts instead of zeroing tokenIdOf
         vm.prank(owner);
         vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientLiquidity.selector);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
 
         // tokenIdOf should remain unchanged (revert rolled back state)
         uint256 tokenIdAfter = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
@@ -63,7 +63,7 @@ contract StaleTokenIdOfTest is LPSplitHookV4TestBase {
         uint256 originalTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
 
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
 
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertTrue(newTokenId != 0, "tokenIdOf should be nonzero after normal rebalance");

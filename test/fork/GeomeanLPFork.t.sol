@@ -299,7 +299,7 @@ contract GeomeanLPForkTest is Test {
 
             // Deploy pool as project owner.
             vm.prank(multisig);
-            hook.deployPool(pid, JBConstants.NATIVE_TOKEN, 0, 0, 0);
+            hook.deployPool(pid, JBConstants.NATIVE_TOKEN, 0);
 
             // Assert: pool deployed.
             assertTrue(
@@ -356,7 +356,7 @@ contract GeomeanLPForkTest is Test {
 
             // Deploy pool.
             vm.prank(multisig);
-            hook.deployPool(pid, JBConstants.NATIVE_TOKEN, 0, 0, 0);
+            hook.deployPool(pid, JBConstants.NATIVE_TOKEN, 0);
 
             assertTrue(
                 hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN),
@@ -388,7 +388,7 @@ contract GeomeanLPForkTest is Test {
         _accumulateTokens(projectId, address(projectToken), 100_000e18);
 
         vm.prank(multisig);
-        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0, 0, 0);
+        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
 
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should be deployed");
 
@@ -432,7 +432,7 @@ contract GeomeanLPForkTest is Test {
 
         // Now rebalance liquidity.
         vm.prank(multisig);
-        hook.rebalanceLiquidity(projectId, JBConstants.NATIVE_TOKEN, 0, 0, 0, 0);
+        hook.rebalanceLiquidity(projectId, JBConstants.NATIVE_TOKEN, 0, 0);
 
         // Verify new position exists.
         uint256 newTokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
@@ -479,7 +479,7 @@ contract GeomeanLPForkTest is Test {
 
             // Deploy pool with USDC.
             vm.prank(multisig);
-            hook.deployPool(pid, address(usdc), 0, 0, 0);
+            hook.deployPool(pid, address(usdc), 0);
 
             // Assert: pool deployed.
             assertTrue(
@@ -533,7 +533,7 @@ contract GeomeanLPForkTest is Test {
             _accumulateTokens(pid, address(pToken), tokenAmount);
 
             vm.prank(multisig);
-            hook.deployPool(pid, address(usdc), 0, 0, 0);
+            hook.deployPool(pid, address(usdc), 0);
 
             uint256 tokenId = hook.tokenIdOf(pid, address(usdc));
             assertTrue(tokenId != 0, "position should exist");
@@ -585,7 +585,7 @@ contract GeomeanLPForkTest is Test {
 
             // Deploy pool.
             vm.prank(multisig);
-            hook.deployPool(pid, JBConstants.NATIVE_TOKEN, 0, 0, 0);
+            hook.deployPool(pid, JBConstants.NATIVE_TOKEN, 0);
 
             assertTrue(
                 hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN),

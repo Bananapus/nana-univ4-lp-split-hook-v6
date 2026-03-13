@@ -522,15 +522,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Deploy a Uniswap V4 pool for a project using accumulated tokens
     // slither-disable-next-line reentrancy-benign,reentrancy-events,unused-return
-    function deployPool(
-        uint256 projectId,
-        address terminalToken,
-        uint256 amount0Min,
-        uint256 amount1Min,
-        uint256 minCashOutReturn
-    )
-        external
-    {
+    function deployPool(uint256 projectId, address terminalToken, uint256 minCashOutReturn) external {
         // Allow anyone to deploy if the current ruleset's weight has decayed 10x from the initial weight.
         // Otherwise, require SET_BUYBACK_POOL permission from the project owner.
         address controller = address(IJBDirectory(DIRECTORY).controllerOf(projectId));
@@ -560,8 +552,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             projectId: projectId,
             projectToken: projectToken,
             terminalToken: terminalToken,
-            amount0Min: amount0Min,
-            amount1Min: amount1Min,
             minCashOutReturn: minCashOutReturn
         });
 
@@ -603,16 +593,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint256 projectId,
         address terminalToken,
         uint256 decreaseAmount0Min,
-        uint256 decreaseAmount1Min,
-        uint256 increaseAmount0Min,
-        uint256 increaseAmount1Min
+        uint256 decreaseAmount1Min
     )
         external
     {
-        // Reserved for future mint slippage protection.
-        increaseAmount0Min;
-        increaseAmount1Min;
-
         _requirePermissionFrom({
             account: IJBDirectory(DIRECTORY).PROJECTS().ownerOf(projectId),
             projectId: projectId,
@@ -761,16 +745,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint256 projectId,
         address projectToken,
         address terminalToken,
-        uint256 amount0Min,
-        uint256 amount1Min,
         uint256 minCashOutReturn
     )
         internal
     {
-        // Reserved for future mint slippage protection.
-        amount0Min;
-        amount1Min;
-
         uint256 projectTokenBalance = accumulatedProjectTokens[projectId];
 
         if (projectTokenBalance == 0) return;
@@ -1116,8 +1094,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint256 projectId,
         address projectToken,
         address terminalToken,
-        uint256 amount0Min,
-        uint256 amount1Min,
         uint256 minCashOutReturn
     )
         internal
@@ -1130,8 +1106,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             projectId: projectId,
             projectToken: projectToken,
             terminalToken: terminalToken,
-            amount0Min: amount0Min,
-            amount1Min: amount1Min,
             minCashOutReturn: minCashOutReturn
         });
     }
