@@ -14,6 +14,7 @@ import {
 import {Sphinx} from "@sphinx-labs/contracts/contracts/foundry/SphinxPlugin.sol";
 import {Script} from "forge-std/Script.sol";
 
+import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 
@@ -101,7 +102,13 @@ contract DeployScript is Script, Sphinx {
 
     function deploy() public sphinx {
         JBUniswapV4LPSplitHook hookImpl = new JBUniswapV4LPSplitHook{salt: hookSalt}(
-            address(core.directory), core.permissions, address(core.tokens), poolManager, positionManager, router.hook
+            address(core.directory),
+            core.permissions,
+            address(core.tokens),
+            poolManager,
+            positionManager,
+            IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
+            router.hook
         );
 
         new JBUniswapV4LPSplitHookDeployer{salt: deployerSalt}(hookImpl, registry.registry);

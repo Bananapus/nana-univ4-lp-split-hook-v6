@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 
 // JB core — deploy fresh within fork.
 import {JBPermissions} from "@bananapus/core-v6/src/JBPermissions.sol";
@@ -37,6 +37,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
 import {IPermit2} from "@uniswap/permit2/src/interfaces/IPermit2.sol";
 
 // Hook under test.
@@ -135,6 +136,7 @@ contract LPSplitHookForkTest is Test {
             address(jbTokens),
             V4_POOL_MANAGER,
             V4_POSITION_MANAGER,
+            IAllowanceTransfer(address(PERMIT2)),
             IHooks(address(0))
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
@@ -188,7 +190,7 @@ contract LPSplitHookForkTest is Test {
         //   3. Initialize a real V4 pool via PositionManager
         //   4. Mint a real LP position NFT
         vm.prank(multisig);
-        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0, 0, 0);
+        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
 
         // Verify pool was deployed.
         assertTrue(hook.projectDeployed(projectId, JBConstants.NATIVE_TOKEN), "project should be deployed");
@@ -216,7 +218,7 @@ contract LPSplitHookForkTest is Test {
     function test_fork_burnAfterDeploy() public {
         // Deploy pool first.
         vm.prank(multisig);
-        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0, 0, 0);
+        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
 
         // Mint more tokens to the hook.
         vm.prank(multisig);
@@ -277,7 +279,7 @@ contract LPSplitHookForkTest is Test {
         // With the old forceApprove(POSITION_MANAGER) approach, this would revert
         // because the real PositionManager uses Permit2.transferFrom, not ERC20.transferFrom.
         vm.prank(multisig);
-        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0, 0, 0);
+        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
 
         // After deploy: hook should still have zero DIRECT allowance to PositionManager.
         // This proves the hook routes approvals through Permit2, not directly.
@@ -296,6 +298,7 @@ contract LPSplitHookForkTest is Test {
     // ───────────────────────── Internal deployment helpers
     // ────────────────
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function _deployJBCore() internal {
         jbPermissions = new JBPermissions(trustedForwarder);
         jbProjects = new JBProjects(multisig, address(0), trustedForwarder);
@@ -426,7 +429,7 @@ contract LPSplitHookForkTest is Test {
 
         // Now deploy via the hook — it should detect the existing pool and use its actual price.
         vm.prank(multisig);
-        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0, 0, 0);
+        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
 
         // Verify deployment succeeded.
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should be deployed");
@@ -501,7 +504,7 @@ contract LPSplitHookForkTest is Test {
         // Random user should be able to deploy permissionlessly
         address randomUser = makeAddr("randomDeployer");
         vm.prank(randomUser);
-        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0, 0, 0);
+        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
 
         // Verify pool was deployed
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should be deployed by random user");
@@ -518,6 +521,6 @@ contract LPSplitHookForkTest is Test {
         address randomUser = makeAddr("randomDeployer");
         vm.prank(randomUser);
         vm.expectRevert();
-        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0, 0, 0);
+        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
     }
 }

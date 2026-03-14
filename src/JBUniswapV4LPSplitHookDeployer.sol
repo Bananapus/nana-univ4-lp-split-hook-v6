@@ -67,7 +67,7 @@ contract JBUniswapV4LPSplitHookDeployer is IJBUniswapV4LPSplitHookDeployer {
                 })
         );
 
-        IJBUniswapV4LPSplitHook(address(hook)).initialize(feeProjectId, feePercent);
+        IJBUniswapV4LPSplitHook(address(hook)).initialize({feeProjectId: feeProjectId, feePercent: feePercent});
 
         emit HookDeployed(feeProjectId, feePercent, hook, msg.sender);
 

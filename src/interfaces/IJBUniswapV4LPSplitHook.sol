@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
+import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 
 /// @notice Manages a two-stage Uniswap V4 pool deployment process for Juicebox projects, routing LP fees back to the
@@ -46,6 +47,10 @@ interface IJBUniswapV4LPSplitHook {
     /// @return deployed True if pool exists.
     function isPoolDeployed(uint256 projectId, address terminalToken) external view returns (bool deployed);
 
+    /// @notice The Permit2 utility.
+    // forge-lint: disable-next-line(mixed-case-function)
+    function PERMIT2() external view returns (IAllowanceTransfer);
+
     /// @notice Get the PoolKey for a deployed project/terminal token pair.
     /// @param projectId The Juicebox project ID.
     /// @param terminalToken The terminal token address.
@@ -66,17 +71,8 @@ interface IJBUniswapV4LPSplitHook {
     /// @notice Deploy a Uniswap V4 pool using accumulated project tokens.
     /// @param projectId The Juicebox project ID.
     /// @param terminalToken The terminal token address.
-    /// @param amount0Min Minimum amount of token0 to add (slippage protection, defaults to 0).
-    /// @param amount1Min Minimum amount of token1 to add (slippage protection, defaults to 0).
     /// @param minCashOutReturn Minimum terminal tokens from cash-out (slippage protection, 0 = auto 1% tolerance).
-    function deployPool(
-        uint256 projectId,
-        address terminalToken,
-        uint256 amount0Min,
-        uint256 amount1Min,
-        uint256 minCashOutReturn
-    )
-        external;
+    function deployPool(uint256 projectId, address terminalToken, uint256 minCashOutReturn) external;
 
     /// @notice Initialize per-instance config on a clone.
     /// @param feeProjectId Project ID to receive LP fees.

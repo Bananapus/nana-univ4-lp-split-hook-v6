@@ -28,7 +28,9 @@ contract StaleTokenIdOfTest is LPSplitHookV4TestBase {
         uint256 pmProjectBal = projectToken.balanceOf(address(positionManager));
         uint256 pmTerminalBal = terminalToken.balanceOf(address(positionManager));
         vm.startPrank(address(positionManager));
+        // forge-lint: disable-next-line(erc20-unchecked-transfer)
         if (pmProjectBal > 0) projectToken.transfer(address(0xdead), pmProjectBal);
+        // forge-lint: disable-next-line(erc20-unchecked-transfer)
         if (pmTerminalBal > 0) terminalToken.transfer(address(0xdead), pmTerminalBal);
         vm.stopPrank();
 
@@ -36,14 +38,16 @@ contract StaleTokenIdOfTest is LPSplitHookV4TestBase {
         uint256 hookProjectBal = projectToken.balanceOf(address(hook));
         uint256 hookTerminalBal = terminalToken.balanceOf(address(hook));
         vm.startPrank(address(hook));
+        // forge-lint: disable-next-line(erc20-unchecked-transfer)
         if (hookProjectBal > 0) projectToken.transfer(address(0xdead), hookProjectBal);
+        // forge-lint: disable-next-line(erc20-unchecked-transfer)
         if (hookTerminalBal > 0) terminalToken.transfer(address(0xdead), hookTerminalBal);
         vm.stopPrank();
 
         // Rebalance now reverts instead of zeroing tokenIdOf
         vm.prank(owner);
         vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientLiquidity.selector);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
 
         // tokenIdOf should remain unchanged (revert rolled back state)
         uint256 tokenIdAfter = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
@@ -59,7 +63,7 @@ contract StaleTokenIdOfTest is LPSplitHookV4TestBase {
         uint256 originalTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
 
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
 
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertTrue(newTokenId != 0, "tokenIdOf should be nonzero after normal rebalance");

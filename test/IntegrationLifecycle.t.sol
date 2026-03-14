@@ -36,7 +36,7 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
 
         // Deploy pool manually (owner required)
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0, 0);
+        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
 
         // Verify pool was created (tokenId is nonzero)
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
@@ -126,7 +126,7 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
 
         // Rebalance (requires owner permission)
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
 
         // Verify old position was burned and new one minted
         assertEq(
@@ -210,6 +210,7 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
     ///         verify they have independent token IDs.
     function test_FullLifecycle_MultipleProjects() public {
         // --- Set up project 3 ---
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 PROJECT_3 = 3;
         MockERC20 projectToken3 = new MockERC20("Project3 Token", "P3", 18);
 
@@ -260,9 +261,9 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
 
         // --- Deploy both pools (owner required) ---
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0, 0);
+        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
         vm.prank(owner);
-        hook.deployPool(PROJECT_3, address(terminalToken), 0, 0, 0);
+        hook.deployPool(PROJECT_3, address(terminalToken), 0);
 
         // --- Verify independent token IDs ---
         uint256 tokenId1 = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
@@ -337,7 +338,7 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
 
         // Deploy pool (owner required)
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0, 0, 0);
+        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
 
         // Verify pool was created
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));

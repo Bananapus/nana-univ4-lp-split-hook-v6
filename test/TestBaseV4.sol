@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
@@ -9,6 +9,7 @@ import {JBSplit} from "@bananapus/core-v6/src/structs/JBSplit.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {IJBSplitHook} from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
+import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
@@ -39,8 +40,8 @@ contract MockPermit2 {
 
     function transferFrom(address from, address to, uint160 amount, address token) external {
         allowances[from][token][msg.sender] -= amount;
-        // forge-lint: disable-next-line(erc20-unchecked-transfer)
         // Test mock: return value not checked intentionally.
+        // forge-lint: disable-next-line(erc20-unchecked-transfer)
         IERC20(token).transferFrom(from, to, amount);
     }
 }
@@ -152,7 +153,8 @@ contract LPSplitHookV4TestBase is Test {
         _addDirectoryTerminal(PROJECT_ID, address(terminal));
 
         // Deploy mock Permit2 at canonical address (used by hook's _approveViaPermit2)
-        vm.etch(0x000000000022D473030F116dDEE9F6B43aC78BA3, address(new MockPermit2()).code);
+        address permit2Addr = 0x000000000022D473030F116dDEE9F6B43aC78BA3;
+        vm.etch(permit2Addr, address(new MockPermit2()).code);
 
         // Deploy the hook (implementation + clone + initialize)
         JBUniswapV4LPSplitHook hookImpl = new JBUniswapV4LPSplitHook(
@@ -161,6 +163,7 @@ contract LPSplitHookV4TestBase is Test {
             address(jbTokens),
             IPoolManager(address(poolManager)),
             IPositionManager(address(positionManager)),
+            IAllowanceTransfer(permit2Addr),
             IHooks(address(0))
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
@@ -244,6 +247,6 @@ contract LPSplitHookV4TestBase is Test {
         // MockPositionManager automatically syncs Slot0 into MockPoolManager during
         // initializePool, so StateLibrary.getSlot0 works in _addUniswapLiquidity.
         vm.prank(owner);
-        hook.deployPool(projectId, address(terminalToken), 0, 0, 0);
+        hook.deployPool(projectId, address(terminalToken), 0);
     }
 }

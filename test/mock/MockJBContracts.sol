@@ -120,7 +120,6 @@ contract MockJBDirectory {
         if (sig == 0xd1754153) {
             uint256 projectId = abi.decode(msg.data[4:], (uint256));
             address[] storage terminals = _terminalsList[projectId];
-            uint256 len = terminals.length;
 
             // Encode as dynamic array
             bytes memory result = abi.encode(terminals);
@@ -271,8 +270,8 @@ contract MockJBController {
                 basedOnId: 0,
                 start: uint48(block.timestamp),
                 duration: 0,
-                // forge-lint: disable-next-line(unsafe-typecast)
                 // Safe: test weights are set by test code and always fit in uint112.
+                // forge-lint: disable-next-line(unsafe-typecast)
                 weight: uint112(fw),
                 weightCutPercent: 0,
                 approvalHook: IJBRulesetApprovalHook(address(0)),
@@ -412,7 +411,8 @@ contract MockJBMultiTerminal {
     function cashOutTokensOf(
         address,
         /* holder */
-        uint256 projectId,
+        uint256,
+        /* projectId */
         uint256 cashOutCount,
         address tokenToReclaim,
         uint256,

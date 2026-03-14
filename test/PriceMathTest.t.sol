@@ -4,6 +4,7 @@ pragma solidity 0.8.26;
 import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
 import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
+import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
@@ -15,19 +16,25 @@ contract TestableJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
         IJBPermissions _permissions,
         address _tokens,
         IPoolManager _poolManager,
-        IPositionManager _positionManager
+        IPositionManager _positionManager,
+        IAllowanceTransfer _permit2
     )
-        JBUniswapV4LPSplitHook(_directory, _permissions, _tokens, _poolManager, _positionManager, IHooks(address(0)))
+        JBUniswapV4LPSplitHook(
+            _directory, _permissions, _tokens, _poolManager, _positionManager, _permit2, IHooks(address(0))
+        )
     {}
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function exposed_getIssuanceRate(uint256 projectId, address terminalToken) external view returns (uint256) {
         return _getIssuanceRate(projectId, terminalToken);
     }
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function exposed_getCashOutRate(uint256 projectId, address terminalToken) external view returns (uint256) {
         return _getCashOutRate(projectId, terminalToken);
     }
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function exposed_getIssuanceRateSqrtPriceX96(
         uint256 projectId,
         address terminalToken,
@@ -40,6 +47,7 @@ contract TestableJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
         return _getIssuanceRateSqrtPriceX96(projectId, terminalToken, projectToken);
     }
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function exposed_getCashOutRateSqrtPriceX96(
         uint256 projectId,
         address terminalToken,
@@ -52,6 +60,7 @@ contract TestableJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
         return _getCashOutRateSqrtPriceX96(projectId, terminalToken, projectToken);
     }
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function exposed_calculateTickBounds(
         uint256 projectId,
         address terminalToken,
@@ -64,10 +73,12 @@ contract TestableJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
         return _calculateTickBounds(projectId, terminalToken, projectToken);
     }
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function exposed_alignTickToSpacing(int24 tick, int24 spacing) external pure returns (int24) {
         return _alignTickToSpacing(tick, spacing);
     }
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function exposed_getSqrtPriceX96ForCurrentJuiceboxPrice(
         uint256 projectId,
         address terminalToken,
@@ -80,6 +91,7 @@ contract TestableJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
         return _getSqrtPriceX96ForCurrentJuiceboxPrice(projectId, terminalToken, projectToken);
     }
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function exposed_computeInitialSqrtPrice(
         uint256 projectId,
         address terminalToken,
@@ -92,6 +104,7 @@ contract TestableJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
         return _computeInitialSqrtPrice(projectId, terminalToken, projectToken);
     }
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function exposed_computeOptimalCashOutAmount(
         uint256 projectId,
         address terminalToken,
@@ -135,7 +148,8 @@ contract PriceMathTest is LPSplitHookV4TestBase {
             IJBPermissions(address(permissions)),
             address(jbTokens),
             IPoolManager(address(1)),
-            IPositionManager(address(positionManager))
+            IPositionManager(address(positionManager)),
+            IAllowanceTransfer(address(0))
         );
         testableHook.initialize(FEE_PROJECT_ID, FEE_PERCENT);
     }
@@ -230,6 +244,7 @@ contract PriceMathTest is LPSplitHookV4TestBase {
         );
 
         // We confirm it is > 2^96 (since there are 1000 projectTokens per terminalToken)
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 Q96 = 2 ** 96;
 
         // Determine sort order to know which branch is taken

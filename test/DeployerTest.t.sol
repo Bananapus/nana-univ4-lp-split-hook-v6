@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import "forge-std/Test.sol";
+import {Test, Vm} from "forge-std/Test.sol";
 
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
+import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
@@ -45,6 +46,7 @@ contract DeployerTest is Test {
             address(1), // tokens placeholder
             IPoolManager(address(2)), // pool manager placeholder
             IPositionManager(address(3)), // position manager placeholder
+            IAllowanceTransfer(address(0)),
             IHooks(address(0))
         );
 
@@ -110,7 +112,7 @@ contract DeployerTest is Test {
         vm.recordLogs();
 
         vm.prank(caller);
-        IJBUniswapV4LPSplitHook hook = deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, bytes32(0));
+        deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, bytes32(0));
 
         Vm.Log[] memory logs = vm.getRecordedLogs();
         bytes32 hookDeployedSig = keccak256("HookDeployed(uint256,uint256,address,address)");

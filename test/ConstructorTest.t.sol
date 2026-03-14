@@ -4,6 +4,7 @@ pragma solidity 0.8.26;
 import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
 import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
+import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
@@ -41,6 +42,7 @@ contract ConstructorTest is LPSplitHookV4TestBase {
             address(jbTokens),
             IPoolManager(address(1)),
             IPositionManager(address(positionManager)),
+            IAllowanceTransfer(address(0)),
             IHooks(address(0))
         );
     }
@@ -54,6 +56,7 @@ contract ConstructorTest is LPSplitHookV4TestBase {
             address(0), // tokens = zero
             IPoolManager(address(1)),
             IPositionManager(address(positionManager)),
+            IAllowanceTransfer(address(0)),
             IHooks(address(0))
         );
     }
@@ -67,6 +70,7 @@ contract ConstructorTest is LPSplitHookV4TestBase {
             address(jbTokens),
             IPoolManager(address(0)), // poolManager = zero
             IPositionManager(address(positionManager)),
+            IAllowanceTransfer(address(0)),
             IHooks(address(0))
         );
     }
@@ -80,6 +84,7 @@ contract ConstructorTest is LPSplitHookV4TestBase {
             address(jbTokens),
             IPoolManager(address(1)),
             IPositionManager(address(0)), // positionManager = zero
+            IAllowanceTransfer(address(0)),
             IHooks(address(0))
         );
     }
@@ -97,6 +102,7 @@ contract ConstructorTest is LPSplitHookV4TestBase {
             address(jbTokens),
             IPoolManager(address(1)),
             IPositionManager(address(positionManager)),
+            IAllowanceTransfer(address(0)),
             IHooks(address(0))
         );
 
@@ -113,6 +119,7 @@ contract ConstructorTest is LPSplitHookV4TestBase {
             address(jbTokens),
             IPoolManager(address(1)),
             IPositionManager(address(positionManager)),
+            IAllowanceTransfer(address(0)),
             IHooks(address(0))
         );
 
@@ -129,6 +136,7 @@ contract ConstructorTest is LPSplitHookV4TestBase {
             address(jbTokens),
             IPoolManager(address(1)),
             IPositionManager(address(positionManager)),
+            IAllowanceTransfer(address(0)),
             IHooks(address(0))
         );
 
@@ -147,6 +155,7 @@ contract ConstructorTest is LPSplitHookV4TestBase {
             address(jbTokens),
             IPoolManager(address(1)),
             IPositionManager(address(positionManager)),
+            IAllowanceTransfer(address(0)),
             IHooks(address(0))
         );
 

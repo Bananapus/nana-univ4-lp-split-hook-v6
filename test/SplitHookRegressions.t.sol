@@ -38,7 +38,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
 
         vm.prank(attacker);
         vm.expectRevert();
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
 
         // Verify the position was not disturbed
         uint256 tokenIdAfter = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
@@ -51,7 +51,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         assertTrue(originalTokenId != 0, "should have an active position");
 
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
 
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertTrue(newTokenId != 0, "new tokenId should be nonzero");
@@ -68,7 +68,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         uint256 originalTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
 
         vm.prank(operator);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
 
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertTrue(newTokenId != 0, "new tokenId should be nonzero");
@@ -81,26 +81,28 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         // Drain all tokens from PositionManager and hook so burn returns 0
         uint256 pmProjectBal = projectToken.balanceOf(address(positionManager));
         uint256 pmTerminalBal = terminalToken.balanceOf(address(positionManager));
-        // forge-lint: disable-next-line(erc20-unchecked-transfer)
         // Test helper: draining mock balances; return value not relevant.
         vm.startPrank(address(positionManager));
+        // forge-lint: disable-next-line(erc20-unchecked-transfer)
         if (pmProjectBal > 0) projectToken.transfer(address(0xdead), pmProjectBal);
+        // forge-lint: disable-next-line(erc20-unchecked-transfer)
         if (pmTerminalBal > 0) terminalToken.transfer(address(0xdead), pmTerminalBal);
         vm.stopPrank();
 
         uint256 hookProjectBal = projectToken.balanceOf(address(hook));
         uint256 hookTerminalBal = terminalToken.balanceOf(address(hook));
-        // forge-lint: disable-next-line(erc20-unchecked-transfer)
         // Test helper: draining mock balances; return value not relevant.
         vm.startPrank(address(hook));
+        // forge-lint: disable-next-line(erc20-unchecked-transfer)
         if (hookProjectBal > 0) projectToken.transfer(address(0xdead), hookProjectBal);
+        // forge-lint: disable-next-line(erc20-unchecked-transfer)
         if (hookTerminalBal > 0) terminalToken.transfer(address(0xdead), hookTerminalBal);
         vm.stopPrank();
 
         // Should revert instead of zeroing tokenIdOf
         vm.prank(owner);
         vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientLiquidity.selector);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
 
         // tokenIdOf should remain unchanged (revert rolled back state)
         assertEq(
@@ -137,7 +139,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         uint256 addToBalanceCountBefore = terminal.addToBalanceCallCount();
 
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
 
         // Verify fees were routed: pay (for fee project) and/or addToBalance (for project)
         bool feesRouted =
@@ -172,7 +174,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         uint256 claimableBefore = hook.claimableFeeTokens(PROJECT_ID);
 
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0, 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
 
         uint256 claimableAfter = hook.claimableFeeTokens(PROJECT_ID);
         assertGt(claimableAfter, claimableBefore, "claimableFeeTokens should increase after rebalance with fees");
@@ -201,7 +203,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
     }
 
     /// @notice deployedPoolCount increments per deployment.
-    function test_M2_deployedPoolCount_increments() public {
+    function test_M2_deployedPoolCount_increments() public view {
         // After the setUp, one pool is deployed for PROJECT_ID
         assertEq(hook.deployedPoolCount(PROJECT_ID), 1, "deployedPoolCount should be 1 after first deploy");
     }

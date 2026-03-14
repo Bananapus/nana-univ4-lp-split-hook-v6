@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 
 // JB core -- deploy fresh within fork.
 import {JBPermissions} from "@bananapus/core-v6/src/JBPermissions.sol";
@@ -30,7 +30,6 @@ import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.s
 import {IJBSplitHook} from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
 import {JBSplit} from "@bananapus/core-v6/src/structs/JBSplit.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
-import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 
 // Uniswap V4.
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -41,9 +40,10 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import {BalanceDelta, BalanceDeltaLibrary} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
+import {BalanceDelta} from "@uniswap/v4-core/src/types/BalanceDelta.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
+import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
 import {IPermit2} from "@uniswap/permit2/src/interfaces/IPermit2.sol";
 
 // Hook under test.
@@ -76,6 +76,7 @@ contract MockUSDC is ERC20 {
 contract GeomeanSwapHelper is IUnlockCallback {
     using CurrencyLibrary for Currency;
 
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
     IPoolManager public immutable poolManager;
 
     struct SwapCallbackData {
@@ -92,6 +93,7 @@ contract GeomeanSwapHelper is IUnlockCallback {
     receive() external payable {}
 
     function swap(PoolKey memory key, bool zeroForOne, int256 amountSpecified) external payable {
+        // forge-lint: disable-next-line(named-struct-fields)
         poolManager.unlock(abi.encode(SwapCallbackData(key, zeroForOne, amountSpecified, msg.sender)));
     }
 
@@ -116,32 +118,42 @@ contract GeomeanSwapHelper is IUnlockCallback {
         // Handle currency0
         if (delta0 < 0) {
             // We owe the pool currency0
+            // Safe: delta values from Uniswap V4 BalanceDelta are always valid int128.
+            // forge-lint: disable-next-line(unsafe-typecast)
             uint256 amountOwed = uint256(uint128(-delta0));
             if (params.key.currency0.isAddressZero()) {
                 poolManager.settle{value: amountOwed}();
             } else {
                 poolManager.sync(params.key.currency0);
-                IERC20(Currency.unwrap(params.key.currency0))
-                    .transferFrom(params.sender, address(poolManager), amountOwed);
+                // forgefmt: disable-next-item
+                // forge-lint: disable-next-line(erc20-unchecked-transfer)
+                IERC20(Currency.unwrap(params.key.currency0)).transferFrom(params.sender, address(poolManager), amountOwed);
                 poolManager.settle();
             }
         } else if (delta0 > 0) {
+            // Safe: delta values from Uniswap V4 BalanceDelta are always valid int128.
+            // forge-lint: disable-next-line(unsafe-typecast)
             uint256 amountOwedToUs = uint256(uint128(delta0));
             poolManager.take(params.key.currency0, params.sender, amountOwedToUs);
         }
 
         // Handle currency1
         if (delta1 < 0) {
+            // Safe: delta values from Uniswap V4 BalanceDelta are always valid int128.
+            // forge-lint: disable-next-line(unsafe-typecast)
             uint256 amountOwed = uint256(uint128(-delta1));
             if (params.key.currency1.isAddressZero()) {
                 poolManager.settle{value: amountOwed}();
             } else {
                 poolManager.sync(params.key.currency1);
-                IERC20(Currency.unwrap(params.key.currency1))
-                    .transferFrom(params.sender, address(poolManager), amountOwed);
+                // forgefmt: disable-next-item
+                // forge-lint: disable-next-line(erc20-unchecked-transfer)
+                IERC20(Currency.unwrap(params.key.currency1)).transferFrom(params.sender, address(poolManager), amountOwed);
                 poolManager.settle();
             }
         } else if (delta1 > 0) {
+            // Safe: delta values from Uniswap V4 BalanceDelta are always valid int128.
+            // forge-lint: disable-next-line(unsafe-typecast)
             uint256 amountOwedToUs = uint256(uint128(delta1));
             poolManager.take(params.key.currency1, params.sender, amountOwedToUs);
         }
@@ -240,6 +252,7 @@ contract GeomeanLPForkTest is Test {
             address(jbTokens),
             V4_POOL_MANAGER,
             V4_POSITION_MANAGER,
+            IAllowanceTransfer(address(PERMIT2)),
             IHooks(address(0))
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
@@ -288,7 +301,7 @@ contract GeomeanLPForkTest is Test {
 
             // Deploy pool as project owner.
             vm.prank(multisig);
-            hook.deployPool(pid, JBConstants.NATIVE_TOKEN, 0, 0, 0);
+            hook.deployPool(pid, JBConstants.NATIVE_TOKEN, 0);
 
             // Assert: pool deployed.
             assertTrue(
@@ -345,7 +358,7 @@ contract GeomeanLPForkTest is Test {
 
             // Deploy pool.
             vm.prank(multisig);
-            hook.deployPool(pid, JBConstants.NATIVE_TOKEN, 0, 0, 0);
+            hook.deployPool(pid, JBConstants.NATIVE_TOKEN, 0);
 
             assertTrue(
                 hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN),
@@ -377,7 +390,7 @@ contract GeomeanLPForkTest is Test {
         _accumulateTokens(projectId, address(projectToken), 100_000e18);
 
         vm.prank(multisig);
-        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0, 0, 0);
+        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
 
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should be deployed");
 
@@ -421,7 +434,7 @@ contract GeomeanLPForkTest is Test {
 
         // Now rebalance liquidity.
         vm.prank(multisig);
-        hook.rebalanceLiquidity(projectId, JBConstants.NATIVE_TOKEN, 0, 0, 0, 0);
+        hook.rebalanceLiquidity(projectId, JBConstants.NATIVE_TOKEN, 0, 0);
 
         // Verify new position exists.
         uint256 newTokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
@@ -468,7 +481,7 @@ contract GeomeanLPForkTest is Test {
 
             // Deploy pool with USDC.
             vm.prank(multisig);
-            hook.deployPool(pid, address(usdc), 0, 0, 0);
+            hook.deployPool(pid, address(usdc), 0);
 
             // Assert: pool deployed.
             assertTrue(
@@ -522,7 +535,7 @@ contract GeomeanLPForkTest is Test {
             _accumulateTokens(pid, address(pToken), tokenAmount);
 
             vm.prank(multisig);
-            hook.deployPool(pid, address(usdc), 0, 0, 0);
+            hook.deployPool(pid, address(usdc), 0);
 
             uint256 tokenId = hook.tokenIdOf(pid, address(usdc));
             assertTrue(tokenId != 0, "position should exist");
@@ -574,7 +587,7 @@ contract GeomeanLPForkTest is Test {
 
             // Deploy pool.
             vm.prank(multisig);
-            hook.deployPool(pid, JBConstants.NATIVE_TOKEN, 0, 0, 0);
+            hook.deployPool(pid, JBConstants.NATIVE_TOKEN, 0);
 
             assertTrue(
                 hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN),
@@ -607,6 +620,7 @@ contract GeomeanLPForkTest is Test {
     //  INTERNAL DEPLOYMENT HELPERS
     // ═══════════════════════════════════════════════════════════════════════
 
+    // forge-lint: disable-next-line(mixed-case-function)
     function _deployJBCore() internal {
         jbPermissions = new JBPermissions(trustedForwarder);
         jbProjects = new JBProjects(multisig, address(0), trustedForwarder);
@@ -754,6 +768,7 @@ contract GeomeanLPForkTest is Test {
     }
 
     /// @notice Launch a project that accepts a MockUSDC token.
+    // forge-lint: disable-next-line(mixed-case-function)
     function _launchProjectWithUSDC(MockUSDC usdc) internal returns (uint256 id) {
         JBRulesetMetadata memory metadata = JBRulesetMetadata({
             reservedPercent: 1000,
@@ -854,6 +869,7 @@ contract GeomeanLPForkTest is Test {
     }
 
     /// @notice Pay USDC to a project via the terminal.
+    // forge-lint: disable-next-line(mixed-case-function)
     function _payProjectUSDC(uint256 pid, MockUSDC usdc, uint256 amount) internal {
         // Mint USDC to this test contract.
         usdc.mint(address(this), amount);
@@ -866,8 +882,10 @@ contract GeomeanLPForkTest is Test {
         // The terminal pulls via Permit2.transferFrom, so we need:
         // 1. ERC20 approve to Permit2
         // 2. Permit2 approve to terminal
-        IPermit2(address(PERMIT2))
-            .approve(address(usdc), address(jbMultiTerminal), uint160(amount), uint48(block.timestamp + 3600));
+        // Safe: amount fits in uint160 and block.timestamp + 3600 fits in uint48 in test context.
+        IPermit2(address(PERMIT2)).
+            // forge-lint: disable-next-line(unsafe-typecast)
+            approve(address(usdc), address(jbMultiTerminal), uint160(amount), uint48(block.timestamp + 3600));
 
         jbMultiTerminal.pay({
             projectId: pid,
