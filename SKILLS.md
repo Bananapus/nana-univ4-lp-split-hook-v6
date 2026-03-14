@@ -8,7 +8,7 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 
 | Contract | Role |
 |----------|------|
-| `JBUniswapV4LPSplitHook` | Core split hook. Implements `IJBSplitHook.processSplitWith` to accumulate or burn tokens. Manages V4 pool creation (with `ORACLE_HOOK` for TWAP), LP position minting, fee collection, and liquidity rebalancing. Constructor takes 6 params: `directory`, `permissions`, `tokens`, `poolManager`, `positionManager`, `oracleHook`. Inherits `JBPermissioned`. Deployed as clones via factory. |
+| `JBUniswapV4LPSplitHook` | Core split hook. Implements `IJBSplitHook.processSplitWith` to accumulate or burn tokens. Manages V4 pool creation (with `ORACLE_HOOK` for TWAP), LP position minting, fee collection, and liquidity rebalancing. Constructor takes 7 params: `directory`, `permissions`, `tokens`, `poolManager`, `positionManager`, `permit2` (`IAllowanceTransfer`), `oracleHook`. Inherits `JBPermissioned`. Deployed as clones via factory. |
 | `JBUniswapV4LPSplitHookDeployer` | Factory that deploys hook clones via `LibClone` (Solady). Supports CREATE2 deterministic deployment. Initializes clones with `feeProjectId` and `feePercent`. Registers each deployed clone in `JBAddressRegistry` so frontends can verify the deployer. |
 
 ## Key Functions
@@ -36,7 +36,7 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 
 | Function | What it does |
 |----------|-------------|
-| `rebalanceLiquidity(projectId, terminalToken, decreaseAmount0Min, decreaseAmount1Min, increaseAmount0Min, increaseAmount1Min)` | **Permissionless.** Burns old position (removes all liquidity + collects fees), recalculates tick bounds from current issuance/cashOut rates, mints new position with updated bounds. Routes collected fees. Handles leftovers. |
+| `rebalanceLiquidity(projectId, terminalToken, decreaseAmount0Min, decreaseAmount1Min)` | Requires `SET_BUYBACK_POOL` permission from the project owner. Burns old position (removes all liquidity + collects fees), recalculates tick bounds from current issuance/cashOut rates, mints new position with updated bounds. Routes collected fees. Handles leftovers. |
 
 ### Views
 
@@ -138,7 +138,7 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 2. **Requires `via_ir = true` in foundry.toml.** Stack-too-deep errors occur without the IR pipeline, particularly in `_addUniswapLiquidity` and V4 `PositionManager` interactions.
 3. **Only accepts reserved-token splits (`groupId == 1`).** Reverts with `TerminalTokensNotAllowed` if called from a payout split (`groupId == 0`). This is intentional -- it only manages project tokens.
 4. **`deployPool` requires `SET_BUYBACK_POOL` permission, unless weight has decayed 10x.** The caller must be the project owner or have been granted this permission via `JBPermissions`. However, if the current ruleset's weight has decayed to 1/10th or less of the weight when the hook first started accumulating tokens (`initialWeightOf`), anyone can call `deployPool`. This prevents a stale owner from blocking LP deployment indefinitely.
-5. **`collectAndRouteLPFees` and `rebalanceLiquidity` are permissionless.** Anyone can call them. Safe because they only operate on existing positions and route funds to verified project terminals.
+5. **`collectAndRouteLPFees` is permissionless.** Anyone can call it. Safe because it only operates on existing positions and routes funds to verified project terminals. **`rebalanceLiquidity` requires `SET_BUYBACK_POOL` permission** from the project owner.
 6. **`claimFeeTokensFor` requires `SET_BUYBACK_POOL` permission** from the project owner. It validates the caller, not the beneficiary.
 7. **Cash-out fraction is geometrically optimized, not 50/50.** `_computeOptimalCashOutAmount` uses concentrated liquidity math to compute the exact ratio needed, typically 15-30%. Safety-capped at 50%.
 8. **Pool initialization price is the geometric mean** of [cashOutRate, issuanceRate] in tick space. Falls back to issuance rate if cash-out rate is 0 or ticks are equal.
@@ -146,7 +146,7 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 10. **One LP position per project/terminal-token pair.** The hook manages a single V4 NFT position. Rebalancing burns the old NFT and mints a new one, briefly leaving no active position.
 11. **After deployment, newly received reserved tokens are burned.** This is intentional -- prevents inflating the project token supply without corresponding LP rebalancing.
 12. **Native ETH handling:** Juicebox uses `JBConstants.NATIVE_TOKEN` (`0x000000000000000000000000000000000000EEEe`), V4 uses `Currency.wrap(address(0))`. The hook converts between them via `_toCurrency()`. The contract has `receive() external payable {}` to accept ETH during cash-outs and V4 TAKE operations.
-13. **Deployed as clones via factory.** `JBUniswapV4LPSplitHookDeployer` uses Solady's `LibClone`. The constructor takes 6 params (`directory`, `permissions`, `tokens`, `poolManager`, `positionManager`, `oracleHook`) and sets shared infrastructure. Per-clone config (fee project, fee percent) is set via `initialize()`, which can only be called once.
+13. **Deployed as clones via factory.** `JBUniswapV4LPSplitHookDeployer` uses Solady's `LibClone`. The constructor takes 7 params (`directory`, `permissions`, `tokens`, `poolManager`, `positionManager`, `permit2`, `oracleHook`) and sets shared infrastructure. Per-clone config (fee project, fee percent) is set via `initialize()`, which can only be called once.
 14. **Tick alignment:** All ticks are aligned to `TICK_SPACING = 200`. Negative ticks use floor semantics in `_alignTickToSpacing()`.
 15. **`minCashOutReturn = 0` defaults to 1% tolerance.** If no minimum is specified for `deployPool`, the hook applies a 1% slippage tolerance on the cash-out automatically.
 16. **Fee routing splits terminal token fees only.** Project token fees are always burned. Terminal token fees are split: `FEE_PERCENT` to fee project via `terminal.pay()`, remainder to original project via `addToBalanceOf()`.
