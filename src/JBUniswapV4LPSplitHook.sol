@@ -95,11 +95,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     // ----------------------- internal constants ------------------------ //
     //*********************************************************************//
 
-    /// @notice Default minimum cash-out return as a fraction of expected return (99/100 = 1% slippage tolerance).
+    /// @notice Default minimum cash-out return as a fraction of expected return (97/100 = 3% slippage tolerance).
+    /// @dev Widened from 1% to 3% because the linear cash-out estimate diverges from the bonding curve
+    ///      at higher cashOutTaxRates, especially with the corrected (wider) LP tick bounds.
     uint256 internal constant _CASH_OUT_SLIPPAGE_DENOMINATOR = 100;
 
-    /// @notice Default minimum cash-out return numerator (99 out of 100 = 1% slippage tolerance).
-    uint256 internal constant _CASH_OUT_SLIPPAGE_NUMERATOR = 99;
+    /// @notice Default minimum cash-out return numerator (97 out of 100 = 3% slippage tolerance).
+    uint256 internal constant _CASH_OUT_SLIPPAGE_NUMERATOR = 97;
 
     /// @notice Deadline window (in seconds) for PositionManager and Permit2 operations.
     uint256 internal constant _DEADLINE_SECONDS = 60;
@@ -932,16 +934,22 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             return (tickLower, tickUpper);
         }
 
-        tickLower = TickMath.getTickAtSqrtPrice(
+        int24 rawTickA = TickMath.getTickAtSqrtPrice(
             _getCashOutRateSqrtPriceX96({
                 projectId: projectId, terminalToken: terminalToken, projectToken: projectToken
             })
         );
-        tickUpper = TickMath.getTickAtSqrtPrice(
+        int24 rawTickB = TickMath.getTickAtSqrtPrice(
             _getIssuanceRateSqrtPriceX96({
                 projectId: projectId, terminalToken: terminalToken, projectToken: projectToken
             })
         );
+
+        // Sort ticks so tickLower <= tickUpper regardless of token ordering.
+        // Without sorting, pools where terminalToken is token0 (e.g. native ETH)
+        // would have cashOut tick > issuance tick, collapsing into the narrow fallback.
+        tickLower = rawTickA < rawTickB ? rawTickA : rawTickB;
+        tickUpper = rawTickA < rawTickB ? rawTickB : rawTickA;
 
         tickLower = _alignTickToSpacing({tick: tickLower, spacing: TICK_SPACING});
         tickUpper = _alignTickToSpacing({tick: tickUpper, spacing: TICK_SPACING});

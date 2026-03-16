@@ -297,19 +297,19 @@ contract PriceMathTest is LPSplitHookV4TestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 11. Tick bounds: inverted rates trigger fallback to currentTick +/- TICK_SPACING
+    // 11. Tick bounds: extreme rate disparity produces wide sorted range
     // ─────────────────────────────────────────────────────────────────────
 
     /// @notice When the cash out rate is extremely small, its inverse (used for sqrtPrice
-    ///         computation) becomes very large, pushing the cash out tick above the issuance tick.
-    ///         This triggers the fallback to currentTick +/- TICK_SPACING.
-    function test_TickBounds_InvertedRates_Fallback() public {
+    ///         computation) becomes very large, pushing the cash out tick far from the issuance tick.
+    ///         After the tick bounds inversion fix, the ticks are sorted so the range is wide (not the narrow
+    /// fallback).
+    function test_TickBounds_ExtremeRateDisparity_WideRange() public {
         // With token0 = terminalToken (lower address in our mock setup):
         //   issuance sqrtPrice  ~ sqrt(issuanceRate)          where issuanceRate = 900e18
         //   cashOut  sqrtPrice  ~ sqrt(1e36 / cashOutRate)
-        // To invert (cashOut tick >= issuance tick):
-        //   1e36 / cashOutRate > issuanceRate
-        //   cashOutRate < 1e36 / 900e18 ~ 1.11e15
+        // When cashOutRate < 1e36 / 900e18 ~ 1.11e15, the raw ticks are "inverted"
+        // (cashOut tick > issuance tick for token0-terminal ordering).
         //
         // Set surplus to 1e12 so cashOutRate = (1e12 * 1e18) / 1e18 = 1e12.
         // That makes cashOut token1Amount = 1e36 / 1e12 = 1e24, far exceeding issuance at 900e18.
@@ -318,9 +318,10 @@ contract PriceMathTest is LPSplitHookV4TestBase {
         (int24 tickLower, int24 tickUpper) =
             testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
 
-        // Should fall back to currentTick +/- TICK_SPACING
-        assertLt(tickLower, tickUpper, "Fallback should still produce tickLower < tickUpper");
-        assertEq(tickUpper - tickLower, 2 * int24(200), "Fallback range should be 2 * TICK_SPACING");
+        // After the tick bounds inversion fix, ticks are sorted so the range is wide (not the narrow fallback).
+        assertLt(tickLower, tickUpper, "Sorted ticks should produce tickLower < tickUpper");
+        // The range should be much wider than the narrow 2*TICK_SPACING fallback.
+        assertGt(tickUpper - tickLower, 2 * int24(200), "Range should be wider than the narrow fallback");
     }
 
     // ─────────────────────────────────────────────────────────────────────
