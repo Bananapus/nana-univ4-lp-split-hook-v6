@@ -61,7 +61,9 @@ contract DeployScript is Script, Sphinx {
 
         // Get the deployment addresses for the univ4-router for this chain.
         router = Univ4RouterDeploymentLib.getDeployment(
-            vm.envOr("NANA_CORE_DEPLOYMENT_PATH", string("node_modules/@bananapus/core-v6/deployments/"))
+            vm.envOr(
+                "NANA_UNIV4_ROUTER_DEPLOYMENT_PATH", string("node_modules/@bananapus/univ4-router-v6/deployments/")
+            )
         );
 
         // Uniswap V4 PoolManager — canonical address on all chains

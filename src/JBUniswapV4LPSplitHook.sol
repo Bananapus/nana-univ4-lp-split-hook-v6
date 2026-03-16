@@ -1289,6 +1289,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     }
 
     /// @notice Route fees back to the project
+    /// @dev Fee routing uses zero slippage (minReturnedTokens = 0) by design. Fees are small amounts
+    /// routed to the protocol fee project. MEV extraction on fee amounts is economically insignificant relative to gas
+    /// costs. Adding slippage would require an oracle and add complexity for minimal benefit.
     // slither-disable-next-line arbitrary-send-eth,reentrancy-eth,reentrancy-benign,reentrancy-events,incorrect-equality,unused-return
     function _routeFeesToProject(uint256 projectId, address terminalToken, uint256 amount) internal {
         if (amount == 0) return;
