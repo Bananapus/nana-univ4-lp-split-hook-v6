@@ -12,7 +12,7 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
 
-/// @notice Wrapper that exposes internal tick-bounds functions for testing A-4.
+/// @notice Wrapper that exposes internal tick-bounds functions for testing tick bounds inversion.
 contract TestableHookForTickBounds is JBUniswapV4LPSplitHook {
     constructor(
         address _directory,
@@ -67,7 +67,7 @@ contract TestableHookForTickBounds is JBUniswapV4LPSplitHook {
     }
 }
 
-/// @notice Regression test for audit finding A-4 (HIGH): Tick bounds inversion for token0-terminal pools.
+/// @notice Regression test: Tick bounds inversion for token0-terminal pools.
 ///
 /// @dev The bug: `_calculateTickBounds` assigned cashOut tick to tickLower and issuance tick to
 ///      tickUpper without sorting. For pools where the terminal token is token0 (lower address),
@@ -149,22 +149,21 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // A-4: Tick bounds inversion when terminal token is token0
+    // Tick bounds inversion when terminal token is token0
     // ═══════════════════════════════════════════════════════════════════════
 
     /// @notice Verify that terminalToken < projectToken (terminal is token0 in the V4 pool).
-    ///         This is the precondition for the A-4 bug.
-    function test_A4_precondition_terminalIsToken0() public view {
+    ///         This is the precondition for the tick bounds inversion bug.
+    function test_precondition_terminalIsToken0() public view {
         assertTrue(
-            address(lowTerminalToken) < address(highProjectToken),
-            "Terminal token should be token0 (lower address)"
+            address(lowTerminalToken) < address(highProjectToken), "Terminal token should be token0 (lower address)"
         );
     }
 
     /// @notice When terminal is token0, the cashOut sqrtPrice > issuance sqrtPrice.
     ///         This demonstrates the root cause: the raw ticks are inverted relative
     ///         to the naive cashOut=lower, issuance=upper assumption.
-    function test_A4_rawTicksAreInverted_whenTerminalIsToken0() public view {
+    function test_rawTicksAreInverted_whenTerminalIsToken0() public view {
         uint160 sqrtPriceCashOut = testableHook.exposed_getCashOutRateSqrtPriceX96(
             TEST_PROJECT_ID, address(lowTerminalToken), address(highProjectToken)
         );
@@ -188,7 +187,7 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
 
     /// @notice The fix ensures _calculateTickBounds produces a wide economic range
     ///         (not the narrow +/-1 tick fallback) when terminal is token0.
-    function test_A4_tickBoundsAreWide_whenTerminalIsToken0() public view {
+    function test_tickBoundsAreWide_whenTerminalIsToken0() public view {
         (int24 tickLower, int24 tickUpper) = testableHook.exposed_calculateTickBounds(
             TEST_PROJECT_ID, address(lowTerminalToken), address(highProjectToken)
         );
@@ -212,7 +211,7 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
     ///           So cashOut sqrtPrice = sqrt(1e24) >> sqrt(900e18) = issuance sqrtPrice.
     ///           This means cashOut tick >> issuance tick, triggering inversion.
     ///         With the fix, sorting ensures tickLower < tickUpper and the range is correct.
-    function test_A4_lowCashOutRate_noFallback_whenTerminalIsToken0() public {
+    function test_lowCashOutRate_noFallback_whenTerminalIsToken0() public {
         // Set a very low surplus => low cash-out rate.
         store.setSurplus(TEST_PROJECT_ID, 1e12);
 
@@ -254,7 +253,7 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
 
     /// @notice Confirm tick bounds are correct when terminal is token1 (no inversion).
     ///         This is the case that worked correctly even before the fix.
-    function test_A4_noInversion_whenTerminalIsToken1() public view {
+    function test_noInversion_whenTerminalIsToken1() public view {
         // Use the default tokens from the base setup (terminalToken, projectToken).
         // Check if terminalToken > projectToken (terminal is token1).
         bool terminalIsToken1 = address(terminalToken) > address(projectToken);
@@ -263,9 +262,8 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
         // Otherwise skip (the test above covers the token0 case).
         if (!terminalIsToken1) return;
 
-        (int24 tickLower, int24 tickUpper) = testableHook.exposed_calculateTickBounds(
-            PROJECT_ID, address(terminalToken), address(projectToken)
-        );
+        (int24 tickLower, int24 tickUpper) =
+            testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
 
         assertLt(tickLower, tickUpper, "tickLower < tickUpper when terminal is token1");
         int24 range = tickUpper - tickLower;
@@ -275,16 +273,14 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
     /// @notice End-to-end: deploy a pool where terminal is token0.
     ///         With the fix, the pool deploys with a proper LP range.
     ///         Without the fix, the narrow fallback would waste most of the liquidity.
-    function test_A4_e2e_deployPool_whenTerminalIsToken0() public {
+    function test_e2e_deployPool_whenTerminalIsToken0() public {
         // Accumulate project tokens.
         uint256 accAmount = 100e18;
         highProjectToken.mint(address(hook), accAmount);
 
         // Build context for the test project.
         vm.prank(address(controller));
-        hook.processSplitWith(
-            _buildContext(TEST_PROJECT_ID, address(highProjectToken), accAmount, 1)
-        );
+        hook.processSplitWith(_buildContext(TEST_PROJECT_ID, address(highProjectToken), accAmount, 1));
 
         assertEq(hook.accumulatedProjectTokens(TEST_PROJECT_ID), accAmount, "Tokens should be accumulated");
 
@@ -295,13 +291,11 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
         // Verify pool was deployed successfully.
         uint256 tokenId = hook.tokenIdOf(TEST_PROJECT_ID, address(lowTerminalToken));
         assertTrue(tokenId != 0, "tokenIdOf should be nonzero after deploy");
-        assertTrue(
-            hook.projectDeployed(TEST_PROJECT_ID, address(lowTerminalToken)),
-            "projectDeployed should be true"
-        );
+        assertTrue(hook.projectDeployed(TEST_PROJECT_ID, address(lowTerminalToken)), "projectDeployed should be true");
     }
 
-    // ─── Helper ──────────────────────────────────────────────────────────
+    // ─── Helper
+    // ──────────────────────────────────────────────────────────
 
     /// @notice Replicate _alignTickToSpacing for test assertions.
     function _alignTickToSpacing(int24 tick, int24 spacing) internal pure returns (int24) {

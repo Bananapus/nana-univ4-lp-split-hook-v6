@@ -302,7 +302,8 @@ contract PriceMathTest is LPSplitHookV4TestBase {
 
     /// @notice When the cash out rate is extremely small, its inverse (used for sqrtPrice
     ///         computation) becomes very large, pushing the cash out tick far from the issuance tick.
-    ///         After the A-4 fix, the ticks are sorted so the range is wide (not the narrow fallback).
+    ///         After the tick bounds inversion fix, the ticks are sorted so the range is wide (not the narrow
+    /// fallback).
     function test_TickBounds_ExtremeRateDisparity_WideRange() public {
         // With token0 = terminalToken (lower address in our mock setup):
         //   issuance sqrtPrice  ~ sqrt(issuanceRate)          where issuanceRate = 900e18
@@ -317,7 +318,7 @@ contract PriceMathTest is LPSplitHookV4TestBase {
         (int24 tickLower, int24 tickUpper) =
             testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
 
-        // After the A-4 fix, ticks are sorted so the range is wide (not the narrow fallback).
+        // After the tick bounds inversion fix, ticks are sorted so the range is wide (not the narrow fallback).
         assertLt(tickLower, tickUpper, "Sorted ticks should produce tickLower < tickUpper");
         // The range should be much wider than the narrow 2*TICK_SPACING fallback.
         assertGt(tickUpper - tickLower, 2 * int24(200), "Range should be wider than the narrow fallback");
