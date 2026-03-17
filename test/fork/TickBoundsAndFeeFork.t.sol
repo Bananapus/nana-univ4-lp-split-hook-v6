@@ -469,6 +469,223 @@ contract TickBoundsAndFeeForkTest is Test {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
+    //  SWAP-THROUGH-POOL CORRECTNESS (proves tick bounds enable real trades)
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice Deploy an ETH pool (terminal=token0) and swap in both directions.
+    ///         If the tick bounds were inverted the position would have zero liquidity
+    ///         in the tradable range and these swaps would fail or produce zero output.
+    function test_fork_ethPool_swapBothDirections() public {
+        _accumulateTokens(projectId, address(projectToken), 100_000e18);
+
+        vm.prank(multisig);
+        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
+        assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "Pool should be deployed");
+
+        PoolKey memory key = hook.poolKeyOf(projectId, JBConstants.NATIVE_TOKEN);
+        SwapHelper swapHelper = new SwapHelper(V4_POOL_MANAGER);
+
+        // Mint project tokens for sell-side swaps.
+        vm.prank(multisig);
+        jbController.mintTokensOf({
+            projectId: projectId,
+            tokenCount: 50_000e18,
+            beneficiary: address(this),
+            memo: "",
+            useReservedPercent: false
+        });
+        IERC20(address(projectToken)).approve(address(swapHelper), type(uint256).max);
+
+        bool projIsToken0 = Currency.unwrap(key.currency0) == address(projectToken);
+
+        // ── Swap 1: Sell project tokens for ETH (buy-side from ETH perspective) ──
+        uint256 ethBefore = address(this).balance;
+        uint256 projBefore = IERC20(address(projectToken)).balanceOf(address(this));
+
+        swapHelper.swap(key, projIsToken0, -int256(10_000e18));
+
+        uint256 ethAfter = address(this).balance;
+        uint256 projAfter = IERC20(address(projectToken)).balanceOf(address(this));
+
+        // Project tokens decreased.
+        assertTrue(projAfter < projBefore, "Should have spent project tokens");
+        // Received ETH.
+        assertTrue(ethAfter > ethBefore, "Should have received ETH from selling project tokens");
+
+        uint256 ethReceived = ethAfter - ethBefore;
+        emit log_named_uint("  ETH received from selling project tokens", ethReceived);
+
+        // ── Swap 2: Buy project tokens with ETH ──
+        vm.deal(address(this), 1000 ether);
+        ethBefore = address(this).balance;
+        projBefore = IERC20(address(projectToken)).balanceOf(address(this));
+
+        swapHelper.swap{value: projIsToken0 ? 0 : 1 ether}(key, !projIsToken0, -int256(1 ether));
+
+        ethAfter = address(this).balance;
+        projAfter = IERC20(address(projectToken)).balanceOf(address(this));
+
+        assertTrue(ethAfter < ethBefore, "Should have spent ETH");
+        assertTrue(projAfter > projBefore, "Should have received project tokens from buying");
+
+        uint256 projReceived = projAfter - projBefore;
+        emit log_named_uint("  Project tokens received from buying with ETH", projReceived);
+
+        // Verify the pool still has liquidity after both swaps.
+        uint256 tokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+        uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
+        assertTrue(posLiq > 0, "Pool should still have liquidity after both swaps");
+        emit log_named_uint("  Remaining position liquidity", posLiq);
+    }
+
+    /// @notice Deploy pool, move the price via swaps, then rebalance.
+    ///         Proves that rebalanceLiquidity works with the pool price (not JB price)
+    ///         and that tick bounds remain correctly sorted after rebalance.
+    function test_fork_ethPool_rebalanceAfterPriceMovement() public {
+        _accumulateTokens(projectId, address(projectToken), 100_000e18);
+
+        vm.prank(multisig);
+        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
+        assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "Pool should be deployed");
+
+        PoolKey memory key = hook.poolKeyOf(projectId, JBConstants.NATIVE_TOKEN);
+        PoolId poolId = key.toId();
+        SwapHelper swapHelper = new SwapHelper(V4_POOL_MANAGER);
+
+        // Mint project tokens.
+        vm.prank(multisig);
+        jbController.mintTokensOf({
+            projectId: projectId,
+            tokenCount: 50_000e18,
+            beneficiary: address(this),
+            memo: "",
+            useReservedPercent: false
+        });
+        IERC20(address(projectToken)).approve(address(swapHelper), type(uint256).max);
+
+        bool projIsToken0 = Currency.unwrap(key.currency0) == address(projectToken);
+
+        // Record tick before price movement.
+        (, int24 tickBefore,,) = V4_POOL_MANAGER.getSlot0(poolId);
+        emit log_named_int("  Tick before swaps", tickBefore);
+
+        // Execute several swaps to move the price meaningfully.
+        swapHelper.swap(key, projIsToken0, -int256(20_000e18));
+        vm.deal(address(this), 1000 ether);
+        swapHelper.swap{value: projIsToken0 ? 0 : 2 ether}(key, !projIsToken0, -int256(2 ether));
+        swapHelper.swap(key, projIsToken0, -int256(15_000e18));
+
+        (, int24 tickAfterSwaps,,) = V4_POOL_MANAGER.getSlot0(poolId);
+        emit log_named_int("  Tick after swaps", tickAfterSwaps);
+
+        // Accumulate more project tokens so rebalance has something to work with.
+        _accumulateTokens(projectId, address(projectToken), 50_000e18);
+
+        uint256 oldTokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+        uint128 oldLiq = V4_POSITION_MANAGER.getPositionLiquidity(oldTokenId);
+        emit log_named_uint("  Old position liquidity", oldLiq);
+
+        // Rebalance — requires SET_BUYBACK_POOL permission (multisig is owner).
+        vm.prank(multisig);
+        hook.rebalanceLiquidity({
+            projectId: projectId,
+            terminalToken: JBConstants.NATIVE_TOKEN,
+            decreaseAmount0Min: 0,
+            decreaseAmount1Min: 0
+        });
+
+        // Verify new position exists and has liquidity.
+        uint256 newTokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+        assertTrue(newTokenId != oldTokenId, "Token ID should change after rebalance");
+
+        uint128 newLiq = V4_POSITION_MANAGER.getPositionLiquidity(newTokenId);
+        assertTrue(newLiq > 0, "New position should have liquidity after rebalance");
+        emit log_named_uint("  New position liquidity", newLiq);
+
+        // Verify pool still functions after rebalance: do another swap.
+        uint256 projBefore = IERC20(address(projectToken)).balanceOf(address(this));
+        swapHelper.swap(key, projIsToken0, -int256(1000e18));
+        uint256 projAfter = IERC20(address(projectToken)).balanceOf(address(this));
+        assertTrue(projAfter < projBefore, "Should still be able to swap after rebalance");
+
+        (, int24 tickFinal,,) = V4_POOL_MANAGER.getSlot0(poolId);
+        emit log_named_int("  Tick after rebalance swap", tickFinal);
+    }
+
+    /// @notice Deploy pool with extreme cashOutTaxRate (9500 = 95%) and verify swaps work.
+    ///         This maximizes the spread between issuance and cashout ticks, which was
+    ///         the exact scenario that triggered tick inversion for token0-terminal pools.
+    function test_fork_ethPool_extremeTaxRate_swapsSucceed() public {
+        // Launch project with 95% cashOutTaxRate.
+        uint256 extremeProjectId =
+            _launchProject({withOwnerMinting: true, cashOutTaxRate: 9500, weight: 1_000_000e18});
+
+        vm.prank(multisig);
+        IJBToken extremeToken = jbController.deployERC20For(extremeProjectId, "Extreme Token", "XTR", bytes32(0));
+
+        // Fund the project and accumulate tokens.
+        _payProject(extremeProjectId, 30 ether);
+        _accumulateTokens(extremeProjectId, address(extremeToken), 100_000e18);
+
+        // Deploy pool.
+        vm.prank(multisig);
+        hook.deployPool(extremeProjectId, JBConstants.NATIVE_TOKEN, 0);
+        assertTrue(
+            hook.isPoolDeployed(extremeProjectId, JBConstants.NATIVE_TOKEN),
+            "Pool should be deployed with 95% cashOutTaxRate"
+        );
+
+        PoolKey memory key = hook.poolKeyOf(extremeProjectId, JBConstants.NATIVE_TOKEN);
+        PoolId poolId = key.toId();
+
+        // Verify pool state.
+        uint256 tokenId = hook.tokenIdOf(extremeProjectId, JBConstants.NATIVE_TOKEN);
+        uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
+        assertTrue(posLiq > 0, "Position should have liquidity at 95% tax rate");
+
+        (uint160 sqrtPriceX96, int24 currentTick,,) = V4_POOL_MANAGER.getSlot0(poolId);
+        emit log_named_uint("  sqrtPriceX96", sqrtPriceX96);
+        emit log_named_int("  current tick", currentTick);
+        emit log_named_uint("  position liquidity", posLiq);
+
+        // Set up swap helper.
+        SwapHelper swapHelper = new SwapHelper(V4_POOL_MANAGER);
+
+        // Mint project tokens for sell-side.
+        vm.prank(multisig);
+        jbController.mintTokensOf({
+            projectId: extremeProjectId,
+            tokenCount: 50_000e18,
+            beneficiary: address(this),
+            memo: "",
+            useReservedPercent: false
+        });
+        IERC20(address(extremeToken)).approve(address(swapHelper), type(uint256).max);
+
+        bool projIsToken0 = Currency.unwrap(key.currency0) == address(extremeToken);
+
+        // ── Sell project tokens ──
+        uint256 ethBefore = address(this).balance;
+        swapHelper.swap(key, projIsToken0, -int256(5000e18));
+        uint256 ethAfter = address(this).balance;
+        assertTrue(ethAfter > ethBefore, "Should receive ETH from selling tokens (95% tax rate)");
+        emit log_named_uint("  ETH received from sell", ethAfter - ethBefore);
+
+        // ── Buy project tokens ──
+        vm.deal(address(this), 1000 ether);
+        uint256 projBefore = IERC20(address(extremeToken)).balanceOf(address(this));
+        swapHelper.swap{value: projIsToken0 ? 0 : 0.5 ether}(key, !projIsToken0, -int256(0.5 ether));
+        uint256 projAfter = IERC20(address(extremeToken)).balanceOf(address(this));
+        assertTrue(projAfter > projBefore, "Should receive project tokens from buying (95% tax rate)");
+        emit log_named_uint("  Tokens received from buy", projAfter - projBefore);
+
+        // Verify pool still has liquidity.
+        uint128 finalLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
+        assertTrue(finalLiq > 0, "Pool should still have liquidity after extreme tax rate swaps");
+        emit log_named_uint("  Final position liquidity", finalLiq);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
     //  INTERNAL DEPLOYMENT HELPERS
     // ═══════════════════════════════════════════════════════════════════════
 
