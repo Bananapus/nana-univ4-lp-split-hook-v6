@@ -1325,7 +1325,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                         token: terminalToken,
                         amount: feeAmount,
                         beneficiary: address(this),
-                        minReturnedTokens: 0,
+                        minReturnedTokens: 1,
                         memo: "LP Fee",
                         metadata: ""
                     });
@@ -1337,7 +1337,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                             token: terminalToken,
                             amount: feeAmount,
                             beneficiary: address(this),
-                            minReturnedTokens: 0,
+                            minReturnedTokens: 1,
                             memo: "LP Fee",
                             metadata: ""
                         });
