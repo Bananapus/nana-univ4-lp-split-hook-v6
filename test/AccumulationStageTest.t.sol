@@ -19,8 +19,7 @@ contract AccumulationStageTest is LPSplitHookV4TestBase {
     /// @notice Before any pool is deployed, projectDeployed should be false.
     function test_ProjectDeployed_FalseBeforeDeploy() public view {
         assertFalse(
-            hook.projectDeployed(PROJECT_ID, address(terminalToken)),
-            "projectDeployed should be false before any deploy"
+            hook.isPoolDeployed(PROJECT_ID, address(terminalToken)), "projectDeployed should be false before any deploy"
         );
     }
 
@@ -45,7 +44,7 @@ contract AccumulationStageTest is LPSplitHookV4TestBase {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
 
         assertTrue(
-            hook.projectDeployed(PROJECT_ID, address(terminalToken)), "projectDeployed should be true after deploy"
+            hook.isPoolDeployed(PROJECT_ID, address(terminalToken)), "projectDeployed should be true after deploy"
         );
         assertTrue(
             hook.isPoolDeployed(PROJECT_ID, address(terminalToken)), "isPoolDeployed should be true after deploy"
@@ -196,7 +195,7 @@ contract AccumulationStageTest is LPSplitHookV4TestBase {
         // Deploy pool first
         _accumulateAndDeploy(PROJECT_ID, 100e18);
 
-        assertTrue(hook.projectDeployed(PROJECT_ID, address(terminalToken)), "projectDeployed should be true");
+        assertTrue(hook.isPoolDeployed(PROJECT_ID, address(terminalToken)), "projectDeployed should be true");
 
         uint256 burnCountBefore = controller.burnCallCount();
 

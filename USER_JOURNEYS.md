@@ -133,7 +133,6 @@ Tokens have been accumulated (`accumulatedProjectTokens[projectId] > 0`). No poo
 
 4. **State updates**
 
-   - `projectDeployed[projectId][terminalToken] = true`
    - `deployedPoolCount[projectId]++`
    - Emits `ProjectDeployed(projectId, terminalToken, poolId)`
 
@@ -239,7 +238,7 @@ A pool exists. The project's issuance or cashout rates have changed, making the 
 
    - Reads current project token and terminal token balances
    - Computes new tick bounds from current rates via `_calculateTickBounds()`
-   - Computes current JB price for liquidity calculation
+   - Reads actual pool price from `POOL_MANAGER.getSlot0()` for liquidity calculation (using the real pool price ensures the position matches the pool's current state, even if it has diverged from the JB issuance price)
    - Calculates liquidity from available amounts
    - If liquidity > 0: mints new position, stores new `tokenIdOf`
    - If liquidity == 0: reverts with `InsufficientLiquidity` (rolls back entire transaction, preserving old position)

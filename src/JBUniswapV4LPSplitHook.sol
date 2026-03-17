@@ -155,12 +155,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @notice ProjectID => Accumulated project token balance
     mapping(uint256 projectId => uint256 accumulatedProjectTokens) public accumulatedProjectTokens;
 
-    /// @notice ProjectID => Terminal token => whether a pool has been deployed for this project/token pair
-    mapping(uint256 projectId => mapping(address terminalToken => bool deployed)) public projectDeployed;
-
-    /// @notice ProjectID => Number of active deployed pools for this project.
-    /// @dev Used by processSplitWith to decide accumulate vs burn, since the split context
-    ///      only provides the project token, not the terminal token.
+    /// @notice ProjectID => Number of deployed pools for this project.
+    /// @dev Monotonic counter by design — pools are never removed, only added. Used by
+    ///      processSplitWith to decide accumulate vs burn, since the split context only
+    ///      provides the project token, not the terminal token.
     mapping(uint256 projectId => uint256 count) public deployedPoolCount;
 
     /// @notice ProjectID => Fee tokens claimable by that project
@@ -208,6 +206,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     }
 
     /// @notice Initialize per-instance config on a clone. Can only be called once.
+    /// @dev The implementation contract can be initialized by anyone, but this is harmless —
+    ///      each clone gets its own storage, so the implementation's state is never used.
     /// @param feeProjectId Project ID to receive LP fees.
     /// @param feePercent Percentage of LP fees to route to fee project (in basis points, e.g., 3800 = 38%).
     function initialize(uint256 feeProjectId, uint256 feePercent) external {
@@ -581,7 +581,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             minCashOutReturn: minCashOutReturn
         });
 
-        projectDeployed[projectId][terminalToken] = true;
         deployedPoolCount[projectId]++;
 
         emit ProjectDeployed(projectId, terminalToken, PoolId.unwrap(_poolKeys[projectId][terminalToken].toId()));
@@ -690,10 +689,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             (int24 tickLower, int24 tickUpper) =
                 _calculateTickBounds({projectId: projectId, terminalToken: terminalToken, projectToken: projectToken});
 
-            // Get current pool price for liquidity calculation
-            uint160 sqrtPriceX96 = _getSqrtPriceX96ForCurrentJuiceboxPrice({
-                projectId: projectId, terminalToken: terminalToken, projectToken: projectToken
-            });
+            // Use the actual pool price for liquidity calculation so the target matches the pool's
+            // current state. Using JB issuance price here would produce suboptimal liquidity when the
+            // pool price has diverged.
+            // slither-disable-next-line unused-return
+            (uint160 sqrtPriceX96,,,) = POOL_MANAGER.getSlot0(key.toId());
             uint160 sqrtPriceA = TickMath.getSqrtPriceAtTick(tickLower);
             uint160 sqrtPriceB = TickMath.getSqrtPriceAtTick(tickUpper);
 
@@ -848,7 +848,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             amount1: amount1
         });
 
-        // Record tokenId before minting
+        // Record tokenId before minting. tokenIdOf is set after the external _mintPosition call
+        // because nextTokenId() must be captured before the mint increments it. This ordering is safe:
+        // the caller (deployPool) checks tokenIdOf == 0 as a guard before entering this function,
+        // so reentering deployPool would revert with PoolAlreadyDeployed once tokenIdOf is nonzero.
         uint256 tokenId = POSITION_MANAGER.nextTokenId();
 
         _mintPosition({
@@ -1303,10 +1306,19 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         if (feeAmount > 0) {
             address feeTerminal =
                 address(IJBDirectory(DIRECTORY).primaryTerminalOf({projectId: FEE_PROJECT_ID, token: terminalToken}));
+            // If no fee terminal is set, fee tokens are stranded in the contract. This is accepted
+            // behavior — the fee project owner can set a terminal later and trigger fee collection.
             if (feeTerminal != address(0)) {
+                // Track fee tokens only if the fee project has an ERC20 deployed.
+                // If tokenOf returns address(0), the fee project uses internal credits only —
+                // the terminal payment still routes value via credits, but we skip balance tracking
+                // to avoid reverting on IERC20(address(0)).balanceOf().
                 address feeProjectToken = address(IJBTokens(TOKENS).tokenOf(FEE_PROJECT_ID));
-                uint256 feeTokensBefore = IERC20(feeProjectToken).balanceOf(address(this));
+                uint256 feeTokensBefore =
+                    feeProjectToken != address(0) ? IERC20(feeProjectToken).balanceOf(address(this)) : 0;
 
+                // Fee terminal revert blocks fee collection — accepted since the fee project is
+                // protocol-controlled and expected to maintain a functioning terminal.
                 if (_isNativeToken(terminalToken)) {
                     IJBMultiTerminal(feeTerminal).pay{value: feeAmount}({
                         projectId: FEE_PROJECT_ID,
@@ -1331,10 +1343,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                         });
                 }
 
-                uint256 feeTokensAfter = IERC20(feeProjectToken).balanceOf(address(this));
-                beneficiaryTokenCount = feeTokensAfter > feeTokensBefore ? feeTokensAfter - feeTokensBefore : 0;
+                if (feeProjectToken != address(0)) {
+                    uint256 feeTokensAfter = IERC20(feeProjectToken).balanceOf(address(this));
+                    beneficiaryTokenCount = feeTokensAfter > feeTokensBefore ? feeTokensAfter - feeTokensBefore : 0;
 
-                claimableFeeTokens[projectId] += beneficiaryTokenCount;
+                    claimableFeeTokens[projectId] += beneficiaryTokenCount;
+                }
             }
         }
 

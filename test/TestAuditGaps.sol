@@ -261,7 +261,7 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
         uint256 tokenId = hook.tokenIdOf(highWeightProject, address(terminalToken));
         assertTrue(tokenId != 0, "Pool should deploy with very high weight");
         assertTrue(
-            hook.projectDeployed(highWeightProject, address(terminalToken)),
+            hook.isPoolDeployed(highWeightProject, address(terminalToken)),
             "projectDeployed should be true with high weight"
         );
     }

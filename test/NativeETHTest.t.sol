@@ -135,7 +135,7 @@ contract NativeETHTest is LPSplitHookV4TestBase {
 
         // Verify the project has not been deployed yet (no pool exists)
         assertFalse(
-            hook.projectDeployed(PROJECT_ID, NATIVE_TOKEN), "Project should not be deployed yet (no deployPool called)"
+            hook.isPoolDeployed(PROJECT_ID, NATIVE_TOKEN), "Project should not be deployed yet (no deployPool called)"
         );
         assertFalse(hook.isPoolDeployed(PROJECT_ID, NATIVE_TOKEN), "No pool should exist for NATIVE_TOKEN yet");
     }
@@ -193,6 +193,6 @@ contract NativeETHTest is LPSplitHookV4TestBase {
         assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "Accumulated should be 0 after deploy");
 
         // Verify project is marked deployed
-        assertTrue(hook.projectDeployed(PROJECT_ID, NATIVE_TOKEN), "projectDeployed should be true after deploy");
+        assertTrue(hook.isPoolDeployed(PROJECT_ID, NATIVE_TOKEN), "projectDeployed should be true after deploy");
     }
 }

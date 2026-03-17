@@ -334,7 +334,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
 
         // Verify projectDeployed is set
         assertTrue(
-            hook.projectDeployed(PROJECT_ID, address(terminalToken)), "projectDeployed should be true after deployment"
+            hook.isPoolDeployed(PROJECT_ID, address(terminalToken)), "projectDeployed should be true after deployment"
         );
     }
 
@@ -348,7 +348,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
         _accumulateAndDeploy(PROJECT_ID, 1000e18);
 
         // Verify project is in deployed state
-        assertTrue(hook.projectDeployed(PROJECT_ID, address(terminalToken)), "projectDeployed should be true");
+        assertTrue(hook.isPoolDeployed(PROJECT_ID, address(terminalToken)), "projectDeployed should be true");
 
         // Now send more tokens via processSplitWith -- should burn, not accumulate
         uint256 additionalAmount = 200e18;
@@ -362,7 +362,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
         // After _accumulateAndDeploy, the accumulated balance is consumed by deployPool,
         // so new tokens should not add to it
         // The key check: projectDeployed is true, so the burn path was taken
-        assertTrue(hook.projectDeployed(PROJECT_ID, address(terminalToken)), "projectDeployed remains true after burn");
+        assertTrue(hook.isPoolDeployed(PROJECT_ID, address(terminalToken)), "projectDeployed remains true after burn");
     }
 
     // ─────────────────────────────────────────────────────────────────────
