@@ -179,7 +179,7 @@ contract LPSplitHookForkTest is Test {
     /// @notice Verify tokens were accumulated after processSplitWith.
     function test_fork_tokensAccumulated() public view {
         assertEq(hook.accumulatedProjectTokens(projectId), 100_000e18, "should have accumulated 100k tokens");
-        assertFalse(hook.projectDeployed(projectId, JBConstants.NATIVE_TOKEN), "should not be deployed yet");
+        assertFalse(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "should not be deployed yet");
     }
 
     /// @notice Deploy a real V4 pool via the hook — the core integration test.
@@ -193,7 +193,7 @@ contract LPSplitHookForkTest is Test {
         hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
 
         // Verify pool was deployed.
-        assertTrue(hook.projectDeployed(projectId, JBConstants.NATIVE_TOKEN), "project should be deployed");
+        assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "project should be deployed");
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should be deployed");
 
         // Verify the hook holds a real PositionManager NFT.

@@ -190,14 +190,14 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
     function test_M2_projectDeployed_perTerminalToken() public {
         // PROJECT_ID already has a pool deployed for terminalToken
         assertTrue(
-            hook.projectDeployed(PROJECT_ID, address(terminalToken)),
+            hook.isPoolDeployed(PROJECT_ID, address(terminalToken)),
             "projectDeployed should be true for the deployed terminal token"
         );
 
         // For a different terminal token, projectDeployed should be false
         MockERC20 otherTerminalToken = new MockERC20("Other Terminal", "OTERM", 18);
         assertFalse(
-            hook.projectDeployed(PROJECT_ID, address(otherTerminalToken)),
+            hook.isPoolDeployed(PROJECT_ID, address(otherTerminalToken)),
             "projectDeployed should be false for a different terminal token"
         );
     }
@@ -259,7 +259,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
     function test_M2_multiTerminalToken_independentFlags() public {
         // PROJECT_ID already has a pool for terminalToken
         assertTrue(
-            hook.projectDeployed(PROJECT_ID, address(terminalToken)), "First terminal token pool should be deployed"
+            hook.isPoolDeployed(PROJECT_ID, address(terminalToken)), "First terminal token pool should be deployed"
         );
 
         // Set up a second terminal token
@@ -279,13 +279,13 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
 
         // The second terminal token should NOT be flagged as deployed
         assertFalse(
-            hook.projectDeployed(PROJECT_ID, address(secondTerminalToken)),
+            hook.isPoolDeployed(PROJECT_ID, address(secondTerminalToken)),
             "Second terminal token should not be deployed yet"
         );
 
         // The first terminal token should still be deployed
         assertTrue(
-            hook.projectDeployed(PROJECT_ID, address(terminalToken)), "First terminal token should still be deployed"
+            hook.isPoolDeployed(PROJECT_ID, address(terminalToken)), "First terminal token should still be deployed"
         );
 
         // Note: processSplitWith limitation -- it uses deployedPoolCount (per-project) to decide

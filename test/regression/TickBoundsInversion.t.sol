@@ -291,7 +291,7 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
         // Verify pool was deployed successfully.
         uint256 tokenId = hook.tokenIdOf(TEST_PROJECT_ID, address(lowTerminalToken));
         assertTrue(tokenId != 0, "tokenIdOf should be nonzero after deploy");
-        assertTrue(hook.projectDeployed(TEST_PROJECT_ID, address(lowTerminalToken)), "projectDeployed should be true");
+        assertTrue(hook.isPoolDeployed(TEST_PROJECT_ID, address(lowTerminalToken)), "projectDeployed should be true");
     }
 
     // ─── Helper
