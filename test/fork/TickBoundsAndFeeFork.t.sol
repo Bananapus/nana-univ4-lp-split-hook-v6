@@ -488,11 +488,7 @@ contract TickBoundsAndFeeForkTest is Test {
         // Mint project tokens for sell-side swaps.
         vm.prank(multisig);
         jbController.mintTokensOf({
-            projectId: projectId,
-            tokenCount: 50_000e18,
-            beneficiary: address(this),
-            memo: "",
-            useReservedPercent: false
+            projectId: projectId, tokenCount: 50_000e18, beneficiary: address(this), memo: "", useReservedPercent: false
         });
         IERC20(address(projectToken)).approve(address(swapHelper), type(uint256).max);
 
@@ -555,11 +551,7 @@ contract TickBoundsAndFeeForkTest is Test {
         // Mint project tokens.
         vm.prank(multisig);
         jbController.mintTokensOf({
-            projectId: projectId,
-            tokenCount: 50_000e18,
-            beneficiary: address(this),
-            memo: "",
-            useReservedPercent: false
+            projectId: projectId, tokenCount: 50_000e18, beneficiary: address(this), memo: "", useReservedPercent: false
         });
         IERC20(address(projectToken)).approve(address(swapHelper), type(uint256).max);
 
@@ -588,10 +580,7 @@ contract TickBoundsAndFeeForkTest is Test {
         // Rebalance — requires SET_BUYBACK_POOL permission (multisig is owner).
         vm.prank(multisig);
         hook.rebalanceLiquidity({
-            projectId: projectId,
-            terminalToken: JBConstants.NATIVE_TOKEN,
-            decreaseAmount0Min: 0,
-            decreaseAmount1Min: 0
+            projectId: projectId, terminalToken: JBConstants.NATIVE_TOKEN, decreaseAmount0Min: 0, decreaseAmount1Min: 0
         });
 
         // Verify new position exists and has liquidity.
@@ -617,8 +606,7 @@ contract TickBoundsAndFeeForkTest is Test {
     ///         the exact scenario that triggered tick inversion for token0-terminal pools.
     function test_fork_ethPool_extremeTaxRate_swapsSucceed() public {
         // Launch project with 95% cashOutTaxRate.
-        uint256 extremeProjectId =
-            _launchProject({withOwnerMinting: true, cashOutTaxRate: 9500, weight: 1_000_000e18});
+        uint256 extremeProjectId = _launchProject({withOwnerMinting: true, cashOutTaxRate: 9500, weight: 1_000_000e18});
 
         vm.prank(multisig);
         IJBToken extremeToken = jbController.deployERC20For(extremeProjectId, "Extreme Token", "XTR", bytes32(0));

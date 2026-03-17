@@ -19,8 +19,7 @@ contract AccumulationStageTest is LPSplitHookV4TestBase {
     /// @notice Before any pool is deployed, projectDeployed should be false.
     function test_ProjectDeployed_FalseBeforeDeploy() public view {
         assertFalse(
-            hook.isPoolDeployed(PROJECT_ID, address(terminalToken)),
-            "projectDeployed should be false before any deploy"
+            hook.isPoolDeployed(PROJECT_ID, address(terminalToken)), "projectDeployed should be false before any deploy"
         );
     }
 
