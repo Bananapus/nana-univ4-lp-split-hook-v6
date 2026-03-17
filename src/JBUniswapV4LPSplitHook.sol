@@ -692,6 +692,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             // Use the actual pool price for liquidity calculation so the target matches the pool's
             // current state. Using JB issuance price here would produce suboptimal liquidity when the
             // pool price has diverged.
+            // slither-disable-next-line unused-return
             (uint160 sqrtPriceX96,,,) = POOL_MANAGER.getSlot0(key.toId());
             uint160 sqrtPriceA = TickMath.getSqrtPriceAtTick(tickLower);
             uint160 sqrtPriceB = TickMath.getSqrtPriceAtTick(tickUpper);
