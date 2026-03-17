@@ -1319,13 +1319,18 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
                 // Fee terminal revert blocks fee collection — accepted since the fee project is
                 // protocol-controlled and expected to maintain a functioning terminal.
+                // minReturnedTokens is 0 by design: slippage protection is the fee project's
+                // responsibility (via its own data hook / buyback hook), not this contract's.
+                // Setting a floor here would risk reverting on small fee amounts where
+                // mulDiv rounding yields 0 tokens, and any non-trivial floor would require
+                // an oracle dependency that doesn't belong in the LP split hook.
                 if (_isNativeToken(terminalToken)) {
                     IJBMultiTerminal(feeTerminal).pay{value: feeAmount}({
                         projectId: FEE_PROJECT_ID,
                         token: terminalToken,
                         amount: feeAmount,
                         beneficiary: address(this),
-                        minReturnedTokens: 1,
+                        minReturnedTokens: 0,
                         memo: "LP Fee",
                         metadata: ""
                     });
@@ -1337,7 +1342,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                             token: terminalToken,
                             amount: feeAmount,
                             beneficiary: address(this),
-                            minReturnedTokens: 1,
+                            minReturnedTokens: 0,
                             memo: "LP Fee",
                             metadata: ""
                         });
