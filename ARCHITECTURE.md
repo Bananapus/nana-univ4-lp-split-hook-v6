@@ -4,6 +4,8 @@
 
 Uniswap V4 liquidity pool deployment hook for Juicebox V6. Receives project tokens via reserved token splits, accumulates them until a deployment threshold is met, then creates a Uniswap V4 pool and provides initial liquidity. After deployment, burns new tokens and routes LP fees back to the project.
 
+**Requirement:** The project must have a deployed ERC-20 token (via `JBTokens.deployERC20For`). Projects using only internal credits (`tokenOf == address(0)`) are rejected — credits cannot be paired as Uniswap V4 LP. `processSplitWith` reverts with `InvalidProjectId` if the token is `address(0)`.
+
 ## Contract Map
 
 ```

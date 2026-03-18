@@ -236,4 +236,48 @@ contract AccumulationStageTest is LPSplitHookV4TestBase {
             "accumulatedProjectTokens should remain unchanged after zero-amount call"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // 13. processSplitWith -- reverts for credit tokens (address(0))
+    // -----------------------------------------------------------------------
+
+    /// @notice processSplitWith reverts when the project token is address(0) (credits, no ERC-20 deployed).
+    ///         The hook requires an ERC-20 project token because credits cannot be paired as Uniswap V4 LP.
+    function test_ProcessSplit_RevertsIf_CreditToken() public {
+        uint256 amount = 100e18;
+
+        // Build context with token = address(0) — simulating a project that only has credits
+        JBSplitHookContext memory context = _buildContext(PROJECT_ID, address(0), amount, 1);
+
+        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidProjectId.selector);
+        vm.prank(address(controller));
+        hook.processSplitWith(context);
+    }
+
+    // -----------------------------------------------------------------------
+    // 14. processSplitWith -- reverts if balance doesn't cover accumulated
+    // -----------------------------------------------------------------------
+
+    /// @notice processSplitWith reverts with InsufficientBalance when the contract's ERC-20 balance
+    ///         is less than the accumulated total (e.g., a custom controller that doesn't transfer first).
+    function test_ProcessSplit_RevertsIf_InsufficientBalance() public {
+        // First, do a legitimate accumulation so the counter is nonzero
+        _accumulateTokens(PROJECT_ID, 100e18);
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 100e18);
+
+        // Now simulate a custom controller that calls processSplitWith WITHOUT transferring tokens first.
+        // The hook's balance is 100e18 but after this call the accumulator would be 200e18.
+        // We burn tokens from the hook to create the deficit.
+        vm.prank(address(hook));
+        projectToken.transfer(address(0xdead), 50e18);
+
+        // Hook balance is now 50e18 but accumulator is 100e18.
+        // Another accumulation of 1e18 would push accumulator to 101e18 > balance of 51e18 (if transferred).
+        // But we simulate no transfer — just the call.
+        JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, 1e18);
+
+        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientBalance.selector);
+        vm.prank(address(controller));
+        hook.processSplitWith(context);
+    }
 }

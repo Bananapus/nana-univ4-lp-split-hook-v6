@@ -328,23 +328,24 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
     }
 
     // -----------------------------------------------------------------------
-    // 14. H-1 Regression: fee routing uses minReturnedTokens >= 1
+    // 14. Fee routing uses minReturnedTokens == 0 (accepted behavior)
     // -----------------------------------------------------------------------
 
-    /// @notice terminal.pay() in _routeFeesToProject must use minReturnedTokens >= 1
-    ///         to prevent zero-output MEV extraction on fee payments.
-    function test_H1_feeRouting_minReturnedTokens_nonZero() public {
+    /// @notice terminal.pay() in _routeFeesToProject uses minReturnedTokens = 0 by design.
+    ///         Slippage protection is the fee project's responsibility (via its own data hook /
+    ///         buyback hook). A non-zero floor would revert on dust amounts where mulDiv
+    ///         rounding yields 0 tokens. See RISKS.md §8.1.
+    function test_feeRouting_minReturnedTokens_isZero() public {
         uint256 feeAmount = 1000e18;
         _setTerminalTokenFees(feeAmount);
 
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
 
         // The mock terminal records the minReturnedTokens argument from the last pay() call.
-        // Verify it is at least 1 (not 0).
-        assertGe(
+        assertEq(
             terminal.lastPayMinReturnedTokens(),
-            1,
-            "H-1: terminal.pay must use minReturnedTokens >= 1 to prevent zero-output MEV"
+            0,
+            "Fee routing uses minReturnedTokens = 0: slippage is fee project's responsibility"
         );
     }
 }

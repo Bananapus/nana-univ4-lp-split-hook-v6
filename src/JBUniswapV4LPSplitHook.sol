@@ -66,6 +66,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     error JBUniswapV4LPSplitHook_AlreadyInitialized();
     error JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject();
+    error JBUniswapV4LPSplitHook_InsufficientBalance();
     error JBUniswapV4LPSplitHook_InvalidFeePercent();
     error JBUniswapV4LPSplitHook_InvalidProjectId();
     error JBUniswapV4LPSplitHook_InvalidStageForAction();
@@ -607,6 +608,16 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 initialWeightOf[context.projectId] = ruleset.weight;
             }
             _accumulateTokens({projectId: context.projectId, amount: context.amount});
+
+            // This hook requires an ERC-20 project token — credits cannot be paired as LP.
+            if (projectToken == address(0)) revert JBUniswapV4LPSplitHook_InvalidProjectId();
+
+            // Defense-in-depth: verify actual ERC-20 balance covers accumulated total.
+            // The standard controller transfers tokens before calling processSplitWith,
+            // but custom controllers may not — this guards against accounting drift.
+            if (IERC20(projectToken).balanceOf(address(this)) < accumulatedProjectTokens[context.projectId]) {
+                revert JBUniswapV4LPSplitHook_InsufficientBalance();
+            }
         } else {
             _burnReceivedTokens({projectId: context.projectId, projectToken: projectToken});
         }
@@ -1325,6 +1336,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 // Setting a floor here would risk reverting on small fee amounts where
                 // mulDiv rounding yields 0 tokens, and any non-trivial floor would require
                 // an oracle dependency that doesn't belong in the LP split hook.
+                // See RISKS.md §8.1.
                 if (_isNativeToken(terminalToken)) {
                     IJBMultiTerminal(feeTerminal).pay{value: feeAmount}({
                         projectId: FEE_PROJECT_ID,

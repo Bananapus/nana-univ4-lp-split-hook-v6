@@ -12,6 +12,7 @@ Forward-looking risk analysis for `JBUniswapV4LPSplitHook`. References to `src/J
 - **Permit2** -- Used for ERC-20 approvals to PositionManager (lines 1253-1264). A Permit2 exploit could drain approved tokens during the `_mintPosition` window.
 - **JB Directory / Controller** -- `controllerOf()`, `primaryTerminalOf()`, and `PROJECTS().ownerOf()` are all trusted. Directory compromise = full hook compromise. `processSplitWith` trusts `msg.sender == controllerOf(projectId)` (line 597) as its sole authentication.
 - **Fee routing (38/62 default split)** -- `FEE_PERCENT` and `FEE_PROJECT_ID` are set once in `initialize()` and are immutable thereafter. The fee project must maintain a functioning terminal for the terminal token. If `primaryTerminalOf(FEE_PROJECT_ID, token)` returns `address(0)`, the fee share silently stays in the contract (line 1306 check), eventually absorbed into the next liquidity operation. The remaining 62% still routes correctly.
+- **ERC-20 project token required** -- `processSplitWith` reverts with `InvalidProjectId` if `context.token == address(0)` (credit-only project). Credits are internal JBTokens accounting and cannot be paired as Uniswap V4 LP. Projects must deploy an ERC-20 via `JBTokens.deployERC20For` before using this hook. The standard controller passes `address(token)` from `tokenOf(projectId)` — if no ERC-20 is deployed, token is `address(0)` and the hook rejects the split.
 - **Clone initialization** -- Implementation contract can be `initialize()`d by anyone (NM-004, acknowledged). No practical impact since clones have separate storage, but the implementation's `FEE_PROJECT_ID` / `FEE_PERCENT` could be set to arbitrary values.
 
 ---
@@ -101,10 +102,6 @@ Forward-looking risk analysis for `JBUniswapV4LPSplitHook`. References to `src/J
 
 `_approveViaPermit2` checks `amount > type(uint160).max` and reverts with `JBUniswapV4LPSplitHook_Permit2AmountOverflow` before the narrowing cast. This is preferred over `SafeCast.toUint160` to avoid an external library dependency for a single check. The overflow condition is unreachable in practice — no ERC-20 in production has supply exceeding `type(uint160).max` (~1.46e48), and Permit2 itself enforces uint160 approval amounts at the protocol level — but the explicit revert provides defense-in-depth against silent truncation.
 
-### 8.3 No runtime balance check in `processSplitWith`
+### 8.3 Balance guard in `processSplitWith` for custom controllers
 
-`processSplitWith` accumulates project tokens via `_accumulateTokens` (line 609) without verifying that the contract's actual ERC-20 balance covers the accumulated total. This is safe because:
-
-- **Tokens are transferred before accumulation.** The JB controller transfers tokens to this contract before calling `processSplitWith` (via the split hook mechanism). By the time `_accumulateTokens` increments the counter, the tokens are already in the contract's balance. The accumulator cannot exceed the balance unless an external actor directly transfers tokens out of the contract — which is impossible since only the hook itself initiates transfers.
-- **The accumulator is cleared atomically on deploy.** When `deployPool` calls `_addUniswapLiquidity`, the full accumulated balance is used to mint the LP position, and the accumulator is set to 0 (line 869). No partial-use path exists.
-- **A runtime check adds gas to every split payment.** `processSplitWith` is called once per reserved token distribution cycle per project. The `balanceOf` SLOAD (~2,100 gas cold) on every call protects against a condition that cannot occur through normal protocol operation.
+After `_accumulateTokens`, `processSplitWith` verifies `IERC20(projectToken).balanceOf(address(this)) >= accumulatedProjectTokens[projectId]` and reverts with `JBUniswapV4LPSplitHook_InsufficientBalance` if violated. The standard JB controller transfers tokens before calling the split hook, so this check always passes under normal operation. However, projects may use custom controllers that do not guarantee transfer-before-callback ordering — the guard prevents silent accounting drift in that case.
