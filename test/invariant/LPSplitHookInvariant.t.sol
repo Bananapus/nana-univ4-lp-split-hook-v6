@@ -50,7 +50,10 @@ contract InvariantMockPermit2 {
 contract LPSplitHookHandler is Test {
     JBUniswapV4LPSplitHook public hook;
     MockERC20 public projectToken;
+    MockERC20 public terminalToken;
     MockJBController public controller;
+    MockPositionManager public positionManager;
+    address public owner;
 
     /// @dev Project IDs the handler exercises. Using a small set (1-3) keeps the
     ///      invariant checker tractable while covering multi-project interactions.
@@ -63,10 +66,30 @@ contract LPSplitHookHandler is Test {
     /// @dev Ghost variable: number of successful processSplitWith calls.
     uint256 public callCount;
 
-    constructor(JBUniswapV4LPSplitHook _hook, MockERC20 _projectToken, MockJBController _controller) {
+    /// @dev Ghost variable: number of successful collectAndRouteLPFees calls.
+    uint256 public collectFeeCallCount;
+
+    /// @dev Ghost variable: cumulative fee tokens credited to each project via _routeFeesToProject.
+    ///      Tracked by observing claimableFeeTokens delta after each collectAndRouteLPFees call.
+    mapping(uint256 projectId => uint256 totalFeeTokensCredited) public totalFeeTokensCredited;
+
+    /// @dev Ghost variable: number of successful rebalanceLiquidity calls.
+    uint256 public rebalanceCallCount;
+
+    constructor(
+        JBUniswapV4LPSplitHook _hook,
+        MockERC20 _projectToken,
+        MockERC20 _terminalToken,
+        MockJBController _controller,
+        MockPositionManager _positionManager,
+        address _owner
+    ) {
         hook = _hook;
         projectToken = _projectToken;
+        terminalToken = _terminalToken;
         controller = _controller;
+        positionManager = _positionManager;
+        owner = _owner;
     }
 
     /// @notice Accumulate project tokens via processSplitWith in pre-deployment stage.
@@ -137,6 +160,91 @@ contract LPSplitHookHandler is Test {
         hook.processSplitWith(context);
 
         callCount++;
+    }
+
+    /// @notice Collect LP fees from a project's position and route them.
+    /// @dev Only runs if pool is deployed (tokenIdOf != 0). The mock position manager
+    ///      must have collectable fees configured for this to produce meaningful results.
+    /// @param projectIdSeed Fuzzed seed, reduced to valid project ID range.
+    /// @param feeAmount0Seed Fuzzed seed for configuring collectable fee amount0.
+    /// @param feeAmount1Seed Fuzzed seed for configuring collectable fee amount1.
+    function collectAndRouteLPFees(uint256 projectIdSeed, uint256 feeAmount0Seed, uint256 feeAmount1Seed) external {
+        uint256 projectId = bound(projectIdSeed, 1, MAX_PROJECT_ID);
+
+        // Guard: only run if pool is deployed for this project.
+        if (hook.deployedPoolCount(projectId) == 0) return;
+
+        uint256 tokenId = hook.tokenIdOf(projectId, address(terminalToken));
+        if (tokenId == 0) return;
+
+        // Bound fee amounts to realistic range [0, 1e24] to avoid overflow.
+        uint256 feeAmount0 = bound(feeAmount0Seed, 0, 1e24);
+        uint256 feeAmount1 = bound(feeAmount1Seed, 0, 1e24);
+
+        // Configure collectable fees on the mock position manager.
+        positionManager.setCollectableFees(tokenId, feeAmount0, feeAmount1);
+
+        // Mint the fee tokens to the position manager so it can transfer them on TAKE_PAIR.
+        // The token order depends on how the pool key was constructed (projectToken vs terminalToken).
+        // Mint both to the position manager to cover either ordering.
+        projectToken.mint(address(positionManager), feeAmount0);
+        terminalToken.mint(address(positionManager), feeAmount1);
+
+        // Snapshot claimableFeeTokens before to track the delta.
+        uint256 claimableBefore = hook.claimableFeeTokens(projectId);
+
+        // Call collectAndRouteLPFees — permissionless, anyone can call.
+        try hook.collectAndRouteLPFees(projectId, address(terminalToken)) {
+            // Track fee token credit delta.
+            uint256 claimableAfter = hook.claimableFeeTokens(projectId);
+            if (claimableAfter > claimableBefore) {
+                totalFeeTokensCredited[projectId] += claimableAfter - claimableBefore;
+            }
+            collectFeeCallCount++;
+        } catch {
+            // Revert is acceptable — e.g., if token ordering causes issues in the mock.
+        }
+    }
+
+    /// @notice Rebalance a project's LP position by burning and re-minting at current price.
+    /// @dev Only runs if pool is deployed. Requires SET_BUYBACK_POOL permission, so we
+    ///      prank as the project owner. Uses try/catch since the operation can revert on
+    ///      price conditions (e.g., zero liquidity after rebalance).
+    /// @param projectIdSeed Fuzzed seed, reduced to valid project ID range.
+    /// @param amount0MinSeed Fuzzed seed for minimum amount0 on decrease (slippage).
+    /// @param amount1MinSeed Fuzzed seed for minimum amount1 on decrease (slippage).
+    function rebalanceLiquidity(uint256 projectIdSeed, uint256 amount0MinSeed, uint256 amount1MinSeed) external {
+        uint256 projectId = bound(projectIdSeed, 1, MAX_PROJECT_ID);
+
+        // Guard: only run if pool is deployed for this project.
+        if (hook.deployedPoolCount(projectId) == 0) return;
+
+        uint256 tokenId = hook.tokenIdOf(projectId, address(terminalToken));
+        if (tokenId == 0) return;
+
+        // Use zero for slippage mins (most permissive) to maximize successful calls.
+        // Bound seeds to [0, 0] — effectively always zero. This avoids slippage reverts
+        // in the mock environment where exact amounts are hard to predict.
+        uint256 amount0Min = bound(amount0MinSeed, 0, 0);
+        uint256 amount1Min = bound(amount1MinSeed, 0, 0);
+
+        // Snapshot claimableFeeTokens before to track fee collection during rebalance.
+        uint256 claimableBefore = hook.claimableFeeTokens(projectId);
+
+        // Rebalance requires SET_BUYBACK_POOL permission — prank as project owner.
+        vm.prank(owner);
+        try hook.rebalanceLiquidity(projectId, address(terminalToken), amount0Min, amount1Min) {
+            // Track fee token credit delta (rebalance collects fees in step 1).
+            uint256 claimableAfter = hook.claimableFeeTokens(projectId);
+            if (claimableAfter > claimableBefore) {
+                totalFeeTokensCredited[projectId] += claimableAfter - claimableBefore;
+            }
+            rebalanceCallCount++;
+        } catch {
+            // Revert is expected in many cases:
+            // - InsufficientLiquidity if new position has zero liquidity
+            // - Price/tick calculation issues in mock environment
+        }
     }
 }
 
@@ -232,7 +340,7 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
         hook.initialize(FEE_PROJECT_ID, FEE_PERCENT);
 
         // Deploy the handler
-        handler = new LPSplitHookHandler(hook, projectToken, controller);
+        handler = new LPSplitHookHandler(hook, projectToken, terminalToken, controller, positionManager, owner);
 
         // Target only the handler for invariant fuzzing
         targetContract(address(handler));
@@ -380,6 +488,59 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
+    // Invariant 5: Fee accounting — claimableFeeTokens bounded by collections
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice For each project, claimableFeeTokens must be bounded by what has been
+    ///         credited through fee collection (ghost variable cross-check).
+    /// @dev This catches any scenario where claimableFeeTokens is incremented without
+    ///      a corresponding fee collection from the LP position.
+    function invariant_feeAccountingBounded() public view {
+        for (uint256 i = 1; i <= handler.MAX_PROJECT_ID(); i++) {
+            assertLe(
+                hook.claimableFeeTokens(i),
+                handler.totalFeeTokensCredited(i),
+                "INVARIANT VIOLATED: claimableFeeTokens exceeds total credited via fee collection"
+            );
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Invariant 6: Position lifecycle — tokenIdOf nonzero only when deployed
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice tokenIdOf[projectId][terminalToken] must be nonzero only when
+    ///         deployedPoolCount[projectId] > 0. This is a strengthened version of
+    ///         invariant 2 that also accounts for rebalanceLiquidity, which replaces
+    ///         tokenIdOf but must never zero it out.
+    /// @dev rebalanceLiquidity reverts with InsufficientLiquidity rather than storing
+    ///      a zero tokenId, so this invariant should hold after any sequence of calls.
+    function invariant_positionLifecycleConsistency() public view {
+        for (uint256 i = 1; i <= handler.MAX_PROJECT_ID(); i++) {
+            uint256 tokenId = hook.tokenIdOf(i, address(terminalToken));
+            uint256 poolCount = hook.deployedPoolCount(i);
+
+            // If a pool is deployed, tokenIdOf should be nonzero (rebalance preserves this).
+            if (poolCount > 0) {
+                assertGt(
+                    tokenId,
+                    0,
+                    "INVARIANT VIOLATED: deployedPoolCount > 0 but tokenIdOf is zero"
+                );
+            }
+
+            // If no pool deployed, tokenIdOf must be zero.
+            if (poolCount == 0) {
+                assertEq(
+                    tokenId,
+                    0,
+                    "INVARIANT VIOLATED: deployedPoolCount is zero but tokenIdOf is nonzero"
+                );
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
     // Post-run stats for debugging
     // ═══════════════════════════════════════════════════════════════════════
 
@@ -387,5 +548,7 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
     function invariant_callSummary() public view {
         // This invariant always passes — it exists to surface coverage stats in traces.
         assertGe(handler.callCount(), 0, "callCount should be non-negative");
+        assertGe(handler.collectFeeCallCount(), 0, "collectFeeCallCount should be non-negative");
+        assertGe(handler.rebalanceCallCount(), 0, "rebalanceCallCount should be non-negative");
     }
 }
