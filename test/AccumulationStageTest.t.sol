@@ -269,6 +269,7 @@ contract AccumulationStageTest is LPSplitHookV4TestBase {
         // The hook's balance is 100e18 but after this call the accumulator would be 200e18.
         // We burn tokens from the hook to create the deficit.
         vm.prank(address(hook));
+        // forge-lint: disable-next-line(erc20-unchecked-transfer)
         projectToken.transfer(address(0xdead), 50e18);
 
         // Hook balance is now 50e18 but accumulator is 100e18.

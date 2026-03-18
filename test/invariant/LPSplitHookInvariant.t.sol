@@ -40,6 +40,7 @@ contract InvariantMockPermit2 {
 
     function transferFrom(address from, address to, uint160 amount, address token) external {
         allowances[from][token][msg.sender] -= amount;
+        // forge-lint: disable-next-line(erc20-unchecked-transfer)
         IERC20(token).transferFrom(from, to, amount);
     }
 }
@@ -168,6 +169,7 @@ contract LPSplitHookHandler is Test {
     /// @param projectIdSeed Fuzzed seed, reduced to valid project ID range.
     /// @param feeAmount0Seed Fuzzed seed for configuring collectable fee amount0.
     /// @param feeAmount1Seed Fuzzed seed for configuring collectable fee amount1.
+    // forge-lint: disable-next-line(mixed-case-function)
     function collectAndRouteLPFees(uint256 projectIdSeed, uint256 feeAmount0Seed, uint256 feeAmount1Seed) external {
         uint256 projectId = bound(projectIdSeed, 1, MAX_PROJECT_ID);
 
@@ -346,7 +348,8 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
         targetContract(address(handler));
     }
 
-    // ─── Setup Helpers ───────────────────────────────────────────────────
+    // ─── Setup Helpers
+    // ───────────────────────────────────────────────────
 
     function _setupProject(uint256 projectId) internal {
         // Set directory controller via vm.store (fallback-based mock)
@@ -379,15 +382,11 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
         store.setSurplus(projectId, 0.5e18);
 
         // Set accounting context
-        terminal.setAccountingContext(
-            projectId, address(terminalToken), uint32(uint160(address(terminalToken))), 18
-        );
+        terminal.setAccountingContext(projectId, address(terminalToken), uint32(uint160(address(terminalToken))), 18);
         terminal.addAccountingContext(
             projectId,
             JBAccountingContext({
-                token: address(terminalToken),
-                decimals: 18,
-                currency: uint32(uint160(address(terminalToken)))
+                token: address(terminalToken), decimals: 18, currency: uint32(uint160(address(terminalToken)))
             })
         );
     }
@@ -429,21 +428,13 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
             uint256 poolCount = hook.deployedPoolCount(i);
 
             if (tokenId != 0) {
-                assertGt(
-                    poolCount,
-                    0,
-                    "INVARIANT VIOLATED: tokenIdOf nonzero but deployedPoolCount is zero"
-                );
+                assertGt(poolCount, 0, "INVARIANT VIOLATED: tokenIdOf nonzero but deployedPoolCount is zero");
             }
 
             // Reverse direction: if no pool deployed for this project, tokenId must be zero
             // (for the terminal tokens we track).
             if (poolCount == 0) {
-                assertEq(
-                    tokenId,
-                    0,
-                    "INVARIANT VIOLATED: deployedPoolCount is zero but tokenIdOf is nonzero"
-                );
+                assertEq(tokenId, 0, "INVARIANT VIOLATED: deployedPoolCount is zero but tokenIdOf is nonzero");
             }
         }
     }
@@ -522,20 +513,12 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
 
             // If a pool is deployed, tokenIdOf should be nonzero (rebalance preserves this).
             if (poolCount > 0) {
-                assertGt(
-                    tokenId,
-                    0,
-                    "INVARIANT VIOLATED: deployedPoolCount > 0 but tokenIdOf is zero"
-                );
+                assertGt(tokenId, 0, "INVARIANT VIOLATED: deployedPoolCount > 0 but tokenIdOf is zero");
             }
 
             // If no pool deployed, tokenIdOf must be zero.
             if (poolCount == 0) {
-                assertEq(
-                    tokenId,
-                    0,
-                    "INVARIANT VIOLATED: deployedPoolCount is zero but tokenIdOf is nonzero"
-                );
+                assertEq(tokenId, 0, "INVARIANT VIOLATED: deployedPoolCount is zero but tokenIdOf is nonzero");
             }
         }
     }

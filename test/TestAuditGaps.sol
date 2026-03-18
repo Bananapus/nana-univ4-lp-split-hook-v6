@@ -2,9 +2,7 @@
 pragma solidity 0.8.26;
 
 import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
-import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
-import {MockERC20} from "./mock/MockERC20.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
 /// @notice Audit gap tests: MEV/sandwich simulation on rebalance and extreme price scenarios.
