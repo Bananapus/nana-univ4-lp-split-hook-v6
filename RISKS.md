@@ -84,3 +84,27 @@ Forward-looking risk analysis for `JBUniswapV4LPSplitHook`. References to `src/J
 - **Fee tokens match actual balance** -- `claimableFeeTokens[projectId]` should equal the actual fee project token balance attributable to that project. After `claimFeeTokensFor`, balance is zeroed before transfer (lines 498-499), preventing reentrancy double-claim.
 - **Tick bounds always valid** -- `tickLower < tickUpper`, both aligned to TICK_SPACING (200), both within `[MIN_TICK + TICK_SPACING, MAX_TICK - TICK_SPACING]`. The sorting fix (lines 951-952) and clamp (lines 958-961) enforce this.
 - **One pool per (projectId, terminalToken)** -- `deployPool` reverts with `PoolAlreadyDeployed` if `tokenIdOf != 0` (line 566). No path creates a second pool for the same pair.
+
+---
+
+## 8. Accepted Behaviors
+
+### 8.1 Fee routing uses `minReturnedTokens: 0` (no slippage floor)
+
+`_routeFeesToProject` pays LP fees into the fee project's terminal with `minReturnedTokens: 0` (lines 1336, 1348). This is by design:
+
+- **Slippage protection is the fee project's responsibility.** The fee project (Juicebox protocol, project ID 1) controls its own data hook and buyback hook, which handle routing and slippage for incoming payments. The LP split hook has no oracle or TWAP reference for the fee project's token price, so any floor it sets would be arbitrary.
+- **A non-zero floor would revert on dust amounts.** When `feeAmount` is small (e.g., 1-100 wei), the fee project's weight-based minting via `mulDiv(feeAmount, weight, weightRatio)` can truncate to 0 tokens. Setting `minReturnedTokens: 1` would cause these payments to revert, blocking fee collection for the main project entirely.
+- **MEV surface is limited.** The fee payment does not move the LP pool price (it routes to a JB terminal, not V4). A sandwich attacker would need to manipulate the fee project's terminal state, which requires its own payment/cashout cycle — the payoff does not justify the complexity for the small amounts involved (typically 38% of accrued LP swap fees).
+
+### 8.2 Permit2 approval guards `uint160` overflow with explicit revert
+
+`_approveViaPermit2` checks `amount > type(uint160).max` and reverts with `JBUniswapV4LPSplitHook_Permit2AmountOverflow` before the narrowing cast. This is preferred over `SafeCast.toUint160` to avoid an external library dependency for a single check. The overflow condition is unreachable in practice — no ERC-20 in production has supply exceeding `type(uint160).max` (~1.46e48), and Permit2 itself enforces uint160 approval amounts at the protocol level — but the explicit revert provides defense-in-depth against silent truncation.
+
+### 8.3 No runtime balance check in `processSplitWith`
+
+`processSplitWith` accumulates project tokens via `_accumulateTokens` (line 609) without verifying that the contract's actual ERC-20 balance covers the accumulated total. This is safe because:
+
+- **Tokens are transferred before accumulation.** The JB controller transfers tokens to this contract before calling `processSplitWith` (via the split hook mechanism). By the time `_accumulateTokens` increments the counter, the tokens are already in the contract's balance. The accumulator cannot exceed the balance unless an external actor directly transfers tokens out of the contract — which is impossible since only the hook itself initiates transfers.
+- **The accumulator is cleared atomically on deploy.** When `deployPool` calls `_addUniswapLiquidity`, the full accumulated balance is used to mint the LP position, and the accumulator is set to 0 (line 869). No partial-use path exists.
+- **A runtime check adds gas to every split payment.** `processSplitWith` is called once per reserved token distribution cycle per project. The `balanceOf` SLOAD (~2,100 gas cold) on every call protects against a condition that cannot occur through normal protocol operation.
