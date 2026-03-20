@@ -23,7 +23,7 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 
 | Function | What it does |
 |----------|-------------|
-| `deployPool(projectId, terminalToken, amount0Min, amount1Min, minCashOutReturn)` | Requires `SET_BUYBACK_POOL` permission unless the current ruleset's weight has decayed to 1/10th or less of `initialWeightOf[projectId]` (becomes permissionless). Creates V4 pool at geometric mean of [cashOut, issuance] rates. Computes optimal cash-out fraction, cashes out tokens via terminal, mints concentrated LP position, handles leftovers (burns project tokens, adds terminal tokens to project balance). Sets `projectDeployed = true`. |
+| `deployPool(projectId, terminalToken, amount0Min, amount1Min, minCashOutReturn)` | Requires `SET_BUYBACK_POOL` permission unless the current ruleset's weight has decayed to 1/10th or less of `initialWeightOf[projectId]` (becomes permissionless). Creates V4 pool at geometric mean of [cashOut, issuance] rates. Computes optimal cash-out fraction, cashes out tokens via terminal, mints concentrated LP position, handles leftovers (burns project tokens, adds terminal tokens to project balance). Once a pool exists, a different `terminalToken` for the same project is rejected. |
 
 ### Fee Management
 
