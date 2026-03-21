@@ -542,14 +542,31 @@ contract MockJBTerminalStore {
     }
 
     /// @dev Matches
-    /// IJBTerminalStore.currentReclaimableSurplusOf(uint256,uint256,IJBTerminal[],JBAccountingContext[],uint256,uint256)
+    /// IJBTerminalStore.currentReclaimableSurplusOf(uint256,uint256,IJBTerminal[],address[],uint256,uint256)
     function currentReclaimableSurplusOf(
         uint256 projectId,
         uint256 cashOutCount,
         IJBTerminal[] calldata,
         /* terminals */
-        JBAccountingContext[] calldata,
-        /* accountingContexts */
+        address[] calldata,
+        /* tokens */
+        uint256,
+        /* decimals */
+        uint256 /* currency */
+    )
+        external
+        view
+        returns (uint256)
+    {
+        uint256 surplus = surplusPerToken[projectId];
+        if (surplus == 0) return 0;
+        return (surplus * cashOutCount) / 1e18;
+    }
+
+    /// @dev Matches IJBTerminalStore.currentTotalReclaimableSurplusOf(uint256,uint256,uint256,uint256)
+    function currentTotalReclaimableSurplusOf(
+        uint256 projectId,
+        uint256 cashOutCount,
         uint256,
         /* decimals */
         uint256 /* currency */

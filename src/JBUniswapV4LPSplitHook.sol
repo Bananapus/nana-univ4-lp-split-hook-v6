@@ -21,7 +21,6 @@ import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBMultiTerminal} from "@bananapus/core-v6/src/interfaces/IJBMultiTerminal.sol";
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
 import {IJBSplitHook} from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
-import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 import {IJBTokens} from "@bananapus/core-v6/src/interfaces/IJBTokens.sol";
 import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
@@ -273,11 +272,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         try IJBMultiTerminal(
                 address(IJBDirectory(DIRECTORY).primaryTerminalOf({projectId: projectId, token: terminalToken}))
             ).STORE()
-            .currentReclaimableSurplusOf({
+            .currentTotalReclaimableSurplusOf({
                 projectId: projectId,
                 cashOutCount: _WAD,
-                terminals: new IJBTerminal[](0),
-                accountingContexts: new JBAccountingContext[](0),
                 decimals: _getTokenDecimals(terminalToken),
                 // Safe: truncation to uint32 is the standard Juicebox currency encoding.
                 // forge-lint: disable-next-line(unsafe-typecast)
