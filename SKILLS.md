@@ -109,6 +109,10 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 | `JBUniswapV4LPSplitHook_PoolAlreadyDeployed` | `deployPool` called for a pair that already has a position |
 | `JBUniswapV4LPSplitHook_AlreadyInitialized` | `initialize` called on a clone that was already initialized |
 | `JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject` | `initialize` called with `feePercent > 0` but `feeProjectId == 0` (fees would get stuck since `primaryTerminalOf(0, token)` returns `address(0)`) |
+| `JBUniswapV4LPSplitHook_InsufficientBalance` | Insufficient token balance for operation |
+| `JBUniswapV4LPSplitHook_InsufficientLiquidity` | Pool has insufficient liquidity for operation |
+| `JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported` | Attempted to deploy a second pool for a project (max 1 pool per project) |
+| `JBUniswapV4LPSplitHook_Permit2AmountOverflow` | Amount exceeds `type(uint160).max` for Permit2 |
 
 ## Constants
 
@@ -126,8 +130,9 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 | `tokenIdOf` | `projectId => terminalToken => uint256` | V4 PositionManager NFT ID per pool |
 | `accumulatedProjectTokens` | `projectId => uint256` | Pre-deployment token accumulation |
 | `initialWeightOf` | `projectId => uint256` | Ruleset weight when first tokens were accumulated (for 10x decay check) |
-| `projectDeployed` | `projectId => terminalToken => bool` | Whether a V4 pool has been deployed for this project/token pair |
-| `deployedPoolCount` | `projectId => uint256` | Number of pools deployed for project. Intentionally capped at 1 because processSplitWith cannot distinguish terminal-token paths. |
+| `deployedPoolCount` | `projectId => uint256` | Number of pools deployed for project. Capped at 1 because processSplitWith cannot distinguish terminal-token paths. `isPoolDeployed()` derives from `tokenIdOf != 0`. |
+| `FEE_PROJECT_ID` | `uint256` | Project ID receiving share of LP fees (set during `initialize`) |
+| `FEE_PERCENT` | `uint256` | Percentage of LP fees routed to fee project, in basis points (set during `initialize`) |
 | `claimableFeeTokens` | `projectId => uint256` | Fee-project tokens claimable via `claimFeeTokensFor` |
 | `initialized` | `bool` | Prevents re-initialization of clone instances |
 | `ORACLE_HOOK` | `IHooks` (immutable) | Oracle hook for all JB V4 pools. Set in constructor. All pools are created with this hook in the `PoolKey.hooks` field, providing TWAP via `observe()`. |
@@ -182,7 +187,7 @@ hook.deployPool({
 
 hook.collectAndRouteLPFees(projectId, JBConstants.NATIVE_TOKEN);
 
-// --- Rebalance when rates change significantly (permissionless) ---
+// --- Rebalance when rates change significantly (requires SET_BUYBACK_POOL permission) ---
 
 hook.rebalanceLiquidity({
     projectId: projectId,
