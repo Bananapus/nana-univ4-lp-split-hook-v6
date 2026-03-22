@@ -49,9 +49,59 @@ This ensures the AMM price always trades within the project's intrinsic economic
    → Transfers accumulated fee-project tokens to beneficiary
 ```
 
+### Lifecycle Diagram
+
+```mermaid
+sequenceDiagram
+    participant Owner as Project Owner
+    participant Controller as JBController
+    participant Hook as JBUniswapV4LPSplitHook
+    participant V4 as Uniswap V4
+    participant Terminal as JBMultiTerminal
+
+    rect rgb(240, 240, 255)
+    Note over Controller, Hook: Stage 1 -- Accumulation
+    loop Each reserved-token distribution
+        Controller->>Hook: processSplitWith(projectId, token, amount)
+        Hook->>Hook: accumulatedProjectTokens[projectId] += amount
+    end
+    end
+
+    rect rgb(240, 255, 240)
+    Note over Owner, V4: Stage 2 -- Deployment
+    Owner->>Hook: deployPool(projectId, terminalToken, ...)
+    Hook->>Hook: Compute tick bounds from cashOut/issuance rates
+    Hook->>V4: initializePool(key, sqrtPriceX96)
+    Hook->>Terminal: cashOut optimal fraction of accumulated tokens
+    Terminal-->>Hook: Terminal tokens returned
+    Hook->>V4: Mint concentrated LP position (tickLower, tickUpper)
+    Hook->>Hook: projectDeployed[projectId][terminalToken] = true
+    end
+
+    rect rgb(255, 240, 240)
+    Note over Controller, V4: Post-Deploy Operations
+    Controller->>Hook: processSplitWith(projectId, token, amount)
+    Hook->>Hook: Burn received tokens (prevent LP dilution)
+
+    Owner->>Hook: collectAndRouteLPFees(projectId, terminalToken)
+    Hook->>V4: Collect position fees
+    Hook->>Terminal: Route terminal-token fees (split: project + fee project)
+    Hook->>Hook: Burn project-token fees
+
+    Owner->>Hook: rebalanceLiquidity(projectId, terminalToken, ...)
+    Hook->>V4: Remove old position, burn NFT
+    Hook->>Hook: Recalculate tick bounds from current rates
+    Hook->>V4: Mint new position with updated bounds
+    end
+```
+
 ### Pool Pricing
 
 The initial pool price is set at the **geometric mean** of the cash-out and issuance rate ticks. This centers the LP position in the economic range, creating balanced exposure to both sides. If the cash-out rate is zero (no surplus), the pool initializes at the issuance rate. When the pool is already initialized (e.g., by REVDeployer at 1:1 price), the hook reads the actual pool price via `getSlot0` instead of computing a new initial price. All pools are created with `ORACLE_HOOK` (an `IHooks` oracle hook set in the constructor) which provides TWAP pricing via `observe()`.
+
+The geometric mean is computed in Uniswap V4's tick space: the midpoint of the cash-out and issuance ticks. Since ticks are logarithmic, the tick midpoint corresponds to the geometric mean of the two prices.
+
+**Example:** If the cash-out rate is 0.5 ETH/token and the issuance rate is 2.0 ETH/token, the initial pool price is `sqrt(0.5 * 2.0) = 1.0 ETH/token`. The LP position's tick range spans from the 0.5 ETH/token tick (lower bound) to the 2.0 ETH/token tick (upper bound), with liquidity concentrated in this range.
 
 ### Optimal Cash-Out Calculation
 
@@ -70,6 +120,23 @@ V4 concentrated liquidity positions aren't 50/50 -- the token ratio depends on w
 |-----------|-------------|
 | `IJBUniswapV4LPSplitHook` | Public interface: `initialize`, `isPoolDeployed`, `poolKeyOf`, `deployPool`, `collectAndRouteLPFees`, `claimFeeTokensFor`. Events: `ProjectDeployed`, `LPFeesRouted`, `FeeTokensClaimed`, `TokensBurned`. |
 | `IJBUniswapV4LPSplitHookDeployer` | Factory interface: `HOOK`, `ADDRESS_REGISTRY`, `deployHookFor`. Event: `HookDeployed`. |
+
+## Supported Chains
+
+Configured in `script/Deploy.s.sol` via Sphinx:
+
+| Network | Chain ID | PositionManager |
+|---------|----------|-----------------|
+| Ethereum Mainnet | 1 | `0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e` |
+| Optimism Mainnet | 10 | `0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e` |
+| Base Mainnet | 8453 | `0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e` |
+| Arbitrum Mainnet | 42161 | `0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e` |
+| Ethereum Sepolia | 11155111 | `0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e` |
+| Optimism Sepolia | 11155420 | `0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e` |
+| Base Sepolia | 84532 | `0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e` |
+| Arbitrum Sepolia | 421614 | `0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e` |
+
+The Uniswap V4 PoolManager (`0x000000000004444c5dc75cB358380D2e3dE08A90`) and Permit2 (`0x000000000022D473030F116dDEE9F6B43aC78BA3`) addresses are the same on all chains.
 
 ## Install
 
