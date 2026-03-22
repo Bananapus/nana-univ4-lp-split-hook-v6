@@ -13,7 +13,8 @@ src/
 ├── JBUniswapV4LPSplitHook.sol         — Split hook: token accumulation, pool deployment (with oracle hook), LP management
 ├── JBUniswapV4LPSplitHookDeployer.sol — Factory for deploying split hooks
 └── interfaces/
-    └── IJBUniswapV4LPSplitHook.sol
+    ├── IJBUniswapV4LPSplitHook.sol
+    └── IJBUniswapV4LPSplitHookDeployer.sol
 ```
 
 ## Key Data Flows
