@@ -48,7 +48,7 @@ Concrete end-to-end flows through the LP split hook system. Each journey traces 
 - `JBUniswapV4LPSplitHook_AlreadyInitialized()` — `initialize()` reverts on second call
 - `JBUniswapV4LPSplitHook_InvalidFeePercent()` — `feePercent > 10,000`
 - `JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject()` — `feePercent > 0 && feeProjectId == 0`
-- `JBUniswapV4LPSplitHook_InvalidProjectId()` — `feeProjectId != 0` but `controllerOf(feeProjectId) == address(0)`
+- `JBUniswapV4LPSplitHook_InvalidProjectId()` — (in `initialize`) `feeProjectId != 0` but `controllerOf(feeProjectId) == address(0)`
 - CREATE2 deployment produces a predictable address for frontends; reverts if salt reused with same sender
 
 ### Result
@@ -113,10 +113,10 @@ None emitted by this function.
 ### Edge cases
 
 - `JBUniswapV4LPSplitHook_NotHookSpecifiedInContext()` — `context.split.hook != address(this)`
-- `JBUniswapV4LPSplitHook_InvalidProjectId()` — `controllerOf(projectId) == address(0)`
+- `JBUniswapV4LPSplitHook_InvalidProjectId()` — (in `processSplitWith`, project validation) `controllerOf(projectId) == address(0)`
 - `JBUniswapV4LPSplitHook_SplitSenderNotValidControllerOrTerminal()` — `msg.sender != controllerOf(projectId)`
 - `JBUniswapV4LPSplitHook_TerminalTokensNotAllowed()` — `context.groupId != 1` (prevents terminal token splits from reaching the hook)
-- `JBUniswapV4LPSplitHook_InvalidProjectId()` — `context.token == address(0)` (credits cannot be paired as LP)
+- `JBUniswapV4LPSplitHook_InvalidProjectId()` — (in `processSplitWith`, token validation) `context.token == address(0)` (credits cannot be paired as LP)
 - `JBUniswapV4LPSplitHook_InsufficientBalance()` — actual ERC-20 balance is less than recorded `accumulatedProjectTokens`
 - If `deployedPoolCount > 0` (post-deployment), `processSplitWith` burns received tokens instead of accumulating via `_burnReceivedTokens()`
 
