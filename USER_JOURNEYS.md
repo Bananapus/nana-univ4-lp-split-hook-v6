@@ -4,8 +4,14 @@ Concrete end-to-end flows through the LP split hook system. Each journey traces 
 
 ## Journey 1: Deploy an LP Split Hook Clone
 
-**Actor:** Project operator or protocol deployer.
-**Goal:** Create a new hook instance configured for a specific fee project and fee percentage.
+**Entry point:** `JBUniswapV4LPSplitHookDeployer.deployHookFor(uint256 feeProjectId, uint256 feePercent, bytes32 salt) external returns (IJBUniswapV4LPSplitHook hook)`
+
+**Who can call:** Anyone. No access control.
+
+**Parameters:**
+- `feeProjectId` — The Juicebox project ID that receives a share of LP fees. Must be 0 if `feePercent` is 0; must have a valid controller if non-zero.
+- `feePercent` — Percentage of LP fees routed to the fee project, in basis points (e.g., 3800 = 38%). Must be <= 10,000.
+- `salt` — Optional salt for deterministic CREATE2 deployment. Pass `bytes32(0)` for a plain CREATE clone.
 
 ### Steps
 
@@ -26,23 +32,43 @@ Concrete end-to-end flows through the LP split hook system. Each journey traces 
    - `ADDRESS_REGISTRY.registerAddress(deployer, nonce)` or deterministic variant
    - Increments deployer's internal nonce
 
+### State changes
+
+1. `hook.initialized` = `true`
+2. `hook.FEE_PROJECT_ID` = `feeProjectId`
+3. `hook.FEE_PERCENT` = `feePercent`
+4. `deployer._nonce` incremented by 1
+
+### Events
+
+- `HookDeployed(uint256 indexed feeProjectId, uint256 feePercent, IJBUniswapV4LPSplitHook hook, address caller)` — emitted by the deployer after initialization
+
+### Edge cases
+
+- `JBUniswapV4LPSplitHook_AlreadyInitialized()` — `initialize()` reverts on second call
+- `JBUniswapV4LPSplitHook_InvalidFeePercent()` — `feePercent > 10,000`
+- `JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject()` — `feePercent > 0 && feeProjectId == 0`
+- `JBUniswapV4LPSplitHook_InvalidProjectId()` — `feeProjectId != 0` but `controllerOf(feeProjectId) == address(0)`
+- CREATE2 deployment produces a predictable address for frontends; reverts if salt reused with same sender
+
 ### Result
 
 A new `JBUniswapV4LPSplitHook` clone is deployed, initialized, and registered. It shares all immutable infrastructure (DIRECTORY, TOKENS, POOL_MANAGER, POSITION_MANAGER, PERMIT2, ORACLE_HOOK) with the implementation.
-
-### What to verify
-
-- The clone's `FEE_PROJECT_ID` and `FEE_PERCENT` match the constructor args.
-- `initialize()` reverts on second call.
-- The clone correctly delegates to the implementation for all function calls.
-- CREATE2 deployment produces the expected address (predictable for frontends).
 
 ---
 
 ## Journey 2: Accumulate Tokens via Reserved Splits
 
-**Actor:** JB Controller (system), triggered by reserved token distribution.
-**Goal:** Build up a balance of project tokens for eventual LP deployment.
+**Entry point:** `JBUniswapV4LPSplitHook.processSplitWith(JBSplitHookContext calldata context) external payable`
+
+**Who can call:** Only the project's controller (`controllerOf(context.projectId)`). Reverts with `JBUniswapV4LPSplitHook_SplitSenderNotValidControllerOrTerminal` otherwise.
+
+**Parameters (via `JBSplitHookContext`):**
+- `context.split.hook` — Must equal `address(this)`
+- `context.projectId` — The Juicebox project ID
+- `context.groupId` — Must be `1` (reserved tokens group)
+- `context.amount` — The token amount for this split
+- `context.token` — The project token address (must be a deployed ERC-20, not `address(0)`)
 
 ### Precondition
 
@@ -66,6 +92,8 @@ The project's ruleset has a reserved token split configured with `hook = address
    - Since `deployedPoolCount == 0`, enters accumulation branch:
      - On first accumulation: reads `currentRulesetOf(projectId)` and stores `initialWeightOf[projectId] = ruleset.weight`
      - Adds `context.amount` to `accumulatedProjectTokens[projectId]`
+   - Validates that `context.token != address(0)` (requires deployed ERC-20)
+   - Defense-in-depth: verifies `IERC20(projectToken).balanceOf(address(this)) >= accumulatedProjectTokens[projectId]`
 
 3. **Repeated over multiple reserved token distributions**
 
@@ -73,24 +101,41 @@ The project's ruleset has a reserved token split configured with `hook = address
    - `accumulatedProjectTokens` grows with each cycle
    - `initialWeightOf` is only set once (first accumulation)
 
+### State changes
+
+1. `hook.initialWeightOf[projectId]` = `ruleset.weight` (only on first accumulation, when previously 0)
+2. `hook.accumulatedProjectTokens[projectId]` += `context.amount`
+
+### Events
+
+None emitted by this function.
+
+### Edge cases
+
+- `JBUniswapV4LPSplitHook_NotHookSpecifiedInContext()` — `context.split.hook != address(this)`
+- `JBUniswapV4LPSplitHook_InvalidProjectId()` — `controllerOf(projectId) == address(0)`
+- `JBUniswapV4LPSplitHook_SplitSenderNotValidControllerOrTerminal()` — `msg.sender != controllerOf(projectId)`
+- `JBUniswapV4LPSplitHook_TerminalTokensNotAllowed()` — `context.groupId != 1` (prevents terminal token splits from reaching the hook)
+- `JBUniswapV4LPSplitHook_InvalidProjectId()` — `context.token == address(0)` (credits cannot be paired as LP)
+- `JBUniswapV4LPSplitHook_InsufficientBalance()` — actual ERC-20 balance is less than recorded `accumulatedProjectTokens`
+- If `deployedPoolCount > 0` (post-deployment), `processSplitWith` burns received tokens instead of accumulating via `_burnReceivedTokens()`
+
 ### Result
 
 The hook holds project tokens in `accumulatedProjectTokens[projectId]`. The tokens are ERC-20 balances on the hook contract. `initialWeightOf[projectId]` records the ruleset weight at the time accumulation began.
-
-### What to verify
-
-- `accumulatedProjectTokens` increases by exactly `context.amount` each time.
-- `initialWeightOf` is only set once, on the first accumulation for each project.
-- Tokens from different projects are tracked independently.
-- `processSplitWith` reverts if called by anyone other than the project's controller.
-- `processSplitWith` reverts if `groupId != 1` (prevents terminal token splits from reaching the hook).
 
 ---
 
 ## Journey 3: Deploy a Uniswap V4 Pool
 
-**Actor:** Project owner or authorized operator (with `SET_BUYBACK_POOL` permission).
-**Goal:** Transition from accumulation to active LP by deploying a V4 pool.
+**Entry point:** `JBUniswapV4LPSplitHook.deployPool(uint256 projectId, address terminalToken, uint256 minCashOutReturn) external`
+
+**Who can call:** Project owner or authorized operator with `SET_BUYBACK_POOL` permission. Alternatively, anyone if `ruleset.weight * 10 <= initialWeightOf[projectId]` (see Journey 7).
+
+**Parameters:**
+- `projectId` — The Juicebox project ID
+- `terminalToken` — The terminal token address (e.g., ETH or USDC) to pair with the project token
+- `minCashOutReturn` — Minimum terminal tokens received from cash-out (slippage protection). Pass `0` for auto-calculated 3% slippage tolerance.
 
 ### Precondition
 
@@ -101,7 +146,7 @@ Tokens have been accumulated (`accumulatedProjectTokens[projectId] > 0`). No poo
 1. **Caller invokes `deployPool(projectId, terminalToken, minCashOutReturn)`**
 
    - Permission check: requires `SET_BUYBACK_POOL` from project owner, unless `ruleset.weight * 10 <= initialWeightOf[projectId]`
-   - Checks: `tokenIdOf == 0`, `deployedPoolCount == 0`, `accumulatedProjectTokens > 0`, `primaryTerminalOf(projectId, terminalToken) != address(0)`
+   - Checks: `tokenIdOf[projectId][terminalToken] == 0`, `deployedPoolCount[projectId] == 0`, `accumulatedProjectTokens[projectId] > 0`, `primaryTerminalOf(projectId, terminalToken) != address(0)`
 
 2. **`_createAndInitializePool()` creates the V4 pool**
 
@@ -131,30 +176,43 @@ Tokens have been accumulated (`accumulatedProjectTokens[projectId] > 0`). No poo
 
    h. Clears `accumulatedProjectTokens[projectId] = 0`
 
-4. **State updates**
+### State changes
 
-   - `deployedPoolCount[projectId]++`
-   - Emits `ProjectDeployed(projectId, terminalToken, poolId)`
+1. `hook.deployedPoolCount[projectId]` incremented by 1 (set before external calls for reentrancy protection)
+2. `hook._poolKeys[projectId][terminalToken]` = new `PoolKey`
+3. `hook.tokenIdOf[projectId][terminalToken]` = new V4 position NFT token ID
+4. `hook.accumulatedProjectTokens[projectId]` = 0
+
+### Events
+
+- `ProjectDeployed(uint256 indexed projectId, address indexed terminalToken, bytes32 indexed poolId)` — emitted after pool and LP position are created
+- `TokensBurned(uint256 indexed projectId, address indexed token, uint256 amount)` — emitted for each burn of leftover project tokens (may fire multiple times: once for cash-out leftovers, once for post-mint leftovers)
+
+### Edge cases
+
+- `JBUniswapV4LPSplitHook_PoolAlreadyDeployed()` — `tokenIdOf[projectId][terminalToken] != 0`
+- `JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported()` — `deployedPoolCount[projectId] != 0` (a pool already exists for a different terminal token)
+- `JBUniswapV4LPSplitHook_NoTokensAccumulated()` — `accumulatedProjectTokens[projectId] == 0`
+- `JBUniswapV4LPSplitHook_InvalidTerminalToken()` — `primaryTerminalOf(projectId, terminalToken) == address(0)`
+- `JBUniswapV4LPSplitHook_Permit2AmountOverflow()` — token amount exceeds `type(uint160).max` during Permit2 approval
+- If the pool was already initialized by another party (e.g., REVDeployer), `initializePool` succeeds harmlessly and the actual pool price is used for LP geometry
+- `deployedPoolCount` is incremented before external calls so reentrancy cannot observe the project as still being in accumulation mode
 
 ### Result
 
 A Uniswap V4 pool exists with liquidity provided by the hook. The hook owns the position NFT. Future reserved token splits will burn tokens instead of accumulating.
 
-### What to verify
-
-- The pool is initialized at the correct geometric mean price.
-- Tick bounds correctly bracket the cashout rate (floor) and issuance rate (ceiling).
-- The cashout amount is optimal for the given tick range and price.
-- No tokens are lost -- all accumulated tokens end up in the LP position, burned, or returned to the project.
-- `tokenIdOf` is set to a valid, non-zero position NFT ID.
-- The pool cannot be deployed twice for the same project/token pair.
-
 ---
 
 ## Journey 4: Collect and Route LP Fees
 
-**Actor:** Anyone (permissionless).
-**Goal:** Harvest accrued swap fees from the LP position and route them back to the project (with fee split).
+**Entry point:** `JBUniswapV4LPSplitHook.collectAndRouteLPFees(uint256 projectId, address terminalToken) external`
+
+**Who can call:** Anyone. No access control (permissionless).
+
+**Parameters:**
+- `projectId` — The Juicebox project ID whose LP fees to collect
+- `terminalToken` — The terminal token address of the deployed pool
 
 ### Precondition
 
@@ -164,7 +222,7 @@ A pool has been deployed (`tokenIdOf[projectId][terminalToken] != 0`). The posit
 
 1. **Caller invokes `collectAndRouteLPFees(projectId, terminalToken)`**
 
-   - Checks: `tokenIdOf != 0`
+   - Checks: `tokenIdOf[projectId][terminalToken] != 0`
 
 2. **Fee collection via V4 PositionManager**
 
@@ -173,16 +231,16 @@ A pool has been deployed (`tokenIdOf[projectId][terminalToken] != 0`). The posit
    - The zero-liquidity decrease collects accrued fees without removing any principal
    - Computes `amount0 = bal0After - bal0Before`, `amount1 = bal1After - bal1Before`
 
-3. **Fee routing via `_routeCollectedFees()`**
+3. **Fee routing via `_routeCollectedFees()` and `_routeFeesToProject()`**
 
    - Identifies which amounts correspond to terminal tokens vs project tokens based on currency ordering
-   - For terminal token fees, calls `_routeFeesToProject()`:
+   - For terminal token fees:
 
      a. `feeAmount = amount * FEE_PERCENT / BPS` (e.g., 38% of terminal token fees)
 
      b. Pays `feeAmount` to `FEE_PROJECT_ID` via `terminal.pay()`, receiving fee project tokens in return
 
-     c. Tracks `claimableFeeTokens[projectId] += feeTokensMinted`
+     c. Tracks `claimableFeeTokens[projectId] += feeTokensMinted` (delta-based measurement)
 
      d. Adds `remainingAmount = amount - feeAmount` to original project balance via `terminal.addToBalanceOf()`
 
@@ -190,26 +248,41 @@ A pool has been deployed (`tokenIdOf[projectId][terminalToken] != 0`). The posit
 
    - Calls `_burnReceivedTokens()` to burn any collected project token fees via `controller.burnTokensOf()`
 
+### State changes
+
+1. `hook.claimableFeeTokens[projectId]` += fee project tokens minted (only if fee project has a deployed ERC-20)
+
+### Events
+
+- `LPFeesRouted(uint256 indexed projectId, address indexed terminalToken, uint256 totalAmount, uint256 feeAmount, uint256 remainingAmount, uint256 feeTokensMinted)` — emitted for each terminal-token fee routing
+- `TokensBurned(uint256 indexed projectId, address indexed token, uint256 amount)` — emitted if project token fees are burned
+
+### Edge cases
+
+- `JBUniswapV4LPSplitHook_InvalidStageForAction()` — `tokenIdOf[projectId][terminalToken] == 0` (no pool deployed)
+- If `FEE_PERCENT == 0`, all terminal token fees go to the original project (no fee split)
+- If the fee project has no terminal (`primaryTerminalOf(FEE_PROJECT_ID, terminalToken) == address(0)`), the fee amount stays in the contract (stranded, not lost)
+- If the fee project has no deployed ERC-20 (`tokenOf(FEE_PROJECT_ID) == address(0)`), the `terminal.pay()` still routes value via credits but `claimableFeeTokens` is not incremented
+- Fee routing uses zero slippage (`minReturnedTokens = 0`) by design -- MEV extraction on fee amounts is economically insignificant
+- No reentrancy guard; relies on state ordering for safety
+
 ### Result
 
 LP fees are split: `FEE_PERCENT` goes to the fee project (minting fee project tokens claimable by the original project), the remainder returns to the original project's terminal balance. Collected project token fees are burned.
-
-### What to verify
-
-- Fee amounts are correct for both currency orderings.
-- The fee split matches `FEE_PERCENT / BPS` exactly (rounding in favor of original project).
-- If `FEE_PERCENT = 0`, all fees go to the original project.
-- If the fee project's terminal is `address(0)`, the fee amount stays in the contract (not lost, but not routed).
-- The `terminal.pay()` call to the fee project actually mints tokens to `address(this)`.
-- `claimableFeeTokens` is incremented by the actual tokens received (delta-based, not the expected amount).
-- No reentrancy path through `terminal.pay()` -> pay hook -> back into this contract.
 
 ---
 
 ## Journey 5: Rebalance Liquidity
 
-**Actor:** Project owner or authorized operator (with `SET_BUYBACK_POOL` permission).
-**Goal:** Adjust the LP position's tick range to match current issuance and cashout rates after they have changed (e.g., after a ruleset transition with weight decay).
+**Entry point:** `JBUniswapV4LPSplitHook.rebalanceLiquidity(uint256 projectId, address terminalToken, uint256 decreaseAmount0Min, uint256 decreaseAmount1Min) external`
+
+**Who can call:** Project owner or authorized operator with `SET_BUYBACK_POOL` permission. No permissionless bypass.
+
+**Parameters:**
+- `projectId` — The Juicebox project ID
+- `terminalToken` — The terminal token address of the deployed pool
+- `decreaseAmount0Min` — Minimum amount of token0 to receive when burning the old position (slippage protection)
+- `decreaseAmount1Min` — Minimum amount of token1 to receive when burning the old position (slippage protection)
 
 ### Precondition
 
@@ -220,7 +293,7 @@ A pool exists. The project's issuance or cashout rates have changed, making the 
 1. **Caller invokes `rebalanceLiquidity(projectId, terminalToken, decreaseAmount0Min, decreaseAmount1Min)`**
 
    - Permission check: `SET_BUYBACK_POOL` from project owner
-   - Checks: valid terminal, `tokenIdOf != 0`
+   - Checks: `primaryTerminalOf(projectId, terminalToken) != address(0)`, `tokenIdOf[projectId][terminalToken] != 0`
 
 2. **Step 1: Collect fees (same as Journey 4)**
 
@@ -244,25 +317,40 @@ A pool exists. The project's issuance or cashout rates have changed, making the 
    - If liquidity == 0: reverts with `InsufficientLiquidity` (rolls back entire transaction, preserving old position)
    - Handles leftover tokens (burn project tokens, add terminal tokens to project balance)
 
+### State changes
+
+1. `hook.tokenIdOf[projectId][terminalToken]` = new V4 position NFT token ID (old position NFT is burned)
+2. `hook.claimableFeeTokens[projectId]` += fee project tokens minted during fee collection step
+
+### Events
+
+- `LPFeesRouted(uint256 indexed projectId, address indexed terminalToken, uint256 totalAmount, uint256 feeAmount, uint256 remainingAmount, uint256 feeTokensMinted)` — from the fee collection step
+- `TokensBurned(uint256 indexed projectId, address indexed token, uint256 amount)` — emitted for project token fee burns and/or leftover project token burns (may fire multiple times)
+
+### Edge cases
+
+- `JBUniswapV4LPSplitHook_InvalidTerminalToken()` — `primaryTerminalOf(projectId, terminalToken) == address(0)`
+- `JBUniswapV4LPSplitHook_InvalidStageForAction()` — `tokenIdOf[projectId][terminalToken] == 0` (no pool deployed)
+- `JBUniswapV4LPSplitHook_InsufficientLiquidity()` — new position would have zero liquidity (e.g., price moved entirely outside the new tick range). The entire transaction reverts, preserving the old position.
+- The entire operation is atomic -- if mint fails, the burn is rolled back
+- Slippage parameters protect against sandwich attacks during the burn step
+- `decreaseAmount0Min` / `decreaseAmount1Min` are cast to `uint128` for PositionManager
+
 ### Result
 
 The LP position is repositioned to bracket the current issuance and cashout rates. The old position NFT is burned, a new one is minted.
-
-### What to verify
-
-- The entire operation is atomic -- if mint fails, the burn is rolled back.
-- Slippage parameters protect against sandwich attacks during the burn step.
-- New tick bounds correctly reflect the current rates.
-- `tokenIdOf` is updated to the new position NFT ID.
-- No tokens are lost during the burn-then-mint cycle.
-- The `InsufficientLiquidity` guard prevents bricking (old position survives a revert).
 
 ---
 
 ## Journey 6: Claim Fee Tokens
 
-**Actor:** Project owner or authorized operator (with `SET_BUYBACK_POOL` permission).
-**Goal:** Transfer accumulated fee project tokens to a beneficiary address.
+**Entry point:** `JBUniswapV4LPSplitHook.claimFeeTokensFor(uint256 projectId, address beneficiary) external`
+
+**Who can call:** Project owner or authorized operator with `SET_BUYBACK_POOL` permission.
+
+**Parameters:**
+- `projectId` — The Juicebox project ID whose accumulated fee tokens to claim
+- `beneficiary` — The address to receive the fee project tokens
 
 ### Precondition
 
@@ -279,26 +367,39 @@ The LP position is repositioned to bracket the current issuance and cashout rate
    - Reads `claimableAmount = claimableFeeTokens[projectId]`
    - Zeroes `claimableFeeTokens[projectId] = 0` (effects before interactions)
    - If `claimableAmount > 0`: transfers fee project ERC-20 tokens to `beneficiary` via `IERC20.safeTransfer()`
-   - Emits `FeeTokensClaimed(projectId, beneficiary, claimableAmount)`
+
+### State changes
+
+1. `hook.claimableFeeTokens[projectId]` = 0
+
+### Events
+
+- `FeeTokensClaimed(uint256 indexed projectId, address indexed beneficiary, uint256 amount)` — emitted only if `claimableAmount > 0`
+
+### Edge cases
+
+- If `claimableAmount == 0`, no transfer occurs and no event is emitted (silent no-op)
+- The fee project token address is looked up fresh from `TOKENS.tokenOf(FEE_PROJECT_ID)` -- not cached
+- If the fee project has not deployed an ERC-20 token, `tokenOf` returns `address(0)` and the `safeTransfer` reverts
+- Tokens are transferred to `beneficiary`, not to `msg.sender`
+- The CEI pattern prevents reentrancy (balance zeroed before transfer)
 
 ### Result
 
 The beneficiary receives the accumulated fee project tokens. The project's claimable balance is zeroed.
 
-### What to verify
-
-- The CEI pattern prevents reentrancy (balance zeroed before transfer).
-- If `claimableAmount == 0`, no transfer occurs and no event is emitted (silent no-op).
-- The fee project token address is looked up fresh from `TOKENS.tokenOf(FEE_PROJECT_ID)` -- not cached.
-- If the fee project has not deployed an ERC-20 token, `tokenOf` returns `address(0)` and the transfer reverts.
-- Tokens are transferred to `beneficiary`, not to `msg.sender`.
-
 ---
 
 ## Journey 7: Permissionless Pool Deployment After Weight Decay
 
-**Actor:** Anyone (no permission required).
-**Goal:** Deploy a pool when the project owner has not acted and the issuance weight has decayed sufficiently.
+**Entry point:** `JBUniswapV4LPSplitHook.deployPool(uint256 projectId, address terminalToken, uint256 minCashOutReturn) external` (same as Journey 3)
+
+**Who can call:** Anyone (no permission required), provided `ruleset.weight * 10 <= initialWeightOf[projectId]`.
+
+**Parameters:**
+- `projectId` — The Juicebox project ID
+- `terminalToken` — The terminal token address to pair with the project token
+- `minCashOutReturn` — Minimum terminal tokens from cash-out (slippage protection, `0` = auto 3% tolerance)
 
 ### Precondition
 
@@ -318,14 +419,24 @@ Tokens have been accumulated. The project's current ruleset weight has decayed t
 
 3. **Proceeds identically to Journey 3 (Steps 2-4)**
 
-### Result
+### State changes
 
-The pool is deployed permissionlessly. This prevents a stale or unresponsive project owner from permanently blocking LP deployment.
+Same as Journey 3.
 
-### What to verify
+### Events
+
+Same as Journey 3:
+- `ProjectDeployed(uint256 indexed projectId, address indexed terminalToken, bytes32 indexed poolId)`
+- `TokensBurned(uint256 indexed projectId, address indexed token, uint256 amount)` — for leftover project token burns
+
+### Edge cases
 
 - The 10x decay threshold is correct: `weight * 10 <= initialWeight` means the weight is at most 10% of its original value.
 - `initialWeightOf` cannot be manipulated by an attacker (it is set only once, by the controller, during the first `processSplitWith`).
 - The pool is deployed at the current (decayed) rates, not the initial rates.
 - For a project with 80% weight cut per cycle and 1-day duration, the threshold is reached in approximately 3 cycles (3 days). For smaller weight cuts, it takes longer.
 - An attacker cannot grief by front-running with a tiny accumulation to set `initialWeightOf` to a very low value (the initial weight is the ruleset weight at first accumulation, not the amount accumulated).
+
+### Result
+
+The pool is deployed permissionlessly. This prevents a stale or unresponsive project owner from permanently blocking LP deployment.
