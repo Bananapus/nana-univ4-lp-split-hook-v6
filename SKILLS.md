@@ -90,7 +90,7 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 
 | ID | Constant | Used By | Grants |
 |----|----------|---------|--------|
-| 26 | `SET_BUYBACK_POOL` | `deployPool`, `rebalanceLiquidity`, `claimFeeTokensFor` | Deploy pool (when weight has not decayed 10x), rebalance LP position, claim fee tokens. All check permission from the project owner. |
+| 27 | `SET_BUYBACK_POOL` | `deployPool`, `rebalanceLiquidity`, `claimFeeTokensFor` | Deploy pool (when weight has not decayed 10x), rebalance LP position, claim fee tokens. All check permission from the project owner. |
 
 ## Events
 
@@ -140,7 +140,7 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 
 ## Permissionless `deployPool` (10x Decay Rule)
 
-`deployPool` normally requires `SET_BUYBACK_POOL` (ID 26) permission from the project owner. However, it becomes **permissionless** when the project's issuance weight has decayed sufficiently:
+`deployPool` normally requires `SET_BUYBACK_POOL` (ID 27) permission from the project owner. However, it becomes **permissionless** when the project's issuance weight has decayed sufficiently:
 
 **Formula:** `ruleset.weight * 10 <= initialWeightOf[projectId]`
 
