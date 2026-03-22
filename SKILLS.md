@@ -80,18 +80,34 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 
 | Struct | Key Fields | Used In |
 |--------|------------|---------|
-| `JBSplitHookContext` | `uint256 projectId`, `uint256 groupId`, `address token`, `uint256 amount`, `JBSplit split` | `processSplitWith` -- split execution context from controller |
-| `PoolKey` | `Currency currency0`, `Currency currency1`, `uint24 fee`, `int24 tickSpacing`, `IHooks hooks` | `_poolKeys` mapping, V4 pool identification |
+| `JBSplitHookContext` | `uint256 projectId`, `uint256 groupId`, `address token`, `uint256 amount`, `JBSplit split` | `processSplitWith` -- split execution context from controller. `groupId == 1` = reserved tokens (accepted), `groupId == 0` = payouts (rejected). |
+| `PoolKey` | `Currency currency0`, `Currency currency1`, `uint24 fee`, `int24 tickSpacing`, `IHooks hooks` | `_poolKeys` mapping, V4 pool identification. Always created with `fee = 10,000` (1%), `tickSpacing = 200`, `hooks = ORACLE_HOOK`. |
+| `JBRuleset` | `uint256 weight`, `uint256 metadata` (packed) | Read via `controller.currentRulesetOf()`. `weight` drives issuance pricing and the 10x decay check. `metadata` decoded via `JBRulesetMetadataResolver` for `reservedPercent`, `cashOutTaxRate`, `baseCurrency`. |
+| `JBAccountingContext` | `address token`, `uint8 decimals`, `uint32 currency` | Retrieved from terminal via `accountingContextForTokenOf`. Used to build cash-out and addToBalance calls with correct decimal/currency encoding. |
+| `JBSplit` | `address hook`, `uint256 projectId`, `uint256 percent`, ... | The split entry pointing to this hook. `processSplitWith` validates `context.split.hook == address(this)`. |
+
+## Permission IDs
+
+| ID | Constant | Used By | Grants |
+|----|----------|---------|--------|
+| 26 | `SET_BUYBACK_POOL` | `deployPool`, `rebalanceLiquidity`, `claimFeeTokensFor` | Deploy pool (when weight has not decayed 10x), rebalance LP position, claim fee tokens. All check permission from the project owner. |
 
 ## Events
 
-| Event | When |
-|-------|------|
-| `ProjectDeployed(projectId, terminalToken, poolId)` | V4 pool created and LP position minted |
-| `LPFeesRouted(projectId, terminalToken, totalAmount, feeAmount, remainingAmount, feeTokensMinted)` | LP fees collected and distributed |
-| `TokensBurned(projectId, token, amount)` | Project tokens burned (Stage 2 or fee collection) |
-| `FeeTokensClaimed(projectId, beneficiary, amount)` | Fee-project tokens claimed |
-| `HookDeployed(feeProjectId, feePercent, hook, caller)` | New hook clone deployed (from factory) |
+### JBUniswapV4LPSplitHook
+
+| Event | Fields | When |
+|-------|--------|------|
+| `ProjectDeployed` | `projectId` (indexed), `terminalToken` (indexed), `poolId` (indexed) | V4 pool created and LP position minted |
+| `LPFeesRouted` | `projectId` (indexed), `terminalToken` (indexed), `totalAmount`, `feeAmount`, `remainingAmount`, `feeTokensMinted` | LP fees collected and distributed |
+| `TokensBurned` | `projectId` (indexed), `token` (indexed), `amount` | Project tokens burned (post-deployment or fee collection) |
+| `FeeTokensClaimed` | `projectId` (indexed), `beneficiary` (indexed), `amount` | Fee-project tokens claimed by project owner |
+
+### JBUniswapV4LPSplitHookDeployer
+
+| Event | Fields | When |
+|-------|--------|------|
+| `HookDeployed` | `feeProjectId` (indexed), `feePercent`, `hook`, `caller` | New hook clone deployed via factory |
 
 ## Errors
 
@@ -122,6 +138,21 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 | `POOL_FEE` | 10,000 (1%) | V4 pool fee tier |
 | `TICK_SPACING` | 200 | Tick spacing for 1% fee tier |
 
+## Permissionless `deployPool` (10x Decay Rule)
+
+`deployPool` normally requires `SET_BUYBACK_POOL` (ID 26) permission from the project owner. However, it becomes **permissionless** when the project's issuance weight has decayed sufficiently:
+
+**Formula:** `ruleset.weight * 10 <= initialWeightOf[projectId]`
+
+- `initialWeightOf[projectId]` is recorded once -- the first time `processSplitWith` accumulates tokens for that project. It captures `ruleset.weight` at that moment.
+- On each `deployPool` call, the current `ruleset.weight` is compared to that initial value.
+- If the current weight is at most 1/10th of the initial weight, the permission check is skipped and anyone can call `deployPool`.
+- If `initialWeightOf[projectId] == 0` (no tokens ever accumulated), the permission check is always enforced.
+
+**Example:** If a project launches with `weight = 1e18` and uses `weightCutPercent = 100,000,000` (10% cut per cycle), the weight halves roughly every 7 cycles. After ~24 cycles, `weight` drops below `1e17` (1/10th), and `deployPool` becomes permissionless.
+
+**Purpose:** Prevents a stale or unresponsive project owner from indefinitely blocking LP pool deployment after sufficient token issuance decay.
+
 ## Storage
 
 | Mapping | Type | Purpose |
@@ -138,6 +169,9 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 | `ORACLE_HOOK` | `IHooks` (immutable) | Oracle hook for all JB V4 pools. Set in constructor. All pools are created with this hook in the `PoolKey.hooks` field, providing TWAP via `observe()`. |
 
 ## Gotchas
+
+> **CRITICAL: `processSplitWith` permanently switches to burn mode after pool deployment.**
+> Once `deployPool` is called, every subsequent call to `processSplitWith` burns the received project tokens instead of accumulating them. This is irreversible -- the hook has no mechanism to return to accumulation mode. The burn is intentional (prevents supply inflation without LP rebalancing), but integrators must understand that the split hook becomes a token sink after the first pool deployment. There is no way to "undeploy" the pool or re-accumulate tokens.
 
 1. **This is a V4 hook, not V3.** Despite the repo history, the current implementation uses Uniswap V4 (`IPoolManager`, `IPositionManager`, `PoolKey`, `Actions`). All V3 references in older docs are outdated.
 2. **Requires `via_ir = true` in foundry.toml.** Stack-too-deep errors occur without the IR pipeline, particularly in `_addUniswapLiquidity` and V4 `PositionManager` interactions.
