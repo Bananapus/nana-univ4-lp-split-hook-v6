@@ -55,6 +55,23 @@ Admin privileges and their scope in univ4-lp-split-hook-v6.
 | `supportsInterface(interfaceId)` | View | Returns `true` for `IJBUniswapV4LPSplitHook` and `IJBSplitHook`. |
 | `receive()` | Accepts ETH | Required for cash-out with native ETH and V4 TAKE operations. |
 
+## Lifecycle States
+
+Each project-terminal-token path on the hook transitions through two states:
+
+```
+ACCUMULATING --> DEPLOYED (burn mode)
+```
+
+| State | Condition | Behavior |
+|-------|-----------|----------|
+| **ACCUMULATING** | `tokenIdOf[projectId][terminalToken] == 0` | `processSplitWith()` accumulates project tokens in the hook's balance. `deployPool()` is available (permissioned or permissionless after 10x decay). |
+| **DEPLOYED** | `tokenIdOf[projectId][terminalToken] != 0` | `processSplitWith()` burns incoming project tokens via the controller. `deployPool()` reverts with `PoolAlreadyDeployed`. `rebalanceLiquidity()` becomes available. LP fee collection is permissionless. |
+
+**Transition:** `deployPool()` is the one-way transition. It cashes out a fraction of accumulated tokens for terminal tokens, creates a Uniswap V4 pool, mints a concentrated LP position, and stores the position's token ID. This transition is irreversible -- there is no mechanism to return to the accumulating state.
+
+**Permissionless deployment trigger:** Once the current ruleset weight decays to 1/10th or less of `initialWeightOf[projectId]`, the `SET_BUYBACK_POOL` permission check is bypassed and anyone can call `deployPool()`. This ensures pools eventually deploy even if the project owner is inactive.
+
 ## Immutable Configuration
 
 These values are set at deploy time and cannot be changed afterward.
@@ -98,14 +115,15 @@ What admins **cannot** do:
 4. **Cannot modify pool parameters after deployment.** The `PoolKey` (fee tier, tick spacing, hook address, currency pair) is set during `_createAndInitializePool()` and stored immutably in `_poolKeys`.
 
 5. **Cannot deploy a second pool for the same project/terminal-token pair.** `deployPool()` reverts with `PoolAlreadyDeployed` if `tokenIdOf[projectId][terminalToken] != 0`.
+
 6. **Cannot deploy a second terminal-token pool for the same project.** `processSplitWith` only receives the project token, not the terminal token. Once any pool is deployed, the project enters burn mode and `deployPool()` reverts with `OnlyOneTerminalTokenSupported` for other terminal tokens.
 
-6. **Cannot prevent permissionless fee collection.** `collectAndRouteLPFees()` has no access control. Anyone can trigger fee collection and routing for any deployed pool.
+7. **Cannot prevent permissionless fee collection.** `collectAndRouteLPFees()` has no access control. Anyone can trigger fee collection and routing for any deployed pool.
 
-7. **Cannot prevent permissionless pool deployment after 10x weight decay.** Once the current ruleset weight drops to 1/10th of `initialWeightOf[projectId]`, the `SET_BUYBACK_POOL` permission check is bypassed and anyone can deploy.
+8. **Cannot prevent permissionless pool deployment after 10x weight decay.** Once the current ruleset weight drops to 1/10th of `initialWeightOf[projectId]`, the `SET_BUYBACK_POOL` permission check is bypassed and anyone can deploy.
 
-8. **Cannot change the Uniswap V4 infrastructure contracts.** `POOL_MANAGER`, `POSITION_MANAGER`, `ORACLE_HOOK`, `DIRECTORY`, `TOKENS`, and `PERMISSIONS` are immutable, set in the implementation constructor, and shared across all clones.
+9. **Cannot change the Uniswap V4 infrastructure contracts.** `POOL_MANAGER`, `POSITION_MANAGER`, `ORACLE_HOOK`, `DIRECTORY`, `TOKENS`, and `PERMISSIONS` are immutable, set in the implementation constructor, and shared across all clones.
 
-9. **Cannot control which project tokens are sent via `processSplitWith`.** The controller decides when and how much to distribute. The hook only receives what the JB protocol sends it.
+10. **Cannot control which project tokens are sent via `processSplitWith`.** The controller decides when and how much to distribute. The hook only receives what the JB protocol sends it.
 
-10. **Cannot recover funds sent to the wrong clone.** If tokens are sent directly (not through `processSplitWith`), there is no mechanism to retrieve them. Only project tokens sent via the controller accumulate correctly.
+11. **Cannot recover funds sent to the wrong clone.** If tokens are sent directly (not through `processSplitWith`), there is no mechanism to retrieve them. Only project tokens sent via the controller accumulate correctly.
