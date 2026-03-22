@@ -65,10 +65,12 @@ ACCUMULATING --> DEPLOYED (burn mode)
 
 | State | Condition | Behavior |
 |-------|-----------|----------|
-| **ACCUMULATING** | `tokenIdOf[projectId][terminalToken] == 0` | `processSplitWith()` accumulates project tokens in the hook's balance. `deployPool()` is available (permissioned or permissionless after 10x decay). |
-| **DEPLOYED** | `tokenIdOf[projectId][terminalToken] != 0` | `processSplitWith()` burns incoming project tokens via the controller. `deployPool()` reverts with `PoolAlreadyDeployed`. `rebalanceLiquidity()` becomes available. LP fee collection is permissionless. |
+| **ACCUMULATING** | `deployedPoolCount[projectId] == 0` | `processSplitWith()` accumulates project tokens in the hook's balance. `deployPool()` is available (permissioned or permissionless after 10x decay). |
+| **DEPLOYED** | `deployedPoolCount[projectId] != 0` | `processSplitWith()` burns incoming project tokens via the controller. `deployPool()` reverts with `PoolAlreadyDeployed` (same terminal token) or `OnlyOneTerminalTokenSupported` (different terminal token). `rebalanceLiquidity()` becomes available. LP fee collection is permissionless. |
 
-**Transition:** `deployPool()` is the one-way transition. It cashes out a fraction of accumulated tokens for terminal tokens, creates a Uniswap V4 pool, mints a concentrated LP position, and stores the position's token ID. This transition is irreversible -- there is no mechanism to return to the accumulating state.
+**Transition:** `deployPool()` is the one-way transition. It increments `deployedPoolCount[projectId]` before any external calls (line 582), then cashes out a fraction of accumulated tokens for terminal tokens, creates a Uniswap V4 pool, mints a concentrated LP position, and stores the position's token ID in `tokenIdOf`. The early increment ensures reentrancy cannot observe the project as still accumulating. This transition is irreversible -- there is no mechanism to return to the accumulating state.
+
+**Note:** `isPoolDeployed(projectId, terminalToken)` checks `tokenIdOf[projectId][terminalToken] != 0`, which is a per-terminal-token view. The accumulate-vs-burn decision in `processSplitWith` uses `deployedPoolCount[projectId]`, which is a per-project counter. This distinction matters because `deployedPoolCount` is incremented before the external mint call that sets `tokenIdOf`, making the state transition reentrancy-safe.
 
 **Permissionless deployment trigger:** Once the current ruleset weight decays to 1/10th or less of `initialWeightOf[projectId]`, the `SET_BUYBACK_POOL` permission check is bypassed and anyone can call `deployPool()`. This ensures pools eventually deploy even if the project owner is inactive.
 
