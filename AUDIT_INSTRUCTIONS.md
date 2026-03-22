@@ -220,4 +220,78 @@ forge test --match-path test/audit/ExploitPoC.t.sol -vvv
 
 Test base: `TestBaseV4.sol` provides a complete mock environment with V4 PoolManager, PositionManager, JB Core contracts, and helper functions.
 
+## Previous Audit Findings
+
+Nemesis Security conducted an audit with the following findings relevant to this contract:
+
+| ID | Severity | Status | Description |
+|----|----------|--------|-------------|
+| NM-004 | Low | Acknowledged | Implementation contract can be `initialize()`d by anyone. No practical impact since clones have separate storage. |
+| H-2 | High | Fixed | Permissionless `rebalanceLiquidity` could permanently brick a project's LP position by allowing an attacker to trigger rebalance at a manipulated price, resulting in zero liquidity and `tokenIdOf = 0`. Fix: gated behind `SET_BUYBACK_POOL` permission; added `InsufficientLiquidity` revert guard. |
+| M-1 | Medium | Fixed | Placeholder `_getAmountForCurrency()` disabled fee routing during `rebalanceLiquidity` burn step. Fees collected during rebalance were not routed to the fee project. Fix: replaced with balance-delta tracking (same pattern as `collectAndRouteLPFees`). |
+| M-2 | Medium | Fixed | `projectDeployed` was a per-project boolean, not per-terminal-token. After deploying a pool for one terminal token, `processSplitWith` would burn tokens for ALL terminal tokens instead of only the deployed one. Fix: replaced with `deployedPoolCount` keyed by `projectId` and `tokenIdOf` keyed by `[projectId][terminalToken]`. |
+
+Regression tests for these findings are in `test/SplitHookRegressions.t.sol`. See [RISKS.md](./RISKS.md) for full risk analysis including accepted behaviors.
+
+## Anti-Patterns to Hunt
+
+| Pattern | Where to Look | Why It's Dangerous |
+|---------|--------------|-------------------|
+| No reentrancy guard | All external functions | `deployPool`, `collectAndRouteLPFees`, `rebalanceLiquidity`, `claimFeeTokensFor` all make external calls without `ReentrancyGuard`. |
+| Balance-delta accounting | `collectAndRouteLPFees`, `deployPool` | Token amounts determined by before/after balance checks. Fee-on-transfer tokens or reentrant callbacks could skew deltas. |
+| Full position burn in rebalance | `rebalanceLiquidity` | Burns entire position and remints. Between burn and mint, raw tokens are held. MEV sandwich opportunity. |
+| `terminal.pay()` in fee routing | `_routeFeesToProject` | `terminal.pay()` triggers pay hooks. A pay hook could re-enter this contract via `processSplitWith` if this hook is in the reserved token splits. |
+| Clone initialization | `JBUniswapV4LPSplitHookDeployer` | Implementation contract can be initialized by anyone (NM-004). Verify this is truly harmless. |
+| `controller.burnTokensOf()` revert | `processSplitWith`, `_handleLeftoverTokens` | If burn reverts (e.g., insufficient balance due to timing), the entire operation fails. No try-catch wrapper. |
+| Permit2 deadline | `_mintPosition` | `_DEADLINE_SECONDS = 60`. If the transaction takes longer than 60 seconds, the Permit2 approval expires and the entire operation reverts. |
+| Hardcoded slippage | `_CASH_OUT_SLIPPAGE_NUMERATOR/DENOMINATOR = 97/100` | 3% slippage on cashout. During high volatility, this may be too tight (causing reverts) or too loose (allowing MEV). |
+
+## Error Reference
+
+| Error | Trigger |
+|-------|---------|
+| `AlreadyInitialized` | `initialize()` called on a clone that has already been initialized. |
+| `FeePercentWithoutFeeProject` | `initialize()` called with `feePercent > 0` but `feeProjectId == 0`. Fee tokens would get stuck since `primaryTerminalOf(0, token)` returns `address(0)`. |
+| `InsufficientBalance` | After `_accumulateTokens`, the hook's ERC-20 balance of the project token is less than `accumulatedProjectTokens[projectId]`. Guards against custom controllers that don't transfer before callback. |
+| `InvalidFeePercent` | `initialize()` called with `feePercent > BPS` (10,000). |
+| `InvalidProjectId` | `processSplitWith()` called for a project with no controller (`controllerOf == address(0)`) or no ERC-20 token deployed (`tokenOf == address(0)`). Also reverts in `initialize()` if the fee project has no controller. |
+| `InvalidStageForAction` | `collectAndRouteLPFees()` or `rebalanceLiquidity()` called when `tokenIdOf == 0` (no pool deployed yet). |
+| `InvalidTerminalToken` | `deployPool()` or `rebalanceLiquidity()` called with a `terminalToken` that has no primary terminal (`primaryTerminalOf == address(0)`). |
+| `NoTokensAccumulated` | `deployPool()` called when `accumulatedProjectTokens[projectId] == 0`. |
+| `NotHookSpecifiedInContext` | `processSplitWith()` called with a split context where `context.split.hook != address(this)`. |
+| `OnlyOneTerminalTokenSupported` | `deployPool()` called when `deployedPoolCount[projectId] != 0`. Each project can only have one LP pool. |
+| `Permit2AmountOverflow` | `_approveViaPermit2()` called with `amount > type(uint160).max`. Unreachable in practice but provides defense-in-depth against silent truncation. |
+| `PoolAlreadyDeployed` | `deployPool()` called when `tokenIdOf[projectId][terminalToken] != 0`. |
+| `SplitSenderNotValidControllerOrTerminal` | `processSplitWith()` called by an address that is not `controllerOf(projectId)`. |
+| `TerminalTokensNotAllowed` | `processSplitWith()` called with `context.groupId != 1`. This hook only processes reserved token splits (group 1), not payout splits. |
+| `InsufficientLiquidity` | `rebalanceLiquidity()` would produce a new position with zero liquidity. Reverts to prevent bricking (`tokenIdOf` would otherwise be zeroed). |
+| `ZeroAddressNotAllowed` | Constructor called with `address(0)` for `directory`, `tokens`, `poolManager`, or `positionManager`. |
+
+## Compiler and Version Info
+
+- **Solidity**: 0.8.26
+- **EVM target**: Cancun
+- **Optimizer**: via-IR, 200 runs
+- **Fuzz**: 4,096 runs; invariant: 1,024 runs, depth 100
+- **Dependencies**: OpenZeppelin 5.x, Solady (LibClone), Uniswap V4 (PoolManager, PositionManager), Permit2, nana-core-v6
+- **Build**: `forge build` (Foundry)
+
+## How to Report Findings
+
+For each finding:
+
+1. **Title** -- one line, starts with severity (CRITICAL/HIGH/MEDIUM/LOW)
+2. **Affected contract(s)** -- exact file path and line numbers
+3. **Description** -- what is wrong, in plain language
+4. **Trigger sequence** -- step-by-step, minimal steps to reproduce
+5. **Impact** -- what an attacker gains, what a user loses (with numbers if possible)
+6. **Proof** -- code trace showing the exact execution path, or a Foundry test
+7. **Fix** -- minimal code change that resolves the issue
+
+**Severity guide:**
+- **CRITICAL**: Direct fund loss, LP position theft, or permanent DoS of fee collection.
+- **HIGH**: Conditional fund loss, MEV extraction beyond normal pool fees, or broken invariant.
+- **MEDIUM**: Value leakage, incorrect fee routing, griefing.
+- **LOW**: Informational, edge-case-only with no material impact.
+
 Go break it.
