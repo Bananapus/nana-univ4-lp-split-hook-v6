@@ -4,6 +4,7 @@ pragma solidity 0.8.26;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {mulDiv, sqrt} from "@prb/math/src/Common.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
@@ -52,7 +53,7 @@ import {IJBUniswapV4LPSplitHook} from "./interfaces/IJBUniswapV4LPSplitHook.sol"
  * @dev For any given Uniswap V4 pool, the contract will control a single LP position.
  * @dev Pool deployment requires SET_BUYBACK_POOL permission from the project owner.
  */
-contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPermissioned {
+contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPermissioned, ReentrancyGuard {
     using JBRulesetMetadataResolver for JBRuleset;
     using SafeERC20 for IERC20;
     using PoolIdLibrary for PoolKey;
@@ -79,6 +80,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     error JBUniswapV4LPSplitHook_TerminalTokensNotAllowed();
     error JBUniswapV4LPSplitHook_InsufficientLiquidity();
     error JBUniswapV4LPSplitHook_ZeroAddressNotAllowed();
+    error JBUniswapV4LPSplitHook_ZeroLiquidity();
 
     //*********************************************************************//
     // ------------------------- public constants ------------------------ //
@@ -171,6 +173,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Whether this clone instance has been initialized.
     bool public initialized;
+
+    /// @notice Token address => total outstanding fee token claims across all projects.
+    /// @dev Incremented when fee tokens are recorded in _routeFeesToProject, decremented when claimed via
+    /// claimFeeTokensFor.
+    ///      Subtracted from raw balanceOf reads to avoid spending tokens reserved for fee claims.
+    mapping(address token => uint256 totalClaims) internal _totalOutstandingFeeTokenClaims;
 
     //*********************************************************************//
     // ---------------------------- constructor -------------------------- //
@@ -499,6 +507,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         if (claimableAmount > 0) {
             address feeProjectToken = address(IJBTokens(TOKENS).tokenOf(FEE_PROJECT_ID));
+            _totalOutstandingFeeTokenClaims[feeProjectToken] -= claimableAmount;
             IERC20(feeProjectToken).safeTransfer({to: beneficiary, value: claimableAmount});
             emit FeeTokensClaimed(projectId, beneficiary, claimableAmount);
         }
@@ -506,7 +515,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Collect LP fees and route them back to the project
     // forge-lint: disable-next-line(mixed-case-function)
-    function collectAndRouteLPFees(uint256 projectId, address terminalToken) external {
+    function collectAndRouteLPFees(uint256 projectId, address terminalToken) external nonReentrant {
         uint256 tokenId = tokenIdOf[projectId][terminalToken];
         if (tokenId == 0) revert JBUniswapV4LPSplitHook_InvalidStageForAction();
 
@@ -754,8 +763,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 });
         }
 
-        // Get balances after cash out
-        uint256 projectTokenAmount = IERC20(projectToken).balanceOf(address(this));
+        // Get balances after cash out, excluding tokens reserved for outstanding fee claims
+        uint256 projectTokenAmount =
+            IERC20(projectToken).balanceOf(address(this)) - _totalOutstandingFeeTokenClaims[projectToken];
         uint256 terminalTokenAmount = _getTerminalTokenBalance(terminalToken) - terminalTokenBalanceBefore;
 
         // Sort amounts by currency order
@@ -774,6 +784,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             amount0: amount0,
             amount1: amount1
         });
+
+        if (liquidity == 0) revert JBUniswapV4LPSplitHook_ZeroLiquidity();
 
         // Record tokenId before minting. tokenIdOf is set after the external _mintPosition call
         // because nextTokenId() must be captured before the mint increments it. This ordering is safe:
@@ -858,7 +870,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Burn received project tokens in deployment stage
     function _burnReceivedTokens(uint256 projectId, address projectToken) internal {
-        uint256 projectTokenBalance = IERC20(projectToken).balanceOf(address(this));
+        uint256 projectTokenBalance =
+            IERC20(projectToken).balanceOf(address(this)) - _totalOutstandingFeeTokenClaims[projectToken];
         if (projectTokenBalance > 0) {
             _burnProjectTokens({
                 projectId: projectId,
@@ -1169,8 +1182,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Handle leftover tokens after V4 mint operation
     function _handleLeftoverTokens(uint256 projectId, address projectToken, address terminalToken) internal {
-        // Burn any remaining project tokens
-        uint256 projectTokenLeftover = IERC20(projectToken).balanceOf(address(this));
+        // Burn any remaining project tokens, excluding tokens reserved for outstanding fee claims
+        uint256 projectTokenLeftover =
+            IERC20(projectToken).balanceOf(address(this)) - _totalOutstandingFeeTokenClaims[projectToken];
         if (projectTokenLeftover > 0) {
             _burnProjectTokens({
                 projectId: projectId,
@@ -1440,6 +1454,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                     beneficiaryTokenCount = feeTokensAfter > feeTokensBefore ? feeTokensAfter - feeTokensBefore : 0;
 
                     claimableFeeTokens[projectId] += beneficiaryTokenCount;
+                    _totalOutstandingFeeTokenClaims[feeProjectToken] += beneficiaryTokenCount;
                 }
             }
         }
