@@ -511,9 +511,15 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         claimableFeeTokens[projectId] = 0;
 
         if (claimableAmount > 0) {
+            // Look up the fee project's ERC-20 token (e.g. JBX for project ID 1).
             address feeProjectToken = address(IJBTokens(TOKENS).tokenOf(FEE_PROJECT_ID));
+
+            // Release these tokens from the segregated fee-token reserve.
             _totalOutstandingFeeTokenClaims[feeProjectToken] -= claimableAmount;
+
+            // Transfer the claimed fee tokens to the beneficiary.
             IERC20(feeProjectToken).safeTransfer({to: beneficiary, value: claimableAmount});
+
             emit FeeTokensClaimed(projectId, beneficiary, claimableAmount);
         }
     }
@@ -878,9 +884,14 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Burn received project tokens in deployment stage
     function _burnReceivedTokens(uint256 projectId, address projectToken) internal {
+        // Get this contract's balance of the project token, minus any fee tokens reserved
+        // for other projects. Without this subtraction, fee tokens (e.g. JBX) held on behalf
+        // of projects that routed LP fees would be incorrectly burned.
         uint256 projectTokenBalance =
             IERC20(projectToken).balanceOf(address(this)) - _totalOutstandingFeeTokenClaims[projectToken];
+
         if (projectTokenBalance > 0) {
+            // Burn the project tokens to reduce circulating supply.
             _burnProjectTokens({
                 projectId: projectId,
                 projectToken: projectToken,
