@@ -799,6 +799,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             amount1: amount1
         });
 
+        // Revert if the computed liquidity is zero — minting a position with no liquidity would
+        // waste gas and leave the project in a deployed state with a useless (empty) LP position.
         if (liquidity == 0) revert JBUniswapV4LPSplitHook_ZeroLiquidity();
 
         // Record tokenId before minting. tokenIdOf is set after the external _mintPosition call
@@ -1476,6 +1478,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                     beneficiaryTokenCount = feeTokensAfter > feeTokensBefore ? feeTokensAfter - feeTokensBefore : 0;
 
                     claimableFeeTokens[projectId] += beneficiaryTokenCount;
+
+                    // Track the total fee tokens held across all projects so that _burnReceivedTokens
+                    // and _handleLeftoverTokens can exclude them from burnable balances.
                     _totalOutstandingFeeTokenClaims[feeProjectToken] += beneficiaryTokenCount;
                 }
             }
