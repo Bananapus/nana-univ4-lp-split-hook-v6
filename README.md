@@ -155,7 +155,7 @@ forge install
 | Command | Description |
 |---------|-------------|
 | `forge build` | Compile (requires `via_ir = true` due to stack depth) |
-| `forge test` | Run all tests (14 test files + fork tests covering full lifecycle) |
+| `forge test` | Run all tests (22 test files + fork tests covering full lifecycle) |
 | `forge test -vvv` | Run tests with full trace |
 
 ### Settings
@@ -176,7 +176,7 @@ runs = 4096
 
 ```
 src/
-  JBUniswapV4LPSplitHook.sol               # Main split hook (~1300 lines)
+  JBUniswapV4LPSplitHook.sol               # Main split hook (~1470 lines)
   JBUniswapV4LPSplitHookDeployer.sol       # Clone factory (86 lines)
   interfaces/
     IJBUniswapV4LPSplitHook.sol            # Hook interface + events
@@ -188,6 +188,7 @@ test/
   DeployerTest.t.sol                         # Clone factory + address registry
   FeeRoutingTest.t.sol                       # Fee collection and routing
   RebalanceTest.t.sol                        # Liquidity rebalancing
+  ReentrancyTest.t.sol                       # Reentrancy attack tests
   NativeETHTest.t.sol                        # Native ETH handling
   PriceMathTest.t.sol                        # Price conversion math
   SecurityTest.t.sol                         # Permission checks, access control
@@ -195,11 +196,17 @@ test/
   PositionManagerIntegrationTest.t.sol      # PositionManager interaction tests
   SplitHookRegressions.t.sol                # Audit finding regressions (H-2, M-1, M-2)
   IntegrationLifecycle.t.sol                 # Full end-to-end workflow
+  TestAuditGaps.sol                           # Audit gap coverage tests
   Fork.t.sol                                 # Fork tests with real V4 + JB core
   fork/GeomeanLPFork.t.sol                  # Geometric mean pricing fork tests
   fork/TickBoundsAndFeeFork.t.sol           # Tick bounds and fee fork tests
   invariant/LPSplitHookInvariant.t.sol      # Invariant/fuzz tests
   TestBaseV4.sol                             # Shared test infrastructure
+  mock/
+    MockERC20.sol                            # Mock ERC20 token
+    MockJBContracts.sol                      # Mock Juicebox contracts
+    MockPoolManager.sol                      # Mock V4 PoolManager
+    MockPositionManager.sol                  # Mock V4 PositionManager
   regression/
     FeeProjectIdValidation.t.sol            # Fee project ID validation
     ReinitAfterRenounce.t.sol               # Re-init after renounce
