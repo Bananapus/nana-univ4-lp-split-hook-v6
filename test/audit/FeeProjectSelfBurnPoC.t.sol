@@ -287,11 +287,7 @@ contract FeeProjectSelfBurnPoC is LPSplitHookV4TestBase {
         assertEq(hook.claimableFeeTokens(PROJECT_B), claimableB, "project B claimable unchanged after A claims");
 
         // Hook should still hold PROJECT_B's fee tokens.
-        assertGe(
-            feeProjectToken.balanceOf(address(hook)),
-            claimableB,
-            "hook must still custody project B's fee tokens"
-        );
+        assertGe(feeProjectToken.balanceOf(address(hook)), claimableB, "hook must still custody project B's fee tokens");
 
         // PROJECT_B can still claim.
         vm.prank(owner);
@@ -337,11 +333,7 @@ contract FeeProjectSelfBurnPoC is LPSplitHookV4TestBase {
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
 
         // Fee tokens should still be intact.
-        assertGe(
-            feeProjectToken.balanceOf(address(hook)),
-            claimable,
-            "fee tokens must survive burn of project tokens"
-        );
+        assertGe(feeProjectToken.balanceOf(address(hook)), claimable, "fee tokens must survive burn of project tokens");
 
         // Claim should still work for the full amount.
         vm.prank(owner);
