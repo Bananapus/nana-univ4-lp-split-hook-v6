@@ -264,7 +264,7 @@ A pool has been deployed (`tokenIdOf[projectId][terminalToken] != 0`). The posit
 - If the fee project has no terminal (`primaryTerminalOf(FEE_PROJECT_ID, terminalToken) == address(0)`), the fee amount stays in the contract (stranded, not lost)
 - If the fee project has no deployed ERC-20 (`tokenOf(FEE_PROJECT_ID) == address(0)`), the `terminal.pay()` still routes value via credits but `claimableFeeTokens` is not incremented
 - Fee routing uses zero slippage (`minReturnedTokens = 0`) by design -- MEV extraction on fee amounts is economically insignificant
-- No reentrancy guard; relies on state ordering for safety
+- No reentrancy guard; relies on burn-before-route ordering (project tokens burned before `terminal.pay()` can trigger pay hooks)
 
 ### Result
 

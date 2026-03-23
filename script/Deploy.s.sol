@@ -103,7 +103,8 @@ contract DeployScript is Script, Sphinx {
     }
 
     function deploy() public sphinx {
-        JBUniswapV4LPSplitHook hookImpl = new JBUniswapV4LPSplitHook{salt: hookSalt}(
+        // Shared constructor args for the hook implementation.
+        bytes memory hookArgs = abi.encode(
             address(core.directory),
             core.permissions,
             address(core.tokens),
@@ -113,8 +114,47 @@ contract DeployScript is Script, Sphinx {
             router.hook
         );
 
-        new JBUniswapV4LPSplitHookDeployer{salt: deployerSalt}(hookImpl, registry.registry);
+        if (!_isDeployed(hookSalt, type(JBUniswapV4LPSplitHook).creationCode, hookArgs)) {
+            new JBUniswapV4LPSplitHook{salt: hookSalt}(
+                address(core.directory),
+                core.permissions,
+                address(core.tokens),
+                poolManager,
+                positionManager,
+                IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
+                router.hook
+            );
+        }
+
+        // Resolve the hook address (deployed above or already existing) for the deployer constructor.
+        JBUniswapV4LPSplitHook hookImpl = JBUniswapV4LPSplitHook(payable(
+            vm.computeCreate2Address({
+                salt: hookSalt,
+                initCodeHash: keccak256(abi.encodePacked(type(JBUniswapV4LPSplitHook).creationCode, hookArgs)),
+                deployer: address(0x4e59b44847b379578588920cA78FbF26c0B4956C)
+            })
+        ));
+
+        if (
+            !_isDeployed(
+                deployerSalt,
+                type(JBUniswapV4LPSplitHookDeployer).creationCode,
+                abi.encode(address(hookImpl), address(registry.registry))
+            )
+        ) {
+            new JBUniswapV4LPSplitHookDeployer{salt: deployerSalt}(hookImpl, registry.registry);
+        }
     }
 
+    /// @dev Uses the deterministic CREATE2 deployer (0x4e59b44847b379578588920cA78FbF26c0B4956C).
+    /// Sphinx deployments use a different deployer, so this will not detect Sphinx-deployed contracts.
+    function _isDeployed(bytes32 salt, bytes memory creationCode, bytes memory arguments) internal view returns (bool) {
+        address _deployedTo = vm.computeCreate2Address({
+            salt: salt,
+            initCodeHash: keccak256(abi.encodePacked(creationCode, arguments)),
+            deployer: address(0x4e59b44847b379578588920cA78FbF26c0B4956C)
+        });
 
+        return address(_deployedTo).code.length != 0;
+    }
 }

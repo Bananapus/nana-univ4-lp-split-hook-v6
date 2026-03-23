@@ -4,7 +4,6 @@ pragma solidity 0.8.26;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {mulDiv, sqrt} from "@prb/math/src/Common.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
@@ -53,7 +52,7 @@ import {IJBUniswapV4LPSplitHook} from "./interfaces/IJBUniswapV4LPSplitHook.sol"
  * @dev For any given Uniswap V4 pool, the contract will control a single LP position.
  * @dev Pool deployment requires SET_BUYBACK_POOL permission from the project owner.
  */
-contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPermissioned, ReentrancyGuard {
+contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPermissioned {
     using JBRulesetMetadataResolver for JBRuleset;
     using SafeERC20 for IERC20;
     using PoolIdLibrary for PoolKey;
@@ -174,10 +173,16 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @notice Whether this clone instance has been initialized.
     bool public initialized;
 
+    //*********************************************************************//
+    // -------------------- internal stored properties ------------------- //
+    //*********************************************************************//
+
     /// @notice Token address => total outstanding fee token claims across all projects.
-    /// @dev Incremented when fee tokens are recorded in _routeFeesToProject, decremented when claimed via
-    /// claimFeeTokensFor.
-    ///      Subtracted from raw balanceOf reads to avoid spending tokens reserved for fee claims.
+    /// @dev Tracks fee tokens (e.g. JBX from project ID 1) held on behalf of projects that routed LP fees.
+    ///      When multiple projects share a single hook clone, fee tokens accumulate in one contract.
+    ///      Without this segregation, _burnReceivedTokens would read raw balanceOf(this) and could
+    ///      burn fee tokens reserved for other projects' unclaimed fee balances.
+    /// @custom:param token The fee project's ERC-20 token address.
     mapping(address token => uint256 totalClaims) internal _totalOutstandingFeeTokenClaims;
 
     //*********************************************************************//
@@ -515,7 +520,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Collect LP fees and route them back to the project
     // forge-lint: disable-next-line(mixed-case-function)
-    function collectAndRouteLPFees(uint256 projectId, address terminalToken) external nonReentrant {
+    function collectAndRouteLPFees(uint256 projectId, address terminalToken) external {
         uint256 tokenId = tokenIdOf[projectId][terminalToken];
         if (tokenId == 0) revert JBUniswapV4LPSplitHook_InvalidStageForAction();
 
@@ -542,7 +547,14 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint256 amount0 = _currencyBalance(key.currency0) - bal0Before;
         uint256 amount1 = _currencyBalance(key.currency1) - bal1Before;
 
-        // Route terminal token fees back to the project
+        // Burn project tokens BEFORE routing terminal token fees. This ordering is intentional:
+        // _routeCollectedFees → _routeFeesToProject → terminal.pay() can trigger pay hooks that
+        // re-enter this contract. By burning first, a re-entrant _burnReceivedTokens finds zero
+        // burnable balance, preventing double-burns without needing a reentrancy guard.
+        // slither-disable-next-line reentrancy-events,reentrancy-no-eth
+        _burnReceivedTokens({projectId: projectId, projectToken: projectToken});
+
+        // Route terminal token fees back to the project (may call terminal.pay() externally).
         // slither-disable-next-line reentrancy-events,reentrancy-no-eth
         _routeCollectedFees({
             projectId: projectId,
@@ -551,10 +563,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             amount0: amount0,
             amount1: amount1
         });
-
-        // Burn collected project token fees
-        // slither-disable-next-line reentrancy-events,reentrancy-no-eth
-        _burnReceivedTokens({projectId: projectId, projectToken: projectToken});
     }
 
     /// @notice Deploy a Uniswap V4 pool for a project using accumulated tokens
@@ -987,7 +995,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint256 feeAmount0 = _currencyBalance(key.currency0) - bal0Before;
         uint256 feeAmount1 = _currencyBalance(key.currency1) - bal1Before;
 
-        // Route terminal-token fees to the project's balance; project-token fees are burned below.
+        // Burn project tokens BEFORE routing terminal token fees. This ordering prevents reentrancy:
+        // _routeCollectedFees → terminal.pay() can trigger pay hooks; burning first ensures a
+        // re-entrant _burnReceivedTokens finds zero burnable balance.
+        _burnReceivedTokens({projectId: projectId, projectToken: projectToken});
+
+        // Route terminal-token fees to the project's balance (may call terminal.pay() externally).
         _routeCollectedFees({
             projectId: projectId,
             projectToken: projectToken,
@@ -995,8 +1008,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             amount0: feeAmount0,
             amount1: feeAmount1
         });
-        // Burn any project tokens received as fees to avoid inflating circulating supply.
-        _burnReceivedTokens({projectId: projectId, projectToken: projectToken});
     }
 
     /// @notice Compute the initial sqrtPriceX96 for pool initialization
