@@ -6,7 +6,7 @@ You are auditing a Uniswap V4 LP management hook for Juicebox V6 projects. The h
 
 **In scope -- all Solidity in `src/`:**
 ```
-src/JBUniswapV4LPSplitHook.sol        # Core hook (~1,360 lines)
+src/JBUniswapV4LPSplitHook.sol        # Core hook (~1,470 lines)
 src/JBUniswapV4LPSplitHookDeployer.sol # Clone deployer (~87 lines)
 src/interfaces/                        # Interfaces
 ```
@@ -45,7 +45,6 @@ initialize()          Accumulation Stage                  Pool Deployed
   FEE_PERCENT        -> tracks initialWeightOf       -> _addUniswapLiquidity
                                                         (cashout portion for pairing)
                                                      -> tokenIdOf[project][token] = NFT ID
-                                                     -> projectDeployed = true
                                                      -> deployedPoolCount++
 
                      Post-Deployment (all permissionless except rebalance/claim):
