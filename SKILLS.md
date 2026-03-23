@@ -67,7 +67,7 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 
 | Dependency | Import | Used For |
 |------------|--------|----------|
-| `@bananapus/core-v6` | `IJBController`, `IJBDirectory`, `IJBMultiTerminal`, `IJBPermissions`, `IJBSplitHook`, `IJBTerminal`, `IJBTerminalStore`, `IJBTokens`, `JBSplitHookContext`, `JBRuleset`, `JBRulesetMetadataResolver`, `JBConstants` | Juicebox protocol: controller queries, terminal pay/cashOut/addToBalance, permission checks, ruleset weight and pricing |
+| `@bananapus/core-v6` | `IJBController`, `IJBDirectory`, `IJBMultiTerminal`, `IJBPermissions`, `IJBSplitHook`, `IJBTerminal`, `IJBTokens`, `JBSplitHookContext`, `JBRuleset`, `JBRulesetMetadataResolver`, `JBConstants` | Juicebox protocol: controller queries, terminal pay/cashOut/addToBalance, permission checks, ruleset weight and pricing |
 | `@bananapus/permission-ids-v6` | `JBPermissionIds` | `SET_BUYBACK_POOL` permission ID |
 | `@uniswap/v4-core` | `IPoolManager`, `PoolKey`, `PoolId`, `Currency`, `TickMath`, `IHooks` | V4 pool creation, price math, currency handling. `IHooks` used for the `ORACLE_HOOK` (provides TWAP via `observe()`). |
 | `@uniswap/v4-periphery` | `IPositionManager`, `Actions`, `LiquidityAmounts` | V4 position management: mint, modify, burn, collect |
