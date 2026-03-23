@@ -79,6 +79,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     error JBUniswapV4LPSplitHook_TerminalTokensNotAllowed();
     error JBUniswapV4LPSplitHook_InsufficientLiquidity();
     error JBUniswapV4LPSplitHook_ZeroAddressNotAllowed();
+    error JBUniswapV4LPSplitHook_ZeroLiquidity();
 
     //*********************************************************************//
     // ------------------------- public constants ------------------------ //
@@ -171,6 +172,18 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Whether this clone instance has been initialized.
     bool public initialized;
+
+    //*********************************************************************//
+    // -------------------- internal stored properties ------------------- //
+    //*********************************************************************//
+
+    /// @notice Token address => total outstanding fee token claims across all projects.
+    /// @dev Tracks fee tokens (e.g. JBX from project ID 1) held on behalf of projects that routed LP fees.
+    ///      When multiple projects share a single hook clone, fee tokens accumulate in one contract.
+    ///      Without this segregation, _burnReceivedTokens would read raw balanceOf(this) and could
+    ///      burn fee tokens reserved for other projects' unclaimed fee balances.
+    /// @custom:param token The fee project's ERC-20 token address.
+    mapping(address token => uint256 totalClaims) internal _totalOutstandingFeeTokenClaims;
 
     //*********************************************************************//
     // ---------------------------- constructor -------------------------- //
@@ -498,8 +511,15 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         claimableFeeTokens[projectId] = 0;
 
         if (claimableAmount > 0) {
+            // Look up the fee project's ERC-20 token (e.g. JBX for project ID 1).
             address feeProjectToken = address(IJBTokens(TOKENS).tokenOf(FEE_PROJECT_ID));
+
+            // Release these tokens from the segregated fee-token reserve.
+            _totalOutstandingFeeTokenClaims[feeProjectToken] -= claimableAmount;
+
+            // Transfer the claimed fee tokens to the beneficiary.
             IERC20(feeProjectToken).safeTransfer({to: beneficiary, value: claimableAmount});
+
             emit FeeTokensClaimed(projectId, beneficiary, claimableAmount);
         }
     }
@@ -533,7 +553,14 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint256 amount0 = _currencyBalance(key.currency0) - bal0Before;
         uint256 amount1 = _currencyBalance(key.currency1) - bal1Before;
 
-        // Route terminal token fees back to the project
+        // Burn project tokens BEFORE routing terminal token fees. This ordering is intentional:
+        // _routeCollectedFees → _routeFeesToProject → terminal.pay() can trigger pay hooks that
+        // re-enter this contract. By burning first, a re-entrant _burnReceivedTokens finds zero
+        // burnable balance, preventing double-burns without needing a reentrancy guard.
+        // slither-disable-next-line reentrancy-events,reentrancy-no-eth
+        _burnReceivedTokens({projectId: projectId, projectToken: projectToken});
+
+        // Route terminal token fees back to the project (may call terminal.pay() externally).
         // slither-disable-next-line reentrancy-events,reentrancy-no-eth
         _routeCollectedFees({
             projectId: projectId,
@@ -542,10 +569,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             amount0: amount0,
             amount1: amount1
         });
-
-        // Burn collected project token fees
-        // slither-disable-next-line reentrancy-events,reentrancy-no-eth
-        _burnReceivedTokens({projectId: projectId, projectToken: projectToken});
     }
 
     /// @notice Deploy a Uniswap V4 pool for a project using accumulated tokens
@@ -754,8 +777,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 });
         }
 
-        // Get balances after cash out
-        uint256 projectTokenAmount = IERC20(projectToken).balanceOf(address(this));
+        // Get balances after cash out, excluding tokens reserved for outstanding fee claims
+        uint256 projectTokenAmount =
+            IERC20(projectToken).balanceOf(address(this)) - _totalOutstandingFeeTokenClaims[projectToken];
         uint256 terminalTokenAmount = _getTerminalTokenBalance(terminalToken) - terminalTokenBalanceBefore;
 
         // Sort amounts by currency order
@@ -774,6 +798,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             amount0: amount0,
             amount1: amount1
         });
+
+        // Revert if the computed liquidity is zero — minting a position with no liquidity would
+        // waste gas and leave the project in a deployed state with a useless (empty) LP position.
+        if (liquidity == 0) revert JBUniswapV4LPSplitHook_ZeroLiquidity();
 
         // Record tokenId before minting. tokenIdOf is set after the external _mintPosition call
         // because nextTokenId() must be captured before the mint increments it. This ordering is safe:
@@ -858,8 +886,14 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Burn received project tokens in deployment stage
     function _burnReceivedTokens(uint256 projectId, address projectToken) internal {
-        uint256 projectTokenBalance = IERC20(projectToken).balanceOf(address(this));
+        // Get this contract's balance of the project token, minus any fee tokens reserved
+        // for other projects. Without this subtraction, fee tokens (e.g. JBX) held on behalf
+        // of projects that routed LP fees would be incorrectly burned.
+        uint256 projectTokenBalance =
+            IERC20(projectToken).balanceOf(address(this)) - _totalOutstandingFeeTokenClaims[projectToken];
+
         if (projectTokenBalance > 0) {
+            // Burn the project tokens to reduce circulating supply.
             _burnProjectTokens({
                 projectId: projectId,
                 projectToken: projectToken,
@@ -974,7 +1008,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint256 feeAmount0 = _currencyBalance(key.currency0) - bal0Before;
         uint256 feeAmount1 = _currencyBalance(key.currency1) - bal1Before;
 
-        // Route terminal-token fees to the project's balance; project-token fees are burned below.
+        // Burn project tokens BEFORE routing terminal token fees. This ordering prevents reentrancy:
+        // _routeCollectedFees → terminal.pay() can trigger pay hooks; burning first ensures a
+        // re-entrant _burnReceivedTokens finds zero burnable balance.
+        _burnReceivedTokens({projectId: projectId, projectToken: projectToken});
+
+        // Route terminal-token fees to the project's balance (may call terminal.pay() externally).
         _routeCollectedFees({
             projectId: projectId,
             projectToken: projectToken,
@@ -982,8 +1021,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             amount0: feeAmount0,
             amount1: feeAmount1
         });
-        // Burn any project tokens received as fees to avoid inflating circulating supply.
-        _burnReceivedTokens({projectId: projectId, projectToken: projectToken});
     }
 
     /// @notice Compute the initial sqrtPriceX96 for pool initialization
@@ -1169,8 +1206,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Handle leftover tokens after V4 mint operation
     function _handleLeftoverTokens(uint256 projectId, address projectToken, address terminalToken) internal {
-        // Burn any remaining project tokens
-        uint256 projectTokenLeftover = IERC20(projectToken).balanceOf(address(this));
+        // Burn any remaining project tokens, excluding tokens reserved for outstanding fee claims
+        uint256 projectTokenLeftover =
+            IERC20(projectToken).balanceOf(address(this)) - _totalOutstandingFeeTokenClaims[projectToken];
         if (projectTokenLeftover > 0) {
             _burnProjectTokens({
                 projectId: projectId,
@@ -1440,6 +1478,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                     beneficiaryTokenCount = feeTokensAfter > feeTokensBefore ? feeTokensAfter - feeTokensBefore : 0;
 
                     claimableFeeTokens[projectId] += beneficiaryTokenCount;
+
+                    // Track the total fee tokens held across all projects so that _burnReceivedTokens
+                    // and _handleLeftoverTokens can exclude them from burnable balances.
+                    _totalOutstandingFeeTokenClaims[feeProjectToken] += beneficiaryTokenCount;
                 }
             }
         }

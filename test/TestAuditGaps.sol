@@ -330,12 +330,12 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
         // Accumulate tokens
         _accumulateTokensForProject(zeroSurplusProject, 500e18);
 
+        // With zero surplus, the position is 100% single-sided project tokens.
+        // The mock PositionManager computes zero liquidity for single-sided amounts,
+        // causing deployPool to revert with ZeroLiquidity.
         vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSignature("JBUniswapV4LPSplitHook_ZeroLiquidity()"));
         hook.deployPool(zeroSurplusProject, address(terminalToken), 0);
-
-        // Verify deployment succeeded with zero cash out rate
-        uint256 tokenId = hook.tokenIdOf(zeroSurplusProject, address(terminalToken));
-        assertTrue(tokenId != 0, "Pool should deploy with zero surplus/cash-out rate");
     }
 
     // -----------------------------------------------------------------------

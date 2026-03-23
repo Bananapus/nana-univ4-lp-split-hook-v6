@@ -132,18 +132,21 @@ Configurable per clone:
 
 ## Priority Audit Areas
 
-### 1. No Reentrancy Guard (Highest Priority)
+### 1. Reentrancy Safety via Burn-Before-Route Ordering (Highest Priority)
 
-The contract makes multiple external calls without any `ReentrancyGuard`:
+The contract makes multiple external calls without a `ReentrancyGuard`. Instead, it relies on burn-before-route ordering: `_burnReceivedTokens` is called before `_routeCollectedFees` (which calls `terminal.pay()`). This ensures a re-entrant `_burnReceivedTokens` finds zero burnable balance. Fee tokens minted during `terminal.pay()` are tracked in `_totalOutstandingFeeTokenClaims` and excluded from burnable balances.
+
+External call sites:
 - `deployPool`: calls `terminal.cashOutTokensOf()`, `POSITION_MANAGER.modifyLiquidities()`, `terminal.addToBalanceOf()`, `controller.burnTokensOf()`
-- `collectAndRouteLPFees`: calls `POSITION_MANAGER.modifyLiquidities()`, `terminal.pay()`, `terminal.addToBalanceOf()`, `controller.burnTokensOf()`
+- `collectAndRouteLPFees`: calls `POSITION_MANAGER.modifyLiquidities()`, `controller.burnTokensOf()`, `terminal.pay()`, `terminal.addToBalanceOf()`
 - `rebalanceLiquidity`: all of the above plus `BURN_POSITION` and re-`MINT_POSITION`
 - `claimFeeTokensFor`: calls `IERC20.safeTransfer()`
 
-Verify that state ordering prevents all reentrancy paths. Pay special attention to:
-- Can `terminal.pay()` (in fee routing) re-enter through a pay hook that calls back into this contract?
+Verify that the burn-before-route ordering prevents all reentrancy paths. Pay special attention to:
+- Can `terminal.pay()` (in fee routing) re-enter through a pay hook that calls back into this contract? (burn already completed — should find 0 balance)
 - Can `terminal.cashOutTokensOf()` trigger a cashout hook that re-enters?
 - Can `POSITION_MANAGER.modifyLiquidities()` trigger callbacks that re-enter?
+- Is `_totalOutstandingFeeTokenClaims` correctly incremented before any subsequent burn could see the fee tokens?
 
 ### 2. MEV on Rebalance
 
@@ -236,7 +239,7 @@ Regression tests for these findings are in `test/SplitHookRegressions.t.sol`. Se
 
 | Pattern | Where to Look | Why It's Dangerous |
 |---------|--------------|-------------------|
-| No reentrancy guard | All external functions | `deployPool`, `collectAndRouteLPFees`, `rebalanceLiquidity`, `claimFeeTokensFor` all make external calls without `ReentrancyGuard`. |
+| No reentrancy guard (burn-before-route ordering) | `collectAndRouteLPFees`, `_collectAndRouteFees`, `rebalanceLiquidity` | No `ReentrancyGuard` — relies on calling `_burnReceivedTokens` before `_routeCollectedFees`. Verify burn completes before any `terminal.pay()` call and that `_totalOutstandingFeeTokenClaims` correctly segregates fee tokens from burnable balances. |
 | Balance-delta accounting | `collectAndRouteLPFees`, `deployPool` | Token amounts determined by before/after balance checks. Fee-on-transfer tokens or reentrant callbacks could skew deltas. |
 | Full position burn in rebalance | `rebalanceLiquidity` | Burns entire position and remints. Between burn and mint, raw tokens are held. MEV sandwich opportunity. |
 | `terminal.pay()` in fee routing | `_routeFeesToProject` | `terminal.pay()` triggers pay hooks. A pay hook could re-enter this contract via `processSplitWith` if this hook is in the reserved token splits. |

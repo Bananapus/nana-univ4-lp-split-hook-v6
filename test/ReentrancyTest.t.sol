@@ -51,7 +51,8 @@ contract ReentrantControllerTerminal is MockJBController {
         shouldReenterOnCashOut = true;
     }
 
-    // ─── Terminal interface ──────────────────────────────────────────────
+    // ─── Terminal interface
+    // ──────────────────────────────────────────────
 
     function STORE() external view returns (address) {
         return storeAddr;
@@ -126,17 +127,7 @@ contract ReentrantControllerTerminal is MockJBController {
         return reclaimAmount;
     }
 
-    function addToBalanceOf(
-        uint256,
-        address,
-        uint256,
-        bool,
-        string calldata,
-        bytes calldata
-    )
-        external
-        payable
-    {}
+    function addToBalanceOf(uint256, address, uint256, bool, string calldata, bytes calldata) external payable {}
 
     function pay(
         uint256,
@@ -179,12 +170,7 @@ contract ReentrantFeeTerminal {
     bool public reentryReverted;
     uint256 public payCallCount;
 
-    constructor(
-        JBUniswapV4LPSplitHook _hook,
-        MockERC20 _feeProjectToken,
-        uint256 _projectId,
-        address _terminalToken
-    ) {
+    constructor(JBUniswapV4LPSplitHook _hook, MockERC20 _feeProjectToken, uint256 _projectId, address _terminalToken) {
         hook = _hook;
         feeProjectToken = _feeProjectToken;
         projectId = _projectId;
@@ -217,15 +203,17 @@ contract ReentrantFeeTerminal {
             if (reentryMode == ReentryMode.COLLECT_FEES) {
                 // Re-enter collectAndRouteLPFees. Second call should collect 0 fees.
                 try hook.collectAndRouteLPFees(projectId, terminalTokenAddr) {
-                    // Succeeded — but collected 0 fees (already taken by outer call)
-                } catch {
+                // Succeeded — but collected 0 fees (already taken by outer call)
+                }
+                catch {
                     reentryReverted = true;
                 }
             } else if (reentryMode == ReentryMode.REBALANCE) {
                 // Re-enter rebalanceLiquidity. Should fail (no permission).
                 try hook.rebalanceLiquidity(projectId, terminalTokenAddr, 0, 0) {
-                    // Should NOT reach here
-                } catch {
+                // Should NOT reach here
+                }
+                catch {
                     reentryReverted = true;
                 }
             }
@@ -269,9 +257,8 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
     ///         burn path instead of accumulating. No double-accumulation.
     function test_reentrancy_deployPool_cannotDoubleAccumulate() public {
         // 1. Create malicious controller+terminal
-        ReentrantControllerTerminal malicious = new ReentrantControllerTerminal(
-            hook, projectToken, terminalToken, address(store), PROJECT_ID
-        );
+        ReentrantControllerTerminal malicious =
+            new ReentrantControllerTerminal(hook, projectToken, terminalToken, address(store), PROJECT_ID);
 
         // 2. Register it as both controller and terminal for PROJECT_ID
         _setDirectoryController(PROJECT_ID, address(malicious));
@@ -307,8 +294,7 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
         // 6. Verify re-entry was attempted and succeeded (via burn path)
         assertTrue(malicious.reentrancyAttempted(), "Re-entry should have been attempted during cashOutTokensOf");
         assertTrue(
-            malicious.reentrancySucceeded(),
-            "Re-entry should succeed (burn path, not revert) - deployedPoolCount > 0"
+            malicious.reentrancySucceeded(), "Re-entry should succeed (burn path, not revert) - deployedPoolCount > 0"
         );
 
         // 7. Verify: accumulatedProjectTokens was NOT inflated by re-entry
@@ -438,13 +424,12 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
         uint256 claimableAfterSecond = hook.claimableFeeTokens(PROJECT_ID);
         assertEq(
-            claimableAfterSecond,
-            claimableBeforeSecond,
-            "Second collection should yield 0 additional fees (idempotent)"
+            claimableAfterSecond, claimableBeforeSecond, "Second collection should yield 0 additional fees (idempotent)"
         );
     }
 
-    // ─── Internal helpers ────────────────────────────────────────────────
+    // ─── Internal helpers
+    // ────────────────────────────────────────────────
 
     function _sortForTest(address tokenA, address tokenB) internal pure returns (address token0, address token1) {
         return tokenA < tokenB ? (tokenA, tokenB) : (tokenB, tokenA);

@@ -34,22 +34,22 @@ Admin privileges and their scope in univ4-lp-split-hook-v6.
 | Function | Required Role | Permission ID | Scope | What It Does |
 |----------|--------------|---------------|-------|-------------|
 | `deployPool(projectId, terminalToken, minCashOutReturn)` | Project owner or SET_BUYBACK_POOL operator. **Becomes permissionless** when the current ruleset weight has decayed to 1/10th or less of `initialWeightOf[projectId]`. | `JBPermissionIds.SET_BUYBACK_POOL` (26) | Per-project, single terminal-token path | Creates a Uniswap V4 pool at the geometric mean of issuance/cashout rates. Cashes out a computed fraction of accumulated project tokens for terminal tokens, mints a concentrated LP position, and transitions the project from accumulation to burn mode. This permanently commits the hook instance to one terminal-token path for that project. |
-| `rebalanceLiquidity(projectId, terminalToken, ...)` | Project owner or SET_BUYBACK_POOL operator | `JBPermissionIds.SET_BUYBACK_POOL` (26) | Per-project, per-terminal-token | Burns the existing LP position NFT, collects and routes accrued fees, recalculates tick bounds from current issuance/cashout rates, and mints a new position with updated bounds. Reverts with `InsufficientLiquidity` if the new position would have zero liquidity. (Lines 632-667) |
-| `claimFeeTokensFor(projectId, beneficiary)` | Project owner or SET_BUYBACK_POOL operator | `JBPermissionIds.SET_BUYBACK_POOL` (26) | Per-project | Transfers accumulated fee-project tokens to the specified beneficiary address. Validates the caller's permission, not the beneficiary's identity. Zeroes `claimableFeeTokens[projectId]` before transferring. (Lines 490-505) |
-| `processSplitWith(context)` | JB Controller (system) | None (checked via `controllerOf`) | Per-project | Only callable by the project's registered controller. Accumulates project tokens (pre-deployment) or burns them (post-deployment). Validates `context.split.hook == address(this)`, `groupId == 1`, and controller identity. (Lines 596-627) |
-| `initialize(feeProjectId, feePercent)` | Anyone (once only) | None | Per-clone instance | Sets `FEE_PROJECT_ID` and `FEE_PERCENT` on a clone. Can only be called once per clone (`initialized` flag). In practice, called immediately by the deployer factory. (Lines 215-232) |
+| `rebalanceLiquidity(projectId, terminalToken, ...)` | Project owner or SET_BUYBACK_POOL operator | `JBPermissionIds.SET_BUYBACK_POOL` (26) | Per-project, per-terminal-token | Burns the existing LP position NFT, collects and routes accrued fees, recalculates tick bounds from current issuance/cashout rates, and mints a new position with updated bounds. Reverts with `InsufficientLiquidity` if the new position would have zero liquidity. |
+| `claimFeeTokensFor(projectId, beneficiary)` | Project owner or SET_BUYBACK_POOL operator | `JBPermissionIds.SET_BUYBACK_POOL` (26) | Per-project | Transfers accumulated fee-project tokens to the specified beneficiary address. Validates the caller's permission, not the beneficiary's identity. Zeroes `claimableFeeTokens[projectId]` before transferring. |
+| `processSplitWith(context)` | JB Controller (system) | None (checked via `controllerOf`) | Per-project | Only callable by the project's registered controller. Accumulates project tokens (pre-deployment) or burns them (post-deployment). Validates `context.split.hook == address(this)`, `groupId == 1`, and controller identity. |
+| `initialize(feeProjectId, feePercent)` | Anyone (once only) | None | Per-clone instance | Sets `FEE_PROJECT_ID` and `FEE_PERCENT` on a clone. Can only be called once per clone (`initialized` flag). In practice, called immediately by the deployer factory. |
 
 ### JBUniswapV4LPSplitHookDeployer
 
 | Function | Required Role | Permission ID | Scope | What It Does |
 |----------|--------------|---------------|-------|-------------|
-| `deployHookFor(feeProjectId, feePercent, salt)` | Anyone | None | Global | Deploys a new hook clone via `LibClone`, calls `initialize()` on it, and registers it in the `JBAddressRegistry`. CREATE2 salt is scoped to `msg.sender`. (Lines 53-85) |
+| `deployHookFor(feeProjectId, feePercent, salt)` | Anyone | None | Global | Deploys a new hook clone via `LibClone`, calls `initialize()` on it, and registers it in the `JBAddressRegistry`. CREATE2 salt is scoped to `msg.sender`. |
 
 ### Permissionless Functions (No Privilege Required)
 
 | Function | Scope | What It Does |
 |----------|-------|-------------|
-| `collectAndRouteLPFees(projectId, terminalToken)` | Per-project, per-terminal-token | Collects accrued V4 position fees and routes them: `FEE_PERCENT` of terminal token fees to the fee project via `terminal.pay()`, the remainder to the original project via `addToBalanceOf()`. Project token fees are burned. Safe because funds always go to verified project terminals. (Lines 509-549) |
+| `collectAndRouteLPFees(projectId, terminalToken)` | Per-project, per-terminal-token | Collects accrued V4 position fees and routes them: `FEE_PERCENT` of terminal token fees to the fee project via `terminal.pay()`, the remainder to the original project via `addToBalanceOf()`. Project token fees are burned. Safe because funds always go to verified project terminals. |
 | `isPoolDeployed(projectId, terminalToken)` | View | Returns whether `tokenIdOf[projectId][terminalToken] != 0`. |
 | `poolKeyOf(projectId, terminalToken)` | View | Returns the stored `PoolKey` for a deployed pool. |
 | `supportsInterface(interfaceId)` | View | Returns `true` for `IJBUniswapV4LPSplitHook` and `IJBSplitHook`. |
@@ -68,7 +68,7 @@ ACCUMULATING --> DEPLOYED (burn mode)
 | **ACCUMULATING** | `deployedPoolCount[projectId] == 0` | `processSplitWith()` accumulates project tokens in the hook's balance. `deployPool()` is available (permissioned or permissionless after 10x decay). |
 | **DEPLOYED** | `deployedPoolCount[projectId] != 0` | `processSplitWith()` burns incoming project tokens via the controller. `deployPool()` reverts with `PoolAlreadyDeployed` (same terminal token) or `OnlyOneTerminalTokenSupported` (different terminal token). `rebalanceLiquidity()` becomes available. LP fee collection is permissionless. |
 
-**Transition:** `deployPool()` is the one-way transition. It increments `deployedPoolCount[projectId]` before any external calls (line 582), then cashes out a fraction of accumulated tokens for terminal tokens, creates a Uniswap V4 pool, mints a concentrated LP position, and stores the position's token ID in `tokenIdOf`. The early increment ensures reentrancy cannot observe the project as still accumulating. This transition is irreversible -- there is no mechanism to return to the accumulating state.
+**Transition:** `deployPool()` is the one-way transition. It increments `deployedPoolCount[projectId]` before any external calls, then cashes out a fraction of accumulated tokens for terminal tokens, creates a Uniswap V4 pool, mints a concentrated LP position, and stores the position's token ID in `tokenIdOf`. The early increment ensures reentrancy cannot observe the project as still accumulating. This transition is irreversible -- there is no mechanism to return to the accumulating state.
 
 **Note:** `isPoolDeployed(projectId, terminalToken)` checks `tokenIdOf[projectId][terminalToken] != 0`, which is a per-terminal-token view. The accumulate-vs-burn decision in `processSplitWith` uses `deployedPoolCount[projectId]`, which is a per-project counter. This distinction matters because `deployedPoolCount` is incremented before the external mint call that sets `tokenIdOf`, making the state transition reentrancy-safe.
 
@@ -82,19 +82,19 @@ These values are set at deploy time and cannot be changed afterward.
 
 | Parameter | Set In | Value Source |
 |-----------|--------|-------------|
-| `DIRECTORY` | Constructor (line 202) | JBDirectory address |
-| `TOKENS` | Constructor (line 207) | JBTokens address |
-| `POOL_MANAGER` | Constructor (line 205) | Uniswap V4 PoolManager address |
-| `POSITION_MANAGER` | Constructor (line 206) | Uniswap V4 PositionManager address |
-| `ORACLE_HOOK` | Constructor (line 203) | Oracle hook (`IHooks`) for all JB V4 pools. Set in `PoolKey.hooks` when creating pools. Provides TWAP via `observe()`. |
-| `PERMISSIONS` | Inherited from `JBPermissioned` constructor (line 195) | JBPermissions address |
+| `DIRECTORY` | Constructor | JBDirectory address |
+| `TOKENS` | Constructor | JBTokens address |
+| `POOL_MANAGER` | Constructor | Uniswap V4 PoolManager address |
+| `POSITION_MANAGER` | Constructor | Uniswap V4 PositionManager address |
+| `ORACLE_HOOK` | Constructor | Oracle hook (`IHooks`) for all JB V4 pools. Set in `PoolKey.hooks` when creating pools. Provides TWAP via `observe()`. |
+| `PERMISSIONS` | Inherited from `JBPermissioned` constructor | JBPermissions address |
 
 ### Clone-Level (initialize(), Per-Instance)
 
 | Parameter | Set In | Value Source |
 |-----------|--------|-------------|
-| `FEE_PROJECT_ID` | `initialize()` (line 230) | Project ID receiving LP fee share |
-| `FEE_PERCENT` | `initialize()` (line 231) | Basis points (0-10000) of LP fees routed to fee project |
+| `FEE_PROJECT_ID` | `initialize()` | Project ID receiving LP fee share |
+| `FEE_PERCENT` | `initialize()` | Basis points (0-10000) of LP fees routed to fee project |
 
 ### Protocol Constants (Hardcoded)
 
