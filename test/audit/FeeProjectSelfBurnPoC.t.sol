@@ -177,4 +177,175 @@ contract FeeProjectSelfBurnPoC is LPSplitHookV4TestBase {
         hook.claimFeeTokensFor(PROJECT_ID, user);
         assertEq(feeProjectToken.balanceOf(user), projectOneClaimable, "user should receive claimed fee tokens");
     }
+
+    /// @notice After claiming fee tokens, _totalOutstandingFeeTokenClaims is decremented.
+    ///         A subsequent collectAndRouteLPFees (which calls _burnReceivedTokens) must not
+    ///         underflow on the subtraction `balanceOf(this) - _totalOutstandingFeeTokenClaims`.
+    function test_ClaimThenBurn_NoUnderflow() public {
+        // Deploy pool and generate fee tokens for PROJECT_ID.
+        _accumulateAndDeploy(PROJECT_ID, 100e18);
+        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        bool terminalIsToken0 = address(terminalToken) < address(projectToken);
+
+        // First fee collection: generates claimable fee tokens.
+        uint256 feeAmount = 50e18;
+        if (terminalIsToken0) {
+            positionManager.setCollectableFees(tokenId, feeAmount, 0);
+        } else {
+            positionManager.setCollectableFees(tokenId, 0, feeAmount);
+        }
+        terminalToken.mint(address(positionManager), feeAmount);
+        hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
+
+        uint256 claimable = hook.claimableFeeTokens(PROJECT_ID);
+        assertGt(claimable, 0, "precondition: should have claimable fee tokens");
+
+        // Claim all fee tokens — this decrements _totalOutstandingFeeTokenClaims.
+        vm.prank(owner);
+        hook.claimFeeTokensFor(PROJECT_ID, user);
+        assertEq(hook.claimableFeeTokens(PROJECT_ID), 0, "claimable should be zero after claim");
+
+        // Second fee collection: _burnReceivedTokens subtracts _totalOutstandingFeeTokenClaims
+        // (now 0) from balanceOf(this). Must not underflow.
+        uint256 feeAmount2 = 30e18;
+        if (terminalIsToken0) {
+            positionManager.setCollectableFees(tokenId, feeAmount2, 0);
+        } else {
+            positionManager.setCollectableFees(tokenId, 0, feeAmount2);
+        }
+        terminalToken.mint(address(positionManager), feeAmount2);
+
+        // This must not revert from arithmetic underflow.
+        hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
+    }
+
+    /// @notice Two projects generate fee tokens independently. Claiming for one project
+    ///         must not affect the other project's claimable balance or cause burns to
+    ///         underflow.
+    function test_MultiProjectFeeTokenIndependence() public {
+        // Set up a second user project (ID 3) that shares the same hook clone.
+        uint256 PROJECT_B = 3;
+        burningController.setWeight(PROJECT_B, DEFAULT_WEIGHT);
+        burningController.setReservedPercent(PROJECT_B, DEFAULT_RESERVED_PERCENT);
+        burningController.setBaseCurrency(PROJECT_B, 1);
+        burningController.setToken(PROJECT_B, address(projectToken));
+        _setDirectoryController(PROJECT_B, address(burningController));
+        _setDirectoryTerminal(PROJECT_B, address(terminalToken), address(terminal));
+        _addDirectoryTerminal(PROJECT_B, address(terminal));
+        jbProjects.setOwner(PROJECT_B, owner);
+        jbTokens.setToken(PROJECT_B, address(projectToken));
+        terminal.setProjectToken(PROJECT_B, address(projectToken));
+        store.setSurplus(PROJECT_B, 0.5e18);
+
+        // Deploy pools for both projects.
+        _accumulateAndDeploy(PROJECT_ID, 100e18);
+        _accumulateTokens(PROJECT_B, 100e18);
+        vm.prank(owner);
+        hook.deployPool(PROJECT_B, address(terminalToken), 0);
+
+        bool terminalIsToken0 = address(terminalToken) < address(projectToken);
+
+        // Generate fee tokens for PROJECT_ID.
+        uint256 tokenIdA = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 feeA = 60e18;
+        if (terminalIsToken0) {
+            positionManager.setCollectableFees(tokenIdA, feeA, 0);
+        } else {
+            positionManager.setCollectableFees(tokenIdA, 0, feeA);
+        }
+        terminalToken.mint(address(positionManager), feeA);
+        hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
+
+        // Generate fee tokens for PROJECT_B.
+        uint256 tokenIdB = hook.tokenIdOf(PROJECT_B, address(terminalToken));
+        uint256 feeB = 40e18;
+        if (terminalIsToken0) {
+            positionManager.setCollectableFees(tokenIdB, feeB, 0);
+        } else {
+            positionManager.setCollectableFees(tokenIdB, 0, feeB);
+        }
+        terminalToken.mint(address(positionManager), feeB);
+        hook.collectAndRouteLPFees(PROJECT_B, address(terminalToken));
+
+        uint256 claimableA = hook.claimableFeeTokens(PROJECT_ID);
+        uint256 claimableB = hook.claimableFeeTokens(PROJECT_B);
+        assertGt(claimableA, 0, "project A should have claimable fee tokens");
+        assertGt(claimableB, 0, "project B should have claimable fee tokens");
+
+        // Hook should hold the combined fee tokens.
+        assertEq(
+            feeProjectToken.balanceOf(address(hook)),
+            claimableA + claimableB,
+            "hook should custody both projects' fee tokens"
+        );
+
+        // Claim for PROJECT_ID only.
+        vm.prank(owner);
+        hook.claimFeeTokensFor(PROJECT_ID, user);
+
+        // PROJECT_B's claimable must be unaffected.
+        assertEq(hook.claimableFeeTokens(PROJECT_B), claimableB, "project B claimable unchanged after A claims");
+
+        // Hook should still hold PROJECT_B's fee tokens.
+        assertGe(
+            feeProjectToken.balanceOf(address(hook)),
+            claimableB,
+            "hook must still custody project B's fee tokens"
+        );
+
+        // PROJECT_B can still claim.
+        vm.prank(owner);
+        hook.claimFeeTokensFor(PROJECT_B, owner);
+        assertEq(feeProjectToken.balanceOf(owner), claimableB, "project B owner should receive claimed fee tokens");
+    }
+
+    /// @notice _burnReceivedTokens must only burn project tokens that are NOT reserved
+    ///         as fee token claims. After fee routing generates fee tokens, a subsequent
+    ///         burn (triggered by collectAndRouteLPFees) must leave the reserved fee tokens intact.
+    function test_BurnExcludesReservedFeeTokens() public {
+        _accumulateAndDeploy(PROJECT_ID, 100e18);
+        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        bool terminalIsToken0 = address(terminalToken) < address(projectToken);
+
+        // Generate fee tokens via LP fee collection.
+        uint256 feeAmount = 80e18;
+        if (terminalIsToken0) {
+            positionManager.setCollectableFees(tokenId, feeAmount, 0);
+        } else {
+            positionManager.setCollectableFees(tokenId, 0, feeAmount);
+        }
+        terminalToken.mint(address(positionManager), feeAmount);
+        hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
+
+        uint256 claimable = hook.claimableFeeTokens(PROJECT_ID);
+        assertGt(claimable, 0, "precondition: should have claimable fee tokens");
+        uint256 hookFeeBalance = feeProjectToken.balanceOf(address(hook));
+        assertEq(hookFeeBalance, claimable, "precondition: hook holds exactly the claimable amount");
+
+        // Now do another fee collection with project-token-side fees only.
+        // This triggers _burnReceivedTokens, which must NOT burn the reserved fee tokens.
+        bool projectIsToken0 = address(projectToken) < address(terminalToken);
+        uint256 projFeeAmount = 25e18;
+        if (projectIsToken0) {
+            positionManager.setCollectableFees(tokenId, projFeeAmount, 0);
+        } else {
+            positionManager.setCollectableFees(tokenId, 0, projFeeAmount);
+        }
+        projectToken.mint(address(positionManager), projFeeAmount);
+
+        // This must not revert (no underflow) and must not burn fee tokens.
+        hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
+
+        // Fee tokens should still be intact.
+        assertGe(
+            feeProjectToken.balanceOf(address(hook)),
+            claimable,
+            "fee tokens must survive burn of project tokens"
+        );
+
+        // Claim should still work for the full amount.
+        vm.prank(owner);
+        hook.claimFeeTokensFor(PROJECT_ID, user);
+        assertEq(feeProjectToken.balanceOf(user), claimable, "user should receive all fee tokens after burn");
+    }
 }
