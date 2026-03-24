@@ -21,6 +21,8 @@ import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBMultiTerminal} from "@bananapus/core-v6/src/interfaces/IJBMultiTerminal.sol";
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
 import {IJBSplitHook} from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
+import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
+import {IJBTerminalStore} from "@bananapus/core-v6/src/interfaces/IJBTerminalStore.sol";
 import {IJBTokens} from "@bananapus/core-v6/src/interfaces/IJBTokens.sol";
 import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
@@ -273,7 +275,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     // -------------------------- internal views ------------------------- //
     //*********************************************************************//
 
-    /// @notice Calculate the cash out rate (price floor)
+    /// @notice Calculate the cash out rate (price floor).
+    /// @dev Uses total surplus when the project's `useTotalSurplusForCashOuts` flag is set,
+    /// otherwise uses local (single-terminal) surplus to match the actual cashout behavior.
     function _getCashOutRate(
         uint256 projectId,
         address terminalToken
@@ -282,10 +286,21 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         view
         returns (uint256 terminalTokensPerProjectToken)
     {
-        try IJBMultiTerminal(
-                address(IJBDirectory(DIRECTORY).primaryTerminalOf({projectId: projectId, token: terminalToken}))
-            ).STORE()
-            .currentTotalReclaimableSurplusOf({
+        // Resolve the project's primary terminal for this token.
+        IJBMultiTerminal terminal = IJBMultiTerminal(
+            address(IJBDirectory(DIRECTORY).primaryTerminalOf({projectId: projectId, token: terminalToken}))
+        );
+
+        // Get the store for surplus queries.
+        IJBTerminalStore store = terminal.STORE();
+
+        // Check whether the project uses total surplus across all terminals for cashouts.
+        address controller = address(IJBDirectory(DIRECTORY).controllerOf(projectId));
+        (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
+
+        if (ruleset.useTotalSurplusForCashOuts()) {
+            // Use total surplus across all terminals.
+            try store.currentTotalReclaimableSurplusOf({
                 projectId: projectId,
                 cashOutCount: _WAD,
                 decimals: _getTokenDecimals(terminalToken),
@@ -293,11 +308,36 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 // forge-lint: disable-next-line(unsafe-typecast)
                 currency: uint256(uint32(uint160(terminalToken)))
             }) returns (
-            uint256 reclaimableAmount
-        ) {
-            terminalTokensPerProjectToken = reclaimableAmount;
-        } catch {
-            terminalTokensPerProjectToken = 0;
+                uint256 reclaimableAmount
+            ) {
+                terminalTokensPerProjectToken = reclaimableAmount;
+            } catch {
+                terminalTokensPerProjectToken = 0;
+            }
+        } else {
+            // Build single-element arrays to query only the primary terminal's local surplus.
+            IJBTerminal[] memory terminals = new IJBTerminal[](1);
+            terminals[0] = IJBTerminal(address(terminal));
+            address[] memory tokens = new address[](1);
+            tokens[0] = terminalToken;
+
+            // Use local surplus from only the primary terminal.
+            try store.currentReclaimableSurplusOf({
+                projectId: projectId,
+                cashOutCount: _WAD,
+                terminals: terminals,
+                tokens: tokens,
+                decimals: _getTokenDecimals(terminalToken),
+                // Safe: truncation to uint32 is the standard Juicebox currency encoding.
+                // forge-lint: disable-next-line(unsafe-typecast)
+                currency: uint256(uint32(uint160(terminalToken)))
+            }) returns (
+                uint256 reclaimableAmount
+            ) {
+                terminalTokensPerProjectToken = reclaimableAmount;
+            } catch {
+                terminalTokensPerProjectToken = 0;
+            }
         }
     }
 
@@ -638,10 +678,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             // This hook requires an ERC-20 project token — credits cannot be paired as LP.
             if (projectToken == address(0)) revert JBUniswapV4LPSplitHook_InvalidProjectId();
 
-            // Defense-in-depth: verify actual ERC-20 balance covers accumulated total.
-            // The standard controller transfers tokens before calling processSplitWith,
-            // but custom controllers may not — this guards against accounting drift.
-            if (IERC20(projectToken).balanceOf(address(this)) < accumulatedProjectTokens[context.projectId]) {
+            // Defense-in-depth: verify actual ERC-20 balance (minus outstanding fee token claims)
+            // covers accumulated total. The standard controller transfers tokens before calling
+            // processSplitWith, but custom controllers may not — this guards against accounting drift.
+            if (
+                IERC20(projectToken).balanceOf(address(this)) - _totalOutstandingFeeTokenClaims[projectToken]
+                    < accumulatedProjectTokens[context.projectId]
+            ) {
                 revert JBUniswapV4LPSplitHook_InsufficientBalance();
             }
         } else {
@@ -1321,8 +1364,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     )
         internal
     {
-        uint256 projectTokenBalance = IERC20(projectToken).balanceOf(address(this));
-        uint256 terminalTokenBalance = _getTerminalTokenBalance(terminalToken);
+        // Exclude tokens reserved for outstanding fee claims to avoid consuming fee tokens during rebalance.
+        uint256 projectTokenBalance =
+            IERC20(projectToken).balanceOf(address(this)) - _totalOutstandingFeeTokenClaims[projectToken];
+        uint256 terminalTokenBalance =
+            _getTerminalTokenBalance(terminalToken) - _totalOutstandingFeeTokenClaims[terminalToken];
 
         (int24 tickLower, int24 tickUpper) =
             _calculateTickBounds({projectId: projectId, terminalToken: terminalToken, projectToken: projectToken});
@@ -1415,10 +1461,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
     }
 
-    /// @notice Route fees back to the project
-    /// @dev Fee routing uses zero slippage (minReturnedTokens = 0) by design. Fees are small amounts
-    /// routed to the protocol fee project. MEV extraction on fee amounts is economically insignificant relative to gas
-    /// costs. Adding slippage would require an oracle and add complexity for minimal benefit.
+    /// @notice Route fees back to the project.
+    /// @dev Fee routing uses zero slippage (minReturnedTokens = 0) by design. Slippage protection
+    /// is the responsibility of the fee project's pay hook (e.g., its buyback hook). An alternative
+    /// approach — calling `previewPayFor` and using the result as a minimum — was considered but
+    /// deemed unnecessary given the existing hook-level protection. Fees are small amounts routed
+    /// to the protocol fee project; MEV extraction is economically insignificant relative to gas costs.
     // slither-disable-next-line arbitrary-send-eth,reentrancy-eth,reentrancy-benign,reentrancy-events,incorrect-equality,unused-return
     function _routeFeesToProject(uint256 projectId, address terminalToken, uint256 amount) internal {
         if (amount == 0) return;

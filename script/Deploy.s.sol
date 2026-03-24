@@ -66,7 +66,8 @@ contract DeployScript is Script, Sphinx {
             )
         );
 
-        // Uniswap V4 PoolManager — canonical address on all chains
+        // Uniswap V4 PoolManager — canonical CREATE2 address, same on all chains.
+        // Verify at https://docs.uniswap.org/contracts/v4/deployments
         poolManager = IPoolManager(0x000000000004444c5dc75cB358380D2e3dE08A90);
 
         // Uniswap V4 PositionManager — per-chain addresses
