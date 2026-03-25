@@ -271,7 +271,7 @@ Regression tests for these findings are in `test/SplitHookRegressions.t.sol`. Se
 
 ## Compiler and Version Info
 
-- **Solidity**: 0.8.26
+- **Solidity**: ^0.8.26
 - **EVM target**: Cancun
 - **Optimizer**: via-IR, 200 runs
 - **Fuzz**: 4,096 runs; invariant: 1,024 runs, depth 100
