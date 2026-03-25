@@ -21,7 +21,7 @@ One contract/interface/struct/enum per file. Name the file after the type it con
 
 ```solidity
 // Contracts — pin to exact version
-pragma solidity 0.8.26;
+pragma solidity ^0.8.26;
 
 // Interfaces, structs, enums — caret for forward compatibility
 pragma solidity ^0.8.0;
