@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity 0.8.28;
 
 /// @notice Minimal mock PoolManager that supports StateLibrary.getSlot0 via extsload.
 /// @dev StateLibrary reads pool state from the PoolManager's storage via extsload.
