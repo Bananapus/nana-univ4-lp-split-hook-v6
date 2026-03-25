@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity 0.8.28;
 
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
@@ -224,6 +224,7 @@ contract FeeProjectSelfBurnPoC is LPSplitHookV4TestBase {
     ///         underflow.
     function test_MultiProjectFeeTokenIndependence() public {
         // Set up a second user project (ID 3) that shares the same hook clone.
+        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 PROJECT_B = 3;
         burningController.setWeight(PROJECT_B, DEFAULT_WEIGHT);
         burningController.setReservedPercent(PROJECT_B, DEFAULT_RESERVED_PERCENT);

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity 0.8.28;
 
 import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
 import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
@@ -7,7 +7,6 @@ import {JBSplit} from "@bananapus/core-v6/src/structs/JBSplit.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {IJBSplitHook} from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
-import {JBPermissionIds} from "@bananapus/permission-ids-v6/src/JBPermissionIds.sol";
 import {MockERC20} from "./mock/MockERC20.sol";
 import {MockJBController} from "./mock/MockJBContracts.sol";
 
@@ -230,6 +229,7 @@ contract ReentrantFeeTerminal {
     }
 
     function accountingContextForTokenOf(uint256, address token) external pure returns (JBAccountingContext memory) {
+        // forge-lint: disable-next-line(unsafe-typecast)
         return JBAccountingContext({token: token, decimals: 18, currency: uint32(uint160(token))});
     }
 
