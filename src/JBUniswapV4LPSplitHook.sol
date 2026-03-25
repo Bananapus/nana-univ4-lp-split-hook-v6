@@ -296,6 +296,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         // Check whether the project uses total surplus across all terminals for cashouts.
         address controller = address(IJBDirectory(DIRECTORY).controllerOf(projectId));
+        // slither-disable-next-line unused-return
         (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
 
         if (ruleset.useTotalSurplusForCashOuts()) {
@@ -844,6 +845,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         // Revert if the computed liquidity is zero — minting a position with no liquidity would
         // waste gas and leave the project in a deployed state with a useless (empty) LP position.
+        // slither-disable-next-line incorrect-equality
         if (liquidity == 0) revert JBUniswapV4LPSplitHook_ZeroLiquidity();
 
         // Record tokenId before minting. tokenIdOf is set after the external _mintPosition call
