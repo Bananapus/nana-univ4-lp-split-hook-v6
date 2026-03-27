@@ -6,9 +6,85 @@ import {MockERC20} from "../mock/MockERC20.sol";
 import {MockJBController} from "../mock/MockJBContracts.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
+import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+
+contract DrainingAddToBalanceTerminal {
+    address public storeAddress;
+    mapping(uint256 projectId => mapping(address token => JBAccountingContext)) public contexts;
+    mapping(uint256 projectId => address token) public projectTokens;
+    uint256 public addToBalanceCallCount;
+    uint256 public lastAddedAmount;
+    address public lastAddedToken;
+
+    function setStore(address store) external {
+        storeAddress = store;
+    }
+
+    function setProjectToken(uint256 projectId, address token) external {
+        projectTokens[projectId] = token;
+    }
+
+    function setAccountingContext(uint256 projectId, address token, uint32 currency, uint8 decimals) external {
+        contexts[projectId][token] = JBAccountingContext({token: token, decimals: decimals, currency: currency});
+    }
+
+    function STORE() external view returns (address) {
+        return storeAddress;
+    }
+
+    function accountingContextForTokenOf(
+        uint256 projectId,
+        address token
+    )
+        external
+        view
+        returns (JBAccountingContext memory)
+    {
+        return contexts[projectId][token];
+    }
+
+    function addToBalanceOf(
+        uint256,
+        address token,
+        uint256 amount,
+        bool,
+        string calldata,
+        bytes calldata
+    )
+        external
+        payable
+    {
+        ++addToBalanceCallCount;
+        lastAddedAmount = amount;
+        lastAddedToken = token;
+
+        if (token != address(0x000000000000000000000000000000000000EEEe) && amount > 0) {
+            IERC20(token).transferFrom(msg.sender, address(this), amount);
+        }
+    }
+
+    function cashOutTokensOf(
+        address,
+        uint256,
+        uint256 cashOutCount,
+        address tokenToReclaim,
+        uint256,
+        address payable beneficiary,
+        bytes calldata
+    )
+        external
+        returns (uint256 reclaimAmount)
+    {
+        reclaimAmount = cashOutCount / 2;
+        if (reclaimAmount > 0) {
+            MockERC20(tokenToReclaim).mint(beneficiary, reclaimAmount);
+        }
+    }
+}
 
 contract BurningController {
     address public pricesContract;
@@ -92,6 +168,8 @@ contract BurningController {
 
 contract FeeProjectSelfBurnPoC is LPSplitHookV4TestBase {
     BurningController internal burningController;
+    DrainingAddToBalanceTerminal internal drainingTerminal;
+    uint256 internal constant PROJECT_B = 3;
 
     function setUp() public override {
         super.setUp();
@@ -111,6 +189,9 @@ contract FeeProjectSelfBurnPoC is LPSplitHookV4TestBase {
         _setDirectoryController(PROJECT_ID, address(burningController));
         _setDirectoryController(FEE_PROJECT_ID, address(burningController));
         store.setSurplus(FEE_PROJECT_ID, 0.5e18);
+
+        drainingTerminal = new DrainingAddToBalanceTerminal();
+        drainingTerminal.setStore(address(store));
     }
 
     function _accumulateTokensFor(uint256 projectId, MockERC20 token, uint256 amount) internal {
@@ -225,7 +306,6 @@ contract FeeProjectSelfBurnPoC is LPSplitHookV4TestBase {
     function test_MultiProjectFeeTokenIndependence() public {
         // Set up a second user project (ID 3) that shares the same hook clone.
         // forge-lint: disable-next-line(mixed-case-variable)
-        uint256 PROJECT_B = 3;
         burningController.setWeight(PROJECT_B, DEFAULT_WEIGHT);
         burningController.setReservedPercent(PROJECT_B, DEFAULT_RESERVED_PERCENT);
         burningController.setBaseCurrency(PROJECT_B, 1);
@@ -294,6 +374,65 @@ contract FeeProjectSelfBurnPoC is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.claimFeeTokensFor(PROJECT_B, owner);
         assertEq(feeProjectToken.balanceOf(owner), claimableB, "project B owner should receive claimed fee tokens");
+    }
+
+    /// @notice When a project uses the fee project's ERC-20 as its terminal token, `_handleLeftoverTokens`
+    ///         must still exclude `_totalOutstandingFeeTokenClaims` from the terminal token sweep so that
+    ///         project A's reserved fee-token claims are not consumed by project B.
+    function test_TerminalTokenLeftoverSweepPreservesOutstandingFeeClaims() public {
+        _accumulateAndDeploy(PROJECT_ID, 100e18);
+
+        uint256 tokenIdA = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        bool terminalIsToken0 = address(terminalToken) < address(projectToken);
+        uint256 feeAmount = 100e18;
+
+        if (terminalIsToken0) {
+            positionManager.setCollectableFees(tokenIdA, feeAmount, 0);
+        } else {
+            positionManager.setCollectableFees(tokenIdA, 0, feeAmount);
+        }
+        terminalToken.mint(address(positionManager), feeAmount);
+        hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
+
+        uint256 claimableA = hook.claimableFeeTokens(PROJECT_ID);
+        assertGt(claimableA, 0, "precondition: project A should have claimable fee tokens");
+        assertEq(
+            feeProjectToken.balanceOf(address(hook)),
+            claimableA,
+            "precondition: hook should custody project A fee claims"
+        );
+
+        burningController.setWeight(PROJECT_B, DEFAULT_WEIGHT);
+        burningController.setReservedPercent(PROJECT_B, DEFAULT_RESERVED_PERCENT);
+        burningController.setBaseCurrency(PROJECT_B, uint32(uint160(address(feeProjectToken))));
+        burningController.setToken(PROJECT_B, address(projectToken));
+        _setDirectoryController(PROJECT_B, address(burningController));
+        _setDirectoryTerminal(PROJECT_B, address(feeProjectToken), address(drainingTerminal));
+        jbProjects.setOwner(PROJECT_B, owner);
+        jbTokens.setToken(PROJECT_B, address(projectToken));
+        drainingTerminal.setProjectToken(PROJECT_B, address(projectToken));
+        drainingTerminal.setAccountingContext(
+            PROJECT_B, address(feeProjectToken), uint32(uint160(address(feeProjectToken))), 18
+        );
+        store.setSurplus(PROJECT_B, 0.5e18);
+
+        _accumulateTokensFor(PROJECT_B, projectToken, 100e18);
+
+        vm.prank(owner);
+        hook.deployPool(PROJECT_B, address(feeProjectToken), 0);
+
+        // Hook must still fully back project A's claimable fee tokens.
+        assertGe(
+            feeProjectToken.balanceOf(address(hook)),
+            claimableA,
+            "hook must still fully back project A's claimable fee tokens"
+        );
+        assertEq(hook.claimableFeeTokens(PROJECT_ID), claimableA, "project A claimable accounting unchanged");
+
+        // Project A can still claim its fee tokens.
+        vm.prank(owner);
+        hook.claimFeeTokensFor(PROJECT_ID, user);
+        assertEq(feeProjectToken.balanceOf(user), claimableA, "project A owner receives claimed fee tokens");
     }
 
     /// @notice _burnReceivedTokens must only burn project tokens that are NOT reserved

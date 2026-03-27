@@ -1249,9 +1249,15 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         return IERC20(terminalToken).balanceOf(address(this));
     }
 
-    /// @notice Handle leftover tokens after V4 mint operation
+    /// @notice Handle leftover tokens after V4 mint operation.
+    /// @dev Both sweeps subtract `_totalOutstandingFeeTokenClaims` for their respective token address. This is
+    /// necessary because any token address may have outstanding fee claims — a project could use the fee project's
+    /// ERC-20 as its terminal token, making the terminal token and the fee token the same address.
+    /// @param projectId The ID of the project whose leftover tokens to handle.
+    /// @param projectToken The project's ERC-20 token address.
+    /// @param terminalToken The terminal token address (ETH/USDC/etc).
     function _handleLeftoverTokens(uint256 projectId, address projectToken, address terminalToken) internal {
-        // Burn any remaining project tokens, excluding tokens reserved for outstanding fee claims
+        // Burn any remaining project tokens, excluding tokens reserved for outstanding fee claims.
         uint256 projectTokenLeftover =
             IERC20(projectToken).balanceOf(address(this)) - _totalOutstandingFeeTokenClaims[projectToken];
         if (projectTokenLeftover > 0) {
@@ -1263,8 +1269,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             });
         }
 
-        // Add any remaining terminal tokens to project balance
-        uint256 terminalTokenLeftover = _getTerminalTokenBalance(terminalToken);
+        // Add any remaining terminal tokens to project balance, excluding outstanding fee claims.
+        uint256 terminalTokenLeftover =
+            _getTerminalTokenBalance(terminalToken) - _totalOutstandingFeeTokenClaims[terminalToken];
         if (terminalTokenLeftover > 0) {
             _addToProjectBalance({
                 projectId: projectId,
