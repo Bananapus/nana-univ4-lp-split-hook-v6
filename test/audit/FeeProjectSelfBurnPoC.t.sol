@@ -376,10 +376,10 @@ contract FeeProjectSelfBurnPoC is LPSplitHookV4TestBase {
         assertEq(feeProjectToken.balanceOf(owner), claimableB, "project B owner should receive claimed fee tokens");
     }
 
-    /// @notice If a later deployment uses the fee project token as its terminal token, `_handleLeftoverTokens`
-    ///         sweeps all leftover terminal tokens without excluding `_totalOutstandingFeeTokenClaims`.
-    ///         This lets project B consume project A's reserved fee-token claims.
-    function test_TerminalTokenLeftoverSweepStealsOutstandingFeeClaims() public {
+    /// @notice When a project uses the fee project's ERC-20 as its terminal token, `_handleLeftoverTokens`
+    ///         must still exclude `_totalOutstandingFeeTokenClaims` from the terminal token sweep so that
+    ///         project A's reserved fee-token claims are not consumed by project B.
+    function test_TerminalTokenLeftoverSweepPreservesOutstandingFeeClaims() public {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
 
         uint256 tokenIdA = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
@@ -421,30 +421,22 @@ contract FeeProjectSelfBurnPoC is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_B, address(feeProjectToken), 0);
 
-        assertEq(
-            drainingTerminal.lastAddedToken(),
-            address(feeProjectToken),
-            "leftover sweep should route the fee token as terminal-token dust"
-        );
+        // Hook must still fully back project A's claimable fee tokens.
         assertGe(
-            drainingTerminal.lastAddedAmount(),
-            claimableA,
-            "project B should receive at least project A's reserved fee-token balance"
-        );
-        assertLt(
             feeProjectToken.balanceOf(address(hook)),
             claimableA,
-            "hook no longer fully backs project A's claimable fee tokens"
+            "hook must still fully back project A's claimable fee tokens"
         );
         assertEq(
             hook.claimableFeeTokens(PROJECT_ID),
             claimableA,
-            "claimable accounting stays stale even after the backing tokens are moved out"
+            "project A claimable accounting unchanged"
         );
 
+        // Project A can still claim its fee tokens.
         vm.prank(owner);
-        vm.expectRevert();
         hook.claimFeeTokensFor(PROJECT_ID, user);
+        assertEq(feeProjectToken.balanceOf(user), claimableA, "project A owner receives claimed fee tokens");
     }
 
     /// @notice _burnReceivedTokens must only burn project tokens that are NOT reserved

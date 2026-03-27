@@ -1250,10 +1250,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     }
 
     /// @notice Handle leftover tokens after V4 mint operation.
-    /// @dev Terminal token sweep does NOT subtract `_totalOutstandingFeeTokenClaims` because fee tokens are project
-    /// tokens (e.g. JBX), not terminal tokens (e.g. ETH/USDC). When `_routeFeesToProject()` pays into the fee
-    /// project, it spends terminal tokens and receives back the fee project's ERC-20 — only that ERC-20 is tracked
-    /// in `_totalOutstandingFeeTokenClaims`. The project-token balance read above already accounts for claims.
+    /// @dev Both sweeps subtract `_totalOutstandingFeeTokenClaims` for their respective token address. This is
+    /// necessary because any token address may have outstanding fee claims — a project could use the fee project's
+    /// ERC-20 as its terminal token, making the terminal token and the fee token the same address.
     /// @param projectId The ID of the project whose leftover tokens to handle.
     /// @param projectToken The project's ERC-20 token address.
     /// @param terminalToken The terminal token address (ETH/USDC/etc).
@@ -1270,10 +1269,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             });
         }
 
-        // Terminal tokens are safe to sweep entirely — _totalOutstandingFeeTokenClaims tracks only project tokens
-        // (fee project ERC-20), not terminal tokens. Terminal tokens were already spent when paying into the fee
-        // project; only the fee project's ERC-20 is received back and tracked in the claims mapping.
-        uint256 terminalTokenLeftover = _getTerminalTokenBalance(terminalToken);
+        // Add any remaining terminal tokens to project balance, excluding outstanding fee claims.
+        uint256 terminalTokenLeftover =
+            _getTerminalTokenBalance(terminalToken) - _totalOutstandingFeeTokenClaims[terminalToken];
         if (terminalTokenLeftover > 0) {
             _addToProjectBalance({
                 projectId: projectId,
