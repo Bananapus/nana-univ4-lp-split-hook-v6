@@ -427,11 +427,7 @@ contract FeeProjectSelfBurnPoC is LPSplitHookV4TestBase {
             claimableA,
             "hook must still fully back project A's claimable fee tokens"
         );
-        assertEq(
-            hook.claimableFeeTokens(PROJECT_ID),
-            claimableA,
-            "project A claimable accounting unchanged"
-        );
+        assertEq(hook.claimableFeeTokens(PROJECT_ID), claimableA, "project A claimable accounting unchanged");
 
         // Project A can still claim its fee tokens.
         vm.prank(owner);
