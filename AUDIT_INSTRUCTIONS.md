@@ -1,6 +1,6 @@
 # Audit Instructions -- univ4-lp-split-hook-v6
 
-You are auditing a Uniswap V4 LP management hook for Juicebox V6 projects. The hook accumulates project tokens received through reserved token splits, then deploys a V4 liquidity position pairing those project tokens with the project's terminal token (ETH, USDC, etc.). After deployment, it collects LP fees and routes them back to the project with a configurable fee split. Read [RISKS.md](./RISKS.md) first -- it documents all known risks, Nemesis audit findings, and trust assumptions. Then come back here.
+You are auditing a Uniswap V4 LP management hook for Juicebox V6 projects. The hook accumulates project tokens received through reserved token splits, then deploys a V4 liquidity position pairing those project tokens with the project's terminal token (ETH, USDC, etc.). After deployment, it collects LP fees and routes them back to the project with a configurable fee split. Read [RISKS.md](./RISKS.md) first -- it documents all known risks and trust assumptions. Then come back here.
 
 ## Scope
 
@@ -172,7 +172,7 @@ Verify that the burn-before-route ordering prevents all reentrancy paths. Pay sp
 
 ### 5. Clone Initialization
 
-- The implementation contract can be initialized by anyone (NM-004, acknowledged). Verify this truly has no impact.
+- The implementation contract can be initialized by anyone (acknowledged). Verify this truly has no impact.
 - After `initialize()`, `FEE_PROJECT_ID` and `FEE_PERCENT` are immutable. Verify there is no path to re-initialize.
 - What happens if `initialize()` is called with `feePercent = 0` and `feeProjectId = 0`? All fees go to the original project.
 
@@ -224,14 +224,14 @@ Test base: `TestBaseV4.sol` provides a complete mock environment with V4 PoolMan
 
 ## Previous Audit Findings
 
-Nemesis Security conducted an audit with the following findings relevant to this contract:
+An automated audit was conducted with the following findings relevant to this contract:
 
-| ID | Severity | Status | Description |
-|----|----------|--------|-------------|
-| NM-004 | Low | Acknowledged | Implementation contract can be `initialize()`d by anyone. No practical impact since clones have separate storage. |
-| H-2 | High | Fixed | Permissionless `rebalanceLiquidity` could permanently brick a project's LP position by allowing an attacker to trigger rebalance at a manipulated price, resulting in zero liquidity and `tokenIdOf = 0`. Fix: gated behind `SET_BUYBACK_POOL` permission; added `InsufficientLiquidity` revert guard. |
-| M-1 | Medium | Fixed | Placeholder `_getAmountForCurrency()` disabled fee routing during `rebalanceLiquidity` burn step. Fees collected during rebalance were not routed to the fee project. Fix: replaced with balance-delta tracking (same pattern as `collectAndRouteLPFees`). |
-| M-2 | Medium | Fixed | `projectDeployed` was a per-project boolean, not per-terminal-token. After deploying a pool for one terminal token, `processSplitWith` would burn tokens for ALL terminal tokens instead of only the deployed one. Fix: replaced with `deployedPoolCount` keyed by `projectId` and `tokenIdOf` keyed by `[projectId][terminalToken]`. |
+| Severity | Status | Description |
+|----------|--------|-------------|
+| Low | Acknowledged | Implementation contract can be `initialize()`d by anyone. No practical impact since clones have separate storage. |
+| High | Fixed | Permissionless `rebalanceLiquidity` could permanently brick a project's LP position by allowing an attacker to trigger rebalance at a manipulated price, resulting in zero liquidity and `tokenIdOf = 0`. Fix: gated behind `SET_BUYBACK_POOL` permission; added `InsufficientLiquidity` revert guard. |
+| Medium | Fixed | Placeholder `_getAmountForCurrency()` disabled fee routing during `rebalanceLiquidity` burn step. Fees collected during rebalance were not routed to the fee project. Fix: replaced with balance-delta tracking (same pattern as `collectAndRouteLPFees`). |
+| Medium | Fixed | `projectDeployed` was a per-project boolean, not per-terminal-token. After deploying a pool for one terminal token, `processSplitWith` would burn tokens for ALL terminal tokens instead of only the deployed one. Fix: replaced with `deployedPoolCount` keyed by `projectId` and `tokenIdOf` keyed by `[projectId][terminalToken]`. |
 
 Regression tests for these findings are in `test/SplitHookRegressions.t.sol`. See [RISKS.md](./RISKS.md) for full risk analysis including accepted behaviors.
 
@@ -243,7 +243,7 @@ Regression tests for these findings are in `test/SplitHookRegressions.t.sol`. Se
 | Balance-delta accounting | `collectAndRouteLPFees`, `deployPool` | Token amounts determined by before/after balance checks. Fee-on-transfer tokens or reentrant callbacks could skew deltas. |
 | Full position burn in rebalance | `rebalanceLiquidity` | Burns entire position and remints. Between burn and mint, raw tokens are held. MEV sandwich opportunity. |
 | `terminal.pay()` in fee routing | `_routeFeesToProject` | `terminal.pay()` triggers pay hooks. A pay hook could re-enter this contract via `processSplitWith` if this hook is in the reserved token splits. |
-| Clone initialization | `JBUniswapV4LPSplitHookDeployer` | Implementation contract can be initialized by anyone (NM-004). Verify this is truly harmless. |
+| Clone initialization | `JBUniswapV4LPSplitHookDeployer` | Implementation contract can be initialized by anyone. Verify this is truly harmless. |
 | `controller.burnTokensOf()` revert | `processSplitWith`, `_handleLeftoverTokens` | If burn reverts (e.g., insufficient balance due to timing), the entire operation fails. No try-catch wrapper. |
 | Permit2 deadline | `_mintPosition` | `_DEADLINE_SECONDS = 60`. If the transaction takes longer than 60 seconds, the Permit2 approval expires and the entire operation reverts. |
 | Hardcoded slippage | `_CASH_OUT_SLIPPAGE_NUMERATOR/DENOMINATOR = 97/100` | 3% slippage on cashout. During high volatility, this may be too tight (causing reverts) or too loose (allowing MEV). |

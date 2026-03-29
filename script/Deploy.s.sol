@@ -35,7 +35,7 @@ contract DeployScript is Script, Sphinx {
     bytes32 hookSalt = "JBUniswapV4LPSplitHookV6";
     bytes32 deployerSalt = "JBUniswapV4LPSplitHookDeployerV6";
 
-    /// @notice Uniswap V4 addresses (same on all chains)
+    /// @notice Uniswap V4 addresses (per-chain)
     IPoolManager poolManager;
     IPositionManager positionManager;
 
@@ -66,9 +66,9 @@ contract DeployScript is Script, Sphinx {
             )
         );
 
-        // Uniswap V4 PoolManager — canonical CREATE2 address, same on all chains.
+        // Uniswap V4 PoolManager — per-chain addresses.
         // Verify at https://docs.uniswap.org/contracts/v4/deployments
-        poolManager = IPoolManager(0x000000000004444c5dc75cB358380D2e3dE08A90);
+        poolManager = _getPoolManager();
 
         // Uniswap V4 PositionManager — per-chain addresses
         if (block.chainid == 1) {
@@ -143,6 +143,18 @@ contract DeployScript is Script, Sphinx {
             )) {
             new JBUniswapV4LPSplitHookDeployer{salt: deployerSalt}(hookImpl, registry.registry);
         }
+    }
+
+    /// @dev Returns the Uniswap V4 PoolManager address for the current chain.
+    function _getPoolManager() internal view returns (IPoolManager) {
+        if (block.chainid == 1) return IPoolManager(0x000000000004444c5dc75cB358380D2e3dE08A90); // Mainnet
+        if (block.chainid == 10) return IPoolManager(0x9a13F98Cb987694C9F086b1F5eB990EeA8264Ec3); // Optimism
+        if (block.chainid == 8453) return IPoolManager(0x498581fF718922c3f8e6A244956aF099B2652b2b); // Base
+        if (block.chainid == 42_161) return IPoolManager(0x360E68faCcca8cA495c1B759Fd9EEe466db9FB32); // Arbitrum
+        if (block.chainid == 11_155_111) return IPoolManager(0xE03A1074c86CFeDd5C142C4F04F1a1536e203543); // Sepolia
+        if (block.chainid == 84_532) return IPoolManager(0x05E73354cFDd6745C338b50BcFDfA3Aa6fA03408); // Base Sepolia
+        if (block.chainid == 421_614) return IPoolManager(0xFB3e0C6F74eB1a21CC1Da29aeC80D2Dfe6C9a317); // Arb Sepolia
+        revert("Unsupported chain");
     }
 
     /// @dev Uses the deterministic CREATE2 deployer (0x4e59b44847b379578588920cA78FbF26c0B4956C).

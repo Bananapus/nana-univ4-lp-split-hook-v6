@@ -1490,14 +1490,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             // If no fee terminal is set, fee tokens are stranded in the contract. This is accepted
             // behavior — the fee project owner can set a terminal later and trigger fee collection.
             if (feeTerminal != address(0)) {
-                // Track fee tokens only if the fee project has an ERC20 deployed.
-                // If tokenOf returns address(0), the fee project uses internal credits only —
-                // the terminal payment still routes value via credits, but we skip balance tracking
-                // to avoid reverting on IERC20(address(0)).balanceOf().
-                address feeProjectToken = address(IJBTokens(TOKENS).tokenOf(FEE_PROJECT_ID));
-                uint256 feeTokensBefore =
-                    feeProjectToken != address(0) ? IERC20(feeProjectToken).balanceOf(address(this)) : 0;
-
                 // Fee terminal revert blocks fee collection — accepted since the fee project is
                 // protocol-controlled and expected to maintain a functioning terminal.
                 // minReturnedTokens is 0 by design: slippage protection is the fee project's
@@ -1506,8 +1498,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 // mulDiv rounding yields 0 tokens, and any non-trivial floor would require
                 // an oracle dependency that doesn't belong in the LP split hook.
                 // See RISKS.md §8.1.
+                //
+                // Use the return value from pay() directly instead of balance deltas.
+                // Balance deltas are unreliable when the terminal token IS the fee project token,
+                // because the pay() call itself changes the token balance of this contract.
                 if (_isNativeToken(terminalToken)) {
-                    IJBMultiTerminal(feeTerminal).pay{value: feeAmount}({
+                    beneficiaryTokenCount = IJBMultiTerminal(feeTerminal).pay{value: feeAmount}({
                         projectId: FEE_PROJECT_ID,
                         token: terminalToken,
                         amount: feeAmount,
@@ -1518,7 +1514,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                     });
                 } else {
                     IERC20(terminalToken).forceApprove({spender: feeTerminal, value: feeAmount});
-                    IJBMultiTerminal(feeTerminal)
+                    beneficiaryTokenCount = IJBMultiTerminal(feeTerminal)
                         .pay({
                             projectId: FEE_PROJECT_ID,
                             token: terminalToken,
@@ -1530,15 +1526,19 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                         });
                 }
 
-                if (feeProjectToken != address(0)) {
-                    uint256 feeTokensAfter = IERC20(feeProjectToken).balanceOf(address(this));
-                    beneficiaryTokenCount = feeTokensAfter > feeTokensBefore ? feeTokensAfter - feeTokensBefore : 0;
+                // Track fee tokens only if the fee project has an ERC20 deployed.
+                // If tokenOf returns address(0), the fee project uses internal credits only —
+                // the terminal payment still routes value via credits, but we skip claim tracking
+                // since there are no ERC20 tokens to claim.
+                if (beneficiaryTokenCount > 0) {
+                    address feeProjectToken = address(IJBTokens(TOKENS).tokenOf(FEE_PROJECT_ID));
+                    if (feeProjectToken != address(0)) {
+                        claimableFeeTokens[projectId] += beneficiaryTokenCount;
 
-                    claimableFeeTokens[projectId] += beneficiaryTokenCount;
-
-                    // Track the total fee tokens held across all projects so that _burnReceivedTokens
-                    // and _handleLeftoverTokens can exclude them from burnable balances.
-                    _totalOutstandingFeeTokenClaims[feeProjectToken] += beneficiaryTokenCount;
+                        // Track the total fee tokens held across all projects so that _burnReceivedTokens
+                        // and _handleLeftoverTokens can exclude them from burnable balances.
+                        _totalOutstandingFeeTokenClaims[feeProjectToken] += beneficiaryTokenCount;
+                    }
                 }
             }
         }

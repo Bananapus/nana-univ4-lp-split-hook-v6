@@ -136,7 +136,7 @@ Configured in `script/Deploy.s.sol` via Sphinx:
 | Base Sepolia | 84532 | `0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e` |
 | Arbitrum Sepolia | 421614 | `0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e` |
 
-The Uniswap V4 PoolManager (`0x000000000004444c5dc75cB358380D2e3dE08A90`) and Permit2 (`0x000000000022D473030F116dDEE9F6B43aC78BA3`) addresses are the same on all chains.
+The Permit2 address (`0x000000000022D473030F116dDEE9F6B43aC78BA3`) is the same on all chains. The Uniswap V4 PoolManager address varies per chain -- the deploy script uses `_getPoolManager()` to select the correct address for the target chain.
 
 ## Install
 
