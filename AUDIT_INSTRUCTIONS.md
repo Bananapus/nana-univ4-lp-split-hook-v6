@@ -109,8 +109,11 @@ Reverts with `InsufficientLiquidity` if new position would have zero liquidity (
 
 `claimFeeTokensFor(projectId, beneficiary)` -- requires `SET_BUYBACK_POOL`.
 
-- Reads and zeroes `claimableFeeTokens[projectId]` before transfer (CEI pattern)
-- Transfers fee project ERC-20 tokens to beneficiary
+- Drains both `claimableFeeTokens[projectId]` (ERC-20) and `claimableFeeCredits[projectId]` (credits) in a single call
+- ERC-20 path: reads and zeroes before transfer (CEI pattern), transfers via `safeTransfer`
+- Credit path: reads and zeroes before transfer, calls `controller.transferCreditsFrom` to move credits to beneficiary
+- Credits accumulate when the fee project has no ERC-20 deployed (`tokenOf(FEE_PROJECT_ID) == address(0)`)
+- Caveat: if the fee project's ruleset has `pauseCreditTransfers` enabled, the credit claim reverts
 
 ## Key Constants
 
@@ -140,7 +143,7 @@ External call sites:
 - `deployPool`: calls `terminal.cashOutTokensOf()`, `POSITION_MANAGER.modifyLiquidities()`, `terminal.addToBalanceOf()`, `controller.burnTokensOf()`
 - `collectAndRouteLPFees`: calls `POSITION_MANAGER.modifyLiquidities()`, `controller.burnTokensOf()`, `terminal.pay()`, `terminal.addToBalanceOf()`
 - `rebalanceLiquidity`: all of the above plus `BURN_POSITION` and re-`MINT_POSITION`
-- `claimFeeTokensFor`: calls `IERC20.safeTransfer()`
+- `claimFeeTokensFor`: calls `IERC20.safeTransfer()` (ERC-20 path) and `controller.transferCreditsFrom()` (credit path)
 
 Verify that the burn-before-route ordering prevents all reentrancy paths. Pay special attention to:
 - Can `terminal.pay()` (in fee routing) re-enter through a pay hook that calls back into this contract? (burn already completed — should find 0 balance)
@@ -196,7 +199,7 @@ After 10x weight decay (`ruleset.weight * 10 <= initialWeightOf`), anyone can ca
 2. **Fee split correctness**: `feeAmount + remainingAmount == totalFees` for every fee routing operation.
 3. **Position integrity**: `tokenIdOf[projectId][terminalToken] != 0` if and only if an active LP position exists for that pair.
 4. **One pool per pair**: `deployPool()` reverts if `tokenIdOf != 0`. No duplicate positions.
-5. **Fee token accounting**: `claimableFeeTokens[projectId]` accurately reflects the fee project tokens held by the contract for that project.
+5. **Fee token accounting**: `claimableFeeTokens[projectId]` accurately reflects the fee project ERC-20 tokens held by the contract for that project. `claimableFeeCredits[projectId]` accurately reflects the fee project credits held by the hook.
 6. **Accumulation isolation**: `accumulatedProjectTokens[projectA]` is never affected by operations on project B.
 
 ## Testing Setup

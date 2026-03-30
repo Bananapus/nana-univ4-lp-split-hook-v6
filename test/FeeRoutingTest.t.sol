@@ -348,4 +348,126 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
             "Fee routing uses minReturnedTokens = 0: slippage is fee project's responsibility"
         );
     }
+
+    // -----------------------------------------------------------------------
+    // 15. Credit path: fees tracked as claimableFeeCredits when no ERC-20
+    // -----------------------------------------------------------------------
+
+    /// @notice When the fee project has no ERC-20 deployed, fee tokens are tracked as credits
+    /// and claimed via controller.transferCreditsFrom.
+    function test_ClaimFeeTokens_CreditsPath() public {
+        // Remove the fee project's ERC-20 so tokenOf(FEE_PROJECT_ID) returns address(0).
+        jbTokens.setToken(FEE_PROJECT_ID, address(0));
+        // Also remove from mock terminal so it doesn't mint ERC-20 (simulates credit-only).
+        terminal.setProjectToken(FEE_PROJECT_ID, address(0));
+
+        // Collect fees — should route to claimableFeeCredits, not claimableFeeTokens.
+        uint256 feeAmount = 1000e18;
+        _setTerminalTokenFees(feeAmount);
+        hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
+
+        uint256 expectedFeePayment = (feeAmount * FEE_PERCENT) / 10_000; // 380e18
+
+        // Credits should be tracked, not ERC-20 claims.
+        assertEq(
+            hook.claimableFeeCredits(PROJECT_ID),
+            expectedFeePayment,
+            "claimableFeeCredits should equal fee tokens minted as credits"
+        );
+        assertEq(hook.claimableFeeTokens(PROJECT_ID), 0, "claimableFeeTokens should remain zero for credit path");
+
+        // Claim — should call controller.transferCreditsFrom.
+        permissions.setPermission(user, owner, PROJECT_ID, JBPermissionIds.SET_BUYBACK_POOL, true);
+        vm.prank(user);
+        hook.claimFeeTokensFor(PROJECT_ID, user);
+
+        // Verify transferCreditsFrom was called with correct params.
+        assertEq(controller.transferCreditsCallCount(), 1, "transferCreditsFrom should be called once");
+        assertEq(controller.lastTransferCreditsHolder(), address(hook), "Holder should be the hook");
+        assertEq(controller.lastTransferCreditsProjectId(), FEE_PROJECT_ID, "Should transfer credits for fee project");
+        assertEq(controller.lastTransferCreditsRecipient(), user, "Recipient should be the beneficiary");
+        assertEq(controller.lastTransferCreditsCreditCount(), expectedFeePayment, "Credit count should match");
+
+        // Credits should be zeroed after claim.
+        assertEq(hook.claimableFeeCredits(PROJECT_ID), 0, "claimableFeeCredits should be zero after claim");
+    }
+
+    // -----------------------------------------------------------------------
+    // 16. Credits do NOT increment _totalOutstandingFeeTokenClaims
+    // -----------------------------------------------------------------------
+
+    /// @notice When fee tokens are credits (no ERC-20), _totalOutstandingFeeTokenClaims should NOT increase.
+    /// Credits live in JBTokens storage, not in balanceOf(this), so they don't need balance segregation.
+    function test_ClaimFeeTokens_CreditsNotInTotalOutstandingClaims() public {
+        // Remove the fee project's ERC-20.
+        jbTokens.setToken(FEE_PROJECT_ID, address(0));
+        terminal.setProjectToken(FEE_PROJECT_ID, address(0));
+
+        // Record the hook's fee project token balance before (should be 0 since no ERC-20).
+        uint256 hookBalanceBefore = feeProjectToken.balanceOf(address(hook));
+
+        // Collect fees.
+        uint256 feeAmount = 1000e18;
+        _setTerminalTokenFees(feeAmount);
+        hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
+
+        // The hook's ERC-20 balance should not have changed (no ERC-20 minted).
+        uint256 hookBalanceAfter = feeProjectToken.balanceOf(address(hook));
+        assertEq(hookBalanceAfter, hookBalanceBefore, "Hook ERC-20 balance should not change for credit path");
+
+        // claimableFeeCredits should be nonzero, claimableFeeTokens should be zero.
+        assertGt(hook.claimableFeeCredits(PROJECT_ID), 0, "Credits should be tracked");
+        assertEq(hook.claimableFeeTokens(PROJECT_ID), 0, "ERC-20 claims should not be tracked");
+    }
+
+    // -----------------------------------------------------------------------
+    // 17. Transition: credits accumulated before ERC-20, then ERC-20 after
+    // -----------------------------------------------------------------------
+
+    /// @notice Accumulate credits while no ERC-20, then set tokenOf to an ERC-20 and accumulate more.
+    /// Claim should transfer both: credits via controller, ERC-20 via safeTransfer.
+    function test_ClaimFeeTokens_TransitionFromCreditsToERC20() public {
+        // Phase 1: No ERC-20 — accumulate credits.
+        jbTokens.setToken(FEE_PROJECT_ID, address(0));
+        terminal.setProjectToken(FEE_PROJECT_ID, address(0));
+
+        uint256 feeAmount1 = 1000e18;
+        _setTerminalTokenFees(feeAmount1);
+        hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
+
+        uint256 expectedCredits = (feeAmount1 * FEE_PERCENT) / 10_000; // 380e18
+        assertEq(hook.claimableFeeCredits(PROJECT_ID), expectedCredits, "Phase 1: credits should be tracked");
+        assertEq(hook.claimableFeeTokens(PROJECT_ID), 0, "Phase 1: no ERC-20 claims");
+
+        // Phase 2: Deploy ERC-20 for fee project — accumulate ERC-20 tokens.
+        jbTokens.setToken(FEE_PROJECT_ID, address(feeProjectToken));
+        terminal.setProjectToken(FEE_PROJECT_ID, address(feeProjectToken));
+
+        uint256 feeAmount2 = 500e18;
+        _setTerminalTokenFees(feeAmount2);
+        hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
+
+        uint256 expectedTokens = (feeAmount2 * FEE_PERCENT) / 10_000; // 190e18
+        assertEq(hook.claimableFeeCredits(PROJECT_ID), expectedCredits, "Phase 2: credits unchanged");
+        assertEq(hook.claimableFeeTokens(PROJECT_ID), expectedTokens, "Phase 2: ERC-20 claims tracked");
+
+        // Claim both in one call.
+        permissions.setPermission(user, owner, PROJECT_ID, JBPermissionIds.SET_BUYBACK_POOL, true);
+        uint256 userBalanceBefore = feeProjectToken.balanceOf(user);
+
+        vm.prank(user);
+        hook.claimFeeTokensFor(PROJECT_ID, user);
+
+        // ERC-20 transfer should have happened.
+        uint256 userBalanceAfter = feeProjectToken.balanceOf(user);
+        assertEq(userBalanceAfter - userBalanceBefore, expectedTokens, "User should receive ERC-20 tokens");
+
+        // Credit transfer should have happened.
+        assertEq(controller.transferCreditsCallCount(), 1, "transferCreditsFrom should be called");
+        assertEq(controller.lastTransferCreditsCreditCount(), expectedCredits, "Credit count should match phase 1");
+
+        // Both mappings should be zeroed.
+        assertEq(hook.claimableFeeTokens(PROJECT_ID), 0, "ERC-20 claims should be zero after claim");
+        assertEq(hook.claimableFeeCredits(PROJECT_ID), 0, "Credits should be zero after claim");
+    }
 }
