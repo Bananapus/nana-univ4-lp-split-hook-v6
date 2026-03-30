@@ -63,7 +63,7 @@ contract DrainingAddToBalanceTerminal {
         lastAddedToken = token;
 
         if (token != address(0x000000000000000000000000000000000000EEEe) && amount > 0) {
-            IERC20(token).transferFrom(msg.sender, address(this), amount);
+            require(IERC20(token).transferFrom(msg.sender, address(this), amount), "transferFrom failed");
         }
     }
 

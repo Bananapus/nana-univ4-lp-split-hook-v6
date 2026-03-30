@@ -169,6 +169,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @notice ProjectID => Fee tokens claimable by that project
     mapping(uint256 projectId => uint256 claimableFeeTokens) public claimableFeeTokens;
 
+    /// @notice ProjectID => Fee token credits (not ERC-20) claimable by that project.
+    /// @dev Accumulated when terminal.pay() mints credits (fee project has no ERC-20 deployed).
+    /// Claimed via controller.transferCreditsFrom().
+    mapping(uint256 projectId => uint256 claimableFeeCredits) public claimableFeeCredits;
+
     /// @notice ProjectID => The weight of the ruleset when the hook first started accumulating tokens.
     mapping(uint256 projectId => uint256 weight) public initialWeightOf;
 
@@ -541,6 +546,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Claim fee tokens for a beneficiary.
     /// @dev Requires SET_BUYBACK_POOL permission from the project owner.
+    /// @dev Claims both ERC-20 fee tokens (via safeTransfer) and credit-based fee tokens
+    /// (via controller.transferCreditsFrom). Credits accumulate when the fee project has no ERC-20 deployed.
     function claimFeeTokensFor(uint256 projectId, address beneficiary) external {
         _requirePermissionFrom({
             account: IJBDirectory(DIRECTORY).PROJECTS().ownerOf(projectId),
@@ -548,20 +555,35 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             permissionId: JBPermissionIds.SET_BUYBACK_POOL
         });
 
-        uint256 claimableAmount = claimableFeeTokens[projectId];
-        claimableFeeTokens[projectId] = 0;
+        // Claim ERC-20 fee tokens (if any).
+        uint256 tokenAmount = claimableFeeTokens[projectId];
+        if (tokenAmount > 0) {
+            claimableFeeTokens[projectId] = 0;
 
-        if (claimableAmount > 0) {
             // Look up the fee project's ERC-20 token (e.g. JBX for project ID 1).
             address feeProjectToken = address(IJBTokens(TOKENS).tokenOf(FEE_PROJECT_ID));
 
             // Release these tokens from the segregated fee-token reserve.
-            _totalOutstandingFeeTokenClaims[feeProjectToken] -= claimableAmount;
+            _totalOutstandingFeeTokenClaims[feeProjectToken] -= tokenAmount;
 
             // Transfer the claimed fee tokens to the beneficiary.
-            IERC20(feeProjectToken).safeTransfer({to: beneficiary, value: claimableAmount});
+            IERC20(feeProjectToken).safeTransfer({to: beneficiary, value: tokenAmount});
+        }
 
-            emit FeeTokensClaimed(projectId, beneficiary, claimableAmount);
+        // Claim credit-based fee tokens (if any).
+        uint256 creditAmount = claimableFeeCredits[projectId];
+        if (creditAmount > 0) {
+            claimableFeeCredits[projectId] = 0;
+
+            // Transfer credits via the fee project's current controller.
+            IJBController controller = IJBController(address(IJBDirectory(DIRECTORY).controllerOf(FEE_PROJECT_ID)));
+            controller.transferCreditsFrom({
+                holder: address(this), projectId: FEE_PROJECT_ID, recipient: beneficiary, creditCount: creditAmount
+            });
+        }
+
+        if (tokenAmount > 0 || creditAmount > 0) {
+            emit FeeTokensClaimed(projectId, beneficiary, tokenAmount + creditAmount);
         }
     }
 
@@ -1490,14 +1512,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             // If no fee terminal is set, fee tokens are stranded in the contract. This is accepted
             // behavior — the fee project owner can set a terminal later and trigger fee collection.
             if (feeTerminal != address(0)) {
-                // Track fee tokens only if the fee project has an ERC20 deployed.
-                // If tokenOf returns address(0), the fee project uses internal credits only —
-                // the terminal payment still routes value via credits, but we skip balance tracking
-                // to avoid reverting on IERC20(address(0)).balanceOf().
-                address feeProjectToken = address(IJBTokens(TOKENS).tokenOf(FEE_PROJECT_ID));
-                uint256 feeTokensBefore =
-                    feeProjectToken != address(0) ? IERC20(feeProjectToken).balanceOf(address(this)) : 0;
-
                 // Fee terminal revert blocks fee collection — accepted since the fee project is
                 // protocol-controlled and expected to maintain a functioning terminal.
                 // minReturnedTokens is 0 by design: slippage protection is the fee project's
@@ -1506,8 +1520,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 // mulDiv rounding yields 0 tokens, and any non-trivial floor would require
                 // an oracle dependency that doesn't belong in the LP split hook.
                 // See RISKS.md §8.1.
+                //
+                // Use the return value from pay() directly instead of balance deltas.
+                // Balance deltas are unreliable when the terminal token IS the fee project token,
+                // because the pay() call itself changes the token balance of this contract.
                 if (_isNativeToken(terminalToken)) {
-                    IJBMultiTerminal(feeTerminal).pay{value: feeAmount}({
+                    beneficiaryTokenCount = IJBMultiTerminal(feeTerminal).pay{value: feeAmount}({
                         projectId: FEE_PROJECT_ID,
                         token: terminalToken,
                         amount: feeAmount,
@@ -1518,7 +1536,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                     });
                 } else {
                     IERC20(terminalToken).forceApprove({spender: feeTerminal, value: feeAmount});
-                    IJBMultiTerminal(feeTerminal)
+                    beneficiaryTokenCount = IJBMultiTerminal(feeTerminal)
                         .pay({
                             projectId: FEE_PROJECT_ID,
                             token: terminalToken,
@@ -1530,15 +1548,22 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                         });
                 }
 
-                if (feeProjectToken != address(0)) {
-                    uint256 feeTokensAfter = IERC20(feeProjectToken).balanceOf(address(this));
-                    beneficiaryTokenCount = feeTokensAfter > feeTokensBefore ? feeTokensAfter - feeTokensBefore : 0;
+                // Track fee tokens for later claiming. Route to the correct tracker based on
+                // whether the fee project has an ERC-20 deployed (claimable via safeTransfer)
+                // or uses internal credits only (claimable via controller.transferCreditsFrom).
+                if (beneficiaryTokenCount > 0) {
+                    address feeProjectToken = address(IJBTokens(TOKENS).tokenOf(FEE_PROJECT_ID));
+                    if (feeProjectToken != address(0)) {
+                        // ERC-20 exists: track as claimable ERC-20 tokens.
+                        claimableFeeTokens[projectId] += beneficiaryTokenCount;
 
-                    claimableFeeTokens[projectId] += beneficiaryTokenCount;
-
-                    // Track the total fee tokens held across all projects so that _burnReceivedTokens
-                    // and _handleLeftoverTokens can exclude them from burnable balances.
-                    _totalOutstandingFeeTokenClaims[feeProjectToken] += beneficiaryTokenCount;
+                        // Track the total fee tokens held across all projects so that _burnReceivedTokens
+                        // and _handleLeftoverTokens can exclude them from burnable balances.
+                        _totalOutstandingFeeTokenClaims[feeProjectToken] += beneficiaryTokenCount;
+                    } else {
+                        // No ERC-20: track as claimable credits.
+                        claimableFeeCredits[projectId] += beneficiaryTokenCount;
+                    }
                 }
             }
         }

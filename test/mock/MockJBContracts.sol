@@ -159,6 +159,13 @@ contract MockJBController {
     uint256 public lastBurnAmount;
     address public lastBurnHolder;
 
+    // Track transferCreditsFrom calls for verification
+    uint256 public transferCreditsCallCount;
+    address public lastTransferCreditsHolder;
+    uint256 public lastTransferCreditsProjectId;
+    address public lastTransferCreditsRecipient;
+    uint256 public lastTransferCreditsCreditCount;
+
     function setPrices(address _prices) external {
         pricesContract = _prices;
     }
@@ -296,6 +303,14 @@ contract MockJBController {
 
         // Actually burn the tokens if possible (need to know the project token)
         // This is handled by the test setup - tokens are burned from the holder
+    }
+
+    function transferCreditsFrom(address holder, uint256 projectId, address recipient, uint256 creditCount) external {
+        transferCreditsCallCount++;
+        lastTransferCreditsHolder = holder;
+        lastTransferCreditsProjectId = projectId;
+        lastTransferCreditsRecipient = recipient;
+        lastTransferCreditsCreditCount = creditCount;
     }
 }
 
