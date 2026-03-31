@@ -2,6 +2,33 @@
 
 Admin privileges and their scope in univ4-lp-split-hook-v6.
 
+## At A Glance
+
+| Item | Details |
+|------|---------|
+| Scope | Reserved-token accumulation, one-time pool deployment, rebalancing, and LP-fee routing for a project's V4 liquidity hook. |
+| Operators | Project owners, `SET_BUYBACK_POOL` delegates, the hook deployer, and the project's JB controller. |
+| Highest-risk actions | Deploying the pool on the wrong terminal-token path, misunderstanding the permissionless deployment trigger after weight decay, or assuming fees can be rerouted arbitrarily. |
+| Recovery posture | Once a project path transitions into deployed burn mode, you do not get an "undo" button. Recovery usually means using a different hook instance for future configuration. |
+
+## Routine Operations
+
+- Verify the intended terminal token and economic bounds before calling `deployPool()`, because that action permanently chooses the active path for the hook instance.
+- Use `rebalanceLiquidity()` to refresh bounds as project economics evolve instead of trying to mutate pool identity.
+- Expect LP fee routing to follow the hardcoded project and fee-project terminal paths rather than an arbitrary payout destination.
+- Plan around the fact that anyone can trigger pool deployment once the 10x weight-decay condition is met.
+
+## One-Way Or High-Risk Actions
+
+- `initialize()` is one-time per clone.
+- `deployPool()` is the irreversible transition from accumulation to deployed burn mode for that project path.
+- Fee-project routing parameters on the clone are fixed at initialization.
+
+## Recovery Notes
+
+- If a hook instance was initialized or deployed against the wrong economic path, deploy a replacement hook and update the project's split configuration to use it for future reserved-token routing.
+- There is no direct rescue or rollback path to pull accumulated tokens out arbitrarily once the hook is live.
+
 ## Roles
 
 ### 1. Project Owner
@@ -12,7 +39,7 @@ Admin privileges and their scope in univ4-lp-split-hook-v6.
 
 ### 2. Authorized Operator (SET_BUYBACK_POOL)
 
-- **Assigned by:** Project owner granting `JBPermissionIds.SET_BUYBACK_POOL` (permission ID 26) via `JBPermissions.setPermission(operator, account, projectId, permissionId, true)`.
+- **Assigned by:** Project owner granting `JBPermissionIds.SET_BUYBACK_POOL` (permission ID 28) via `JBPermissions.setPermissionsFor(...)`.
 - **Scope:** Per-project, per-operator. The operator can act on behalf of the project owner for functions that require `SET_BUYBACK_POOL`.
 - **Used for:** Same functions as the project owner -- `deployPool`, `rebalanceLiquidity`, and `claimFeeTokensFor`.
 
@@ -33,9 +60,9 @@ Admin privileges and their scope in univ4-lp-split-hook-v6.
 
 | Function | Required Role | Permission ID | Scope | What It Does |
 |----------|--------------|---------------|-------|-------------|
-| `deployPool(projectId, terminalToken, minCashOutReturn)` | Project owner or SET_BUYBACK_POOL operator. **Becomes permissionless** when the current ruleset weight has decayed to 1/10th or less of `initialWeightOf[projectId]`. | `JBPermissionIds.SET_BUYBACK_POOL` (26) | Per-project, single terminal-token path | Creates a Uniswap V4 pool at the geometric mean of issuance/cashout rates. Cashes out a computed fraction of accumulated project tokens for terminal tokens, mints a concentrated LP position, and transitions the project from accumulation to burn mode. This permanently commits the hook instance to one terminal-token path for that project. |
-| `rebalanceLiquidity(projectId, terminalToken, ...)` | Project owner or SET_BUYBACK_POOL operator | `JBPermissionIds.SET_BUYBACK_POOL` (26) | Per-project, per-terminal-token | Burns the existing LP position NFT, collects and routes accrued fees, recalculates tick bounds from current issuance/cashout rates, and mints a new position with updated bounds. Reverts with `InsufficientLiquidity` if the new position would have zero liquidity. |
-| `claimFeeTokensFor(projectId, beneficiary)` | Project owner or SET_BUYBACK_POOL operator | `JBPermissionIds.SET_BUYBACK_POOL` (26) | Per-project | Transfers accumulated fee-project tokens to the specified beneficiary address. Validates the caller's permission, not the beneficiary's identity. Zeroes `claimableFeeTokens[projectId]` before transferring. |
+| `deployPool(projectId, terminalToken, minCashOutReturn)` | Project owner or SET_BUYBACK_POOL operator. **Becomes permissionless** when the current ruleset weight has decayed to 1/10th or less of `initialWeightOf[projectId]`. | `JBPermissionIds.SET_BUYBACK_POOL` (28) | Per-project, single terminal-token path | Creates a Uniswap V4 pool at the geometric mean of issuance/cashout rates. Cashes out a computed fraction of accumulated project tokens for terminal tokens, mints a concentrated LP position, and transitions the project from accumulation to burn mode. This permanently commits the hook instance to one terminal-token path for that project. |
+| `rebalanceLiquidity(projectId, terminalToken, ...)` | Project owner or SET_BUYBACK_POOL operator | `JBPermissionIds.SET_BUYBACK_POOL` (28) | Per-project, per-terminal-token | Burns the existing LP position NFT, collects and routes accrued fees, recalculates tick bounds from current issuance/cashout rates, and mints a new position with updated bounds. Reverts with `InsufficientLiquidity` if the new position would have zero liquidity. |
+| `claimFeeTokensFor(projectId, beneficiary)` | Project owner or SET_BUYBACK_POOL operator | `JBPermissionIds.SET_BUYBACK_POOL` (28) | Per-project | Transfers accumulated fee-project tokens to the specified beneficiary address. Validates the caller's permission, not the beneficiary's identity. Zeroes `claimableFeeTokens[projectId]` before transferring. |
 | `processSplitWith(context)` | JB Controller (system) | None (checked via `controllerOf`) | Per-project | Only callable by the project's registered controller. Accumulates project tokens (pre-deployment) or burns them (post-deployment). Validates `context.split.hook == address(this)`, `groupId == 1`, and controller identity. |
 | `initialize(feeProjectId, feePercent)` | Anyone (once only) | None | Per-clone instance | Sets `FEE_PROJECT_ID` and `FEE_PERCENT` on a clone. Can only be called once per clone (`initialized` flag). In practice, called immediately by the deployer factory. |
 

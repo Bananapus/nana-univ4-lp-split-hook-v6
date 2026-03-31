@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {LibClone} from "solady/src/utils/LibClone.sol";
 import {IJBAddressRegistry} from "@bananapus/address-registry-v6/src/interfaces/IJBAddressRegistry.sol";
+import {LibClone} from "solady/src/utils/LibClone.sol";
 
 import {JBUniswapV4LPSplitHook} from "./JBUniswapV4LPSplitHook.sol";
 import {IJBUniswapV4LPSplitHook} from "./interfaces/IJBUniswapV4LPSplitHook.sol";
@@ -23,7 +23,7 @@ contract JBUniswapV4LPSplitHookDeployer is IJBUniswapV4LPSplitHookDeployer {
     JBUniswapV4LPSplitHook public immutable override HOOK;
 
     //*********************************************************************//
-    // ----------------------- internal properties ----------------------- //
+    // -------------------- internal stored properties ------------------- //
     //*********************************************************************//
 
     /// @notice This contract's current nonce, used for the Juicebox address registry.
