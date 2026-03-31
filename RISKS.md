@@ -1,8 +1,20 @@
-# univ4-lp-split-hook-v6 -- Risks
+# UniV4 LP Split Hook Risk Register
 
-Forward-looking risk analysis for `JBUniswapV4LPSplitHook`. References to `src/JBUniswapV4LPSplitHook.sol` unless noted.
+This file focuses on the risks in turning reserved Juicebox tokens into a bounded Uniswap V4 LP position, then operating that position over time.
 
----
+## How to use this file
+
+- Read `Priority risks` first; they identify the main ways LP deployment or operation can become mispriced or stuck.
+- Use the detailed sections for economics, MEV, rebalance mechanics, and edge-case pricing.
+- Treat `Invariants to Verify` as mandatory before relying on the hook for treasury-facing liquidity.
+
+## Priority risks
+
+| Priority | Risk | Why it matters | Primary controls |
+|----------|------|----------------|------------------|
+| P0 | Miscomputed tick bounds or cash-out fraction | The hook derives LP bounds from Juicebox economics; bad math can deploy treasury liquidity into the wrong price range. | Strong math tests, rebalance checks, and explicit edge-case handling around zero or low surplus. |
+| P1 | MEV around deployment and rebalancing | LP creation and rebalancing expose a timing surface where external traders can exploit predictable treasury actions. | Oracle or TWAP usage, bounded formulas, and operator discipline around execution timing. |
+| P1 | Post-deploy burn and accumulation assumptions | The hook changes behavior after deployment, burning future reserved tokens to avoid dilution. Integration mistakes here can surprise operators. | Clear lifecycle documentation, invariant checks, and deployment-specific monitoring. |
 
 ## 1. Trust Assumptions
 
