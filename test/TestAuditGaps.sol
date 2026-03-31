@@ -3,7 +3,7 @@ pragma solidity 0.8.28;
 
 import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
-import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 
 /// @notice Audit gap tests: MEV/sandwich simulation on rebalance and extreme price scenarios.
 /// @dev These tests verify that the rebalance operation is resistant to sandwich-like
@@ -269,10 +269,8 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
     // -----------------------------------------------------------------------
 
     /// @notice With a very low weight (weight=1), mulDiv(1e18, 1, 1e18) truncates to 0,
-    ///         producing sqrtPrice=0 which is invalid in Uniswap V4. The contract
-    ///         correctly reverts with TickMath's InvalidSqrtPrice(0) because no valid
-    ///         pool can be created when the issuance rate rounds to zero.
-    function test_ExtremePrice_VeryLowWeight_RevertsInvalidSqrtPrice() public {
+    ///         producing zero effective issuance. The LP deploys with max upper tick range.
+    function test_ExtremePrice_VeryLowWeight_DeploysWithMaxRange() public {
         uint256 lowWeightProject = 4;
         _setupProject(lowWeightProject);
 
@@ -284,10 +282,12 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
         // Accumulate tokens
         _accumulateTokensForProject(lowWeightProject, 1000e18);
 
-        // Should revert because the computed sqrtPriceX96 is 0 (invalid)
+        // Should deploy successfully with max upper range
         vm.prank(owner);
-        vm.expectRevert(abi.encodeWithSelector(TickMath.InvalidSqrtPrice.selector, uint160(0)));
         hook.deployPool(lowWeightProject, address(terminalToken), 0);
+
+        uint256 tokenId = hook.tokenIdOf(lowWeightProject, address(terminalToken));
+        assertTrue(tokenId != 0, "Pool should deploy with zero issuance rate");
     }
 
     // -----------------------------------------------------------------------
@@ -339,6 +339,33 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
     }
 
     // -----------------------------------------------------------------------
+    // 10b. Deploy with zero surplus AND zero issuance (full range LP)
+    // -----------------------------------------------------------------------
+
+    /// @notice When both cashout and issuance are zero, the LP should deploy
+    ///         with full tick range (minUsable to maxUsable).
+    function test_ExtremePrice_ZeroCashOutAndZeroIssuance_FullRange() public {
+        uint256 fullRangeProject = 50;
+        _setupProject(fullRangeProject);
+
+        // Zero surplus → cashOutRate = 0
+        store.setSurplus(fullRangeProject, 0);
+        // Zero weight → issuanceRate = 0
+        controller.setWeight(fullRangeProject, 0);
+        controller.setFirstWeight(fullRangeProject, 0);
+
+        _accumulateTokensForProject(fullRangeProject, 500e18);
+
+        // With zero surplus, the position is 100% single-sided project tokens.
+        // The mock PositionManager computes zero liquidity for single-sided amounts,
+        // causing deployPool to revert with ZeroLiquidity (same as test 10 above).
+        // The key assertion: it does NOT revert with InvalidTick or InvalidSqrtPrice.
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSignature("JBUniswapV4LPSplitHook_ZeroLiquidity()"));
+        hook.deployPool(fullRangeProject, address(terminalToken), 0);
+    }
+
+    // -----------------------------------------------------------------------
     // 11. Deploy with very high surplus (extreme cash out rate)
     // -----------------------------------------------------------------------
 
@@ -366,10 +393,8 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
     // -----------------------------------------------------------------------
 
     /// @notice Weight=1 produces zero effective issuance due to integer truncation
-    ///         (mulDiv(1e18, 1, 1e18) = 0). The contract correctly reverts with
-    ///         InvalidSqrtPrice(0) because no valid Uniswap pool can be initialized
-    ///         at sqrtPrice=0. This confirms the weight=1 edge case is safely caught.
-    function test_ExtremePrice_WeightEqualOne_RevertsInvalidSqrtPrice() public {
+    ///         (mulDiv(1e18, 1, 1e18) = 0). The LP deploys with max upper tick range.
+    function test_ExtremePrice_WeightEqualOne_DeploysWithMaxRange() public {
         uint256 minWeightProject = 7;
         _setupProject(minWeightProject);
 
@@ -378,9 +403,12 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
 
         _accumulateTokensForProject(minWeightProject, 500e18);
 
+        // Should deploy successfully with max upper range
         vm.prank(owner);
-        vm.expectRevert(abi.encodeWithSelector(TickMath.InvalidSqrtPrice.selector, uint160(0)));
         hook.deployPool(minWeightProject, address(terminalToken), 0);
+
+        uint256 tokenId = hook.tokenIdOf(minWeightProject, address(terminalToken));
+        assertTrue(tokenId != 0, "Pool should deploy with zero issuance (weight=1)");
     }
 
     // -----------------------------------------------------------------------
@@ -388,11 +416,9 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
     // -----------------------------------------------------------------------
 
     /// @notice With maximum reserved percent (10000 = 100%), the effective issuance
-    ///         for non-reserved tokens is mulDiv(tokens, 0, 10000) = 0. This produces
-    ///         sqrtPrice=0 which is invalid. The contract correctly reverts with
-    ///         InvalidSqrtPrice(0), confirming that 100% reserved percent safely
-    ///         prevents pool deployment (no valid market price exists).
-    function test_ExtremePrice_MaxReservedPercent_RevertsInvalidSqrtPrice() public {
+    ///         for non-reserved tokens is mulDiv(tokens, 0, 10000) = 0. The LP deploys
+    ///         with max upper tick range since there is no issuance ceiling.
+    function test_ExtremePrice_MaxReservedPercent_DeploysWithMaxRange() public {
         uint256 maxReservedProject = 8;
         _setupProject(maxReservedProject);
 
@@ -401,9 +427,12 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
 
         _accumulateTokensForProject(maxReservedProject, 500e18);
 
+        // Should deploy successfully with max upper range
         vm.prank(owner);
-        vm.expectRevert(abi.encodeWithSelector(TickMath.InvalidSqrtPrice.selector, uint160(0)));
         hook.deployPool(maxReservedProject, address(terminalToken), 0);
+
+        uint256 tokenId = hook.tokenIdOf(maxReservedProject, address(terminalToken));
+        assertTrue(tokenId != 0, "Pool should deploy with 100% reserved percent");
     }
 
     // -----------------------------------------------------------------------

@@ -187,12 +187,12 @@ contract PriceMathTest is LPSplitHookV4TestBase {
     // ─────────────────────────────────────────────────────────────────────
 
     /// @notice With 100% reserved (10000), all tokens go to reserves so issuance rate = 0.
+    ///         Returns 0 instead of reverting, allowing the LP to deploy with max upper range.
     function test_IssuanceRate_MaxReserved() public {
         controller.setReservedPercent(PROJECT_ID, 10_000);
 
         uint256 rate = testableHook.exposed_getIssuanceRate(PROJECT_ID, address(terminalToken));
-
-        assertEq(rate, 0, "Issuance rate should be 0 when 100% reserved");
+        assertEq(rate, 0, "Issuance rate should be 0 with 100% reserved");
     }
 
     // ─────────────────────────────────────────────────────────────────────
