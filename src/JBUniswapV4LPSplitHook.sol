@@ -404,7 +404,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         } else {
             projectTokensPerTerminalToken = tokensPerTerminalToken;
         }
-
     }
 
     /// @notice Convert issuance rate to sqrtPriceX96 (price ceiling)
