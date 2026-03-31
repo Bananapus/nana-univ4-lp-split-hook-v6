@@ -420,6 +420,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         uint256 projectTokensPerTerminalToken = _getIssuanceRate({projectId: projectId, terminalToken: terminalToken});
 
+        // If the issuance rate is 0 (e.g. 100% reserved rate or zero weight), return the maximum price.
+        // This pushes the LP's upper tick to maxUsable, giving it the widest possible upper range.
+        if (projectTokensPerTerminalToken == 0) return TickMath.MAX_SQRT_PRICE - 1;
+
         uint256 token0Amount = _WAD;
         uint256 token1Amount;
 
@@ -546,8 +550,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Claim fee tokens for a beneficiary.
     /// @dev Requires SET_BUYBACK_POOL permission from the project owner.
-    /// @dev Claims both ERC-20 fee tokens (via safeTransfer) and credit-based fee tokens
-    /// (via controller.transferCreditsFrom). Credits accumulate when the fee project has no ERC-20 deployed.
+    /// @dev Claims both ERC-20 fee tokens and credit-based fee tokens independently. Each path uses
+    /// try-catch so a failure in one does not block the other. Credits accumulate when the fee project has no ERC-20.
     function claimFeeTokensFor(uint256 projectId, address beneficiary) external {
         _requirePermissionFrom({
             account: IJBDirectory(DIRECTORY).PROJECTS().ownerOf(projectId),
@@ -555,7 +559,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             permissionId: JBPermissionIds.SET_BUYBACK_POOL
         });
 
-        // Claim ERC-20 fee tokens (if any).
+        // Claim ERC-20 fee tokens (if any). Wrapped in try-catch so a reverting ERC-20
+        // transfer does not block a valid credit claim, and vice versa.
         uint256 tokenAmount = claimableFeeTokens[projectId];
         if (tokenAmount > 0) {
             claimableFeeTokens[projectId] = 0;
@@ -567,19 +572,40 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             _totalOutstandingFeeTokenClaims[feeProjectToken] -= tokenAmount;
 
             // Transfer the claimed fee tokens to the beneficiary.
-            IERC20(feeProjectToken).safeTransfer({to: beneficiary, value: tokenAmount});
+            // slither-disable-next-line reentrancy-no-eth
+            try IERC20(feeProjectToken).transfer(beneficiary, tokenAmount) returns (bool success) {
+                if (!success) {
+                    // Transfer returned false — restore bookkeeping so tokens can be retried.
+                    claimableFeeTokens[projectId] += tokenAmount;
+                    _totalOutstandingFeeTokenClaims[feeProjectToken] += tokenAmount;
+                    tokenAmount = 0;
+                }
+            } catch {
+                // Transfer reverted — restore bookkeeping so tokens can be retried.
+                claimableFeeTokens[projectId] += tokenAmount;
+                _totalOutstandingFeeTokenClaims[feeProjectToken] += tokenAmount;
+                tokenAmount = 0;
+            }
         }
 
-        // Claim credit-based fee tokens (if any).
+        // Claim credit-based fee tokens (if any). Independent try-catch so a reverting
+        // credit transfer does not block a valid ERC-20 claim.
         uint256 creditAmount = claimableFeeCredits[projectId];
         if (creditAmount > 0) {
             claimableFeeCredits[projectId] = 0;
 
             // Transfer credits via the fee project's current controller.
             IJBController controller = IJBController(address(IJBDirectory(DIRECTORY).controllerOf(FEE_PROJECT_ID)));
-            controller.transferCreditsFrom({
+            try controller.transferCreditsFrom({
                 holder: address(this), projectId: FEE_PROJECT_ID, recipient: beneficiary, creditCount: creditAmount
-            });
+            }) {
+            // Success — creditAmount stays as-is for the event.
+            }
+            catch {
+                // Credit transfer reverted — restore bookkeeping so credits can be retried.
+                claimableFeeCredits[projectId] += creditAmount;
+                creditAmount = 0;
+            }
         }
 
         if (tokenAmount > 0 || creditAmount > 0) {
@@ -984,6 +1010,15 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint256 cashOutRate = _getCashOutRate({projectId: projectId, terminalToken: terminalToken});
 
         if (cashOutRate == 0) {
+            uint256 issuanceRate = _getIssuanceRate({projectId: projectId, terminalToken: terminalToken});
+
+            if (issuanceRate == 0) {
+                // No floor and no ceiling — full range LP.
+                tickLower = _alignTickToSpacing({tick: TickMath.MIN_TICK, spacing: TICK_SPACING}) + TICK_SPACING;
+                tickUpper = _alignTickToSpacing({tick: TickMath.MAX_TICK, spacing: TICK_SPACING}) - TICK_SPACING;
+                return (tickLower, tickUpper);
+            }
+
             // Cash out rate rounds to 0 due to precision loss (e.g. 6-decimal USDC with large token supply).
             // Center the LP range around the issuance price with minimal width.
             int24 issuanceTick = TickMath.getTickAtSqrtPrice(
@@ -1175,19 +1210,14 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint256 diffB_PriceInit = uint256(sqrtPriceB) - uint256(sqrtPriceInit);
 
         if (terminalIsToken0) {
-            numerator = mulDiv({x: diffPriceInit_A, y: uint256(sqrtPriceB), denominator: diffB_PriceInit});
-            denominator = uint256(sqrtPriceInit);
+            numerator = uint256(sqrtPriceInit);
+            denominator = mulDiv({x: diffPriceInit_A, y: uint256(sqrtPriceB), denominator: diffB_PriceInit});
         } else {
             numerator = mulDiv({x: uint256(sqrtPriceInit), y: diffPriceInit_A, denominator: diffB_PriceInit});
             denominator = 1;
         }
 
-        uint256 ratioE18;
-        if (terminalIsToken0) {
-            ratioE18 = mulDiv({x: numerator, y: _WAD, denominator: denominator});
-        } else {
-            ratioE18 = mulDiv({x: numerator, y: _WAD, denominator: 1});
-        }
+        uint256 ratioE18 = mulDiv({x: numerator, y: _WAD, denominator: denominator});
 
         if (ratioE18 == 0) return 0;
 
@@ -1512,6 +1542,19 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             // If no fee terminal is set, fee tokens are stranded in the contract. This is accepted
             // behavior — the fee project owner can set a terminal later and trigger fee collection.
             if (feeTerminal != address(0)) {
+                // Look up the fee project's ERC-20 BEFORE the pay() call so we can pre-increment
+                // _totalOutstandingFeeTokenClaims. This prevents a reentrancy through terminal.pay()
+                // → pay hooks → collectAndRouteLPFees() from seeing stale claims and double-counting
+                // fee tokens in _burnReceivedTokens or _handleLeftoverTokens.
+                address feeProjectToken = address(IJBTokens(TOKENS).tokenOf(FEE_PROJECT_ID));
+
+                // Pre-increment with feeAmount as a conservative estimate. The actual token count
+                // may differ, but any re-entrant call during pay() will see an inflated reserve,
+                // which safely prevents over-burning. We reconcile after pay() returns.
+                if (feeProjectToken != address(0)) {
+                    _totalOutstandingFeeTokenClaims[feeProjectToken] += feeAmount;
+                }
+
                 // Fee terminal revert blocks fee collection — accepted since the fee project is
                 // protocol-controlled and expected to maintain a functioning terminal.
                 // minReturnedTokens is 0 by design: slippage protection is the fee project's
@@ -1519,7 +1562,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 // Setting a floor here would risk reverting on small fee amounts where
                 // mulDiv rounding yields 0 tokens, and any non-trivial floor would require
                 // an oracle dependency that doesn't belong in the LP split hook.
-                // See RISKS.md §8.1.
                 //
                 // Use the return value from pay() directly instead of balance deltas.
                 // Balance deltas are unreliable when the terminal token IS the fee project token,
@@ -1548,18 +1590,20 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                         });
                 }
 
+                // Reconcile the pre-incremented estimate with the actual token count returned by pay().
+                if (feeProjectToken != address(0)) {
+                    // Remove the estimate and apply the actual amount.
+                    _totalOutstandingFeeTokenClaims[feeProjectToken] =
+                        _totalOutstandingFeeTokenClaims[feeProjectToken] - feeAmount + beneficiaryTokenCount;
+                }
+
                 // Track fee tokens for later claiming. Route to the correct tracker based on
                 // whether the fee project has an ERC-20 deployed (claimable via safeTransfer)
                 // or uses internal credits only (claimable via controller.transferCreditsFrom).
                 if (beneficiaryTokenCount > 0) {
-                    address feeProjectToken = address(IJBTokens(TOKENS).tokenOf(FEE_PROJECT_ID));
                     if (feeProjectToken != address(0)) {
                         // ERC-20 exists: track as claimable ERC-20 tokens.
                         claimableFeeTokens[projectId] += beneficiaryTokenCount;
-
-                        // Track the total fee tokens held across all projects so that _burnReceivedTokens
-                        // and _handleLeftoverTokens can exclude them from burnable balances.
-                        _totalOutstandingFeeTokenClaims[feeProjectToken] += beneficiaryTokenCount;
                     } else {
                         // No ERC-20: track as claimable credits.
                         claimableFeeCredits[projectId] += beneficiaryTokenCount;
