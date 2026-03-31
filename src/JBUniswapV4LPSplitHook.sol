@@ -551,8 +551,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Claim fee tokens for a beneficiary.
     /// @dev Requires SET_BUYBACK_POOL permission from the project owner.
-    /// @dev Claims both ERC-20 fee tokens (via safeTransfer) and credit-based fee tokens
-    /// (via controller.transferCreditsFrom). Credits accumulate when the fee project has no ERC-20 deployed.
+    /// @dev Claims both ERC-20 fee tokens and credit-based fee tokens independently. Each path uses
+    /// try-catch so a failure in one does not block the other. Credits accumulate when the fee project has no ERC-20.
     function claimFeeTokensFor(uint256 projectId, address beneficiary) external {
         _requirePermissionFrom({
             account: IJBDirectory(DIRECTORY).PROJECTS().ownerOf(projectId),
