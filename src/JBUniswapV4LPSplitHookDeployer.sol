@@ -23,7 +23,7 @@ contract JBUniswapV4LPSplitHookDeployer is IJBUniswapV4LPSplitHookDeployer {
     JBUniswapV4LPSplitHook public immutable override HOOK;
 
     //*********************************************************************//
-    // ----------------------- internal properties ----------------------- //
+    // -------------------- internal stored properties ------------------- //
     //*********************************************************************//
 
     /// @notice This contract's current nonce, used for the Juicebox address registry.
