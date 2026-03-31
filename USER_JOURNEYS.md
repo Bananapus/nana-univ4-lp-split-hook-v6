@@ -50,7 +50,7 @@
 **Flow**
 1. Rebalance or otherwise operate the position through the hook's approved management path.
 2. Watch `claimableFeeTokens(...)` and related fee-project routing effects after those actions.
-3. Claim or account for those fee tokens through the intended downstream treasury path instead of treating them as incidental LP dust.
+3. Use `claimFeeTokensFor(...)` when those fee tokens should be released to a beneficiary instead of treating them as incidental LP dust.
 
 ## Hand-Offs
 
