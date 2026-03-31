@@ -110,10 +110,11 @@ Reverts with `InsufficientLiquidity` if new position would have zero liquidity (
 `claimFeeTokensFor(projectId, beneficiary)` -- requires `SET_BUYBACK_POOL`.
 
 - Drains both `claimableFeeTokens[projectId]` (ERC-20) and `claimableFeeCredits[projectId]` (credits) in a single call
-- ERC-20 path: reads and zeroes before transfer (CEI pattern), transfers via `safeTransfer`
-- Credit path: reads and zeroes before transfer, calls `controller.transferCreditsFrom` to move credits to beneficiary
+- Each path is wrapped in an independent try-catch so a failure in one does not block the other
+- ERC-20 path: reads and zeroes before transfer (CEI pattern), transfers via `transfer` (not `safeTransfer`). On failure (revert or `false` return), bookkeeping is restored for retry
+- Credit path: reads and zeroes before transfer, calls `controller.transferCreditsFrom` to move credits to beneficiary. On failure, bookkeeping is restored for retry
 - Credits accumulate when the fee project has no ERC-20 deployed (`tokenOf(FEE_PROJECT_ID) == address(0)`)
-- Caveat: if the fee project's ruleset has `pauseCreditTransfers` enabled, the credit claim reverts
+- If the fee project's ruleset has `pauseCreditTransfers` enabled, the credit claim silently fails (bookkeeping restored) while the ERC-20 claim succeeds independently
 
 ## Key Constants
 
@@ -137,19 +138,19 @@ Configurable per clone:
 
 ### 1. Reentrancy Safety via Burn-Before-Route Ordering (Highest Priority)
 
-The contract makes multiple external calls without a `ReentrancyGuard`. Instead, it relies on burn-before-route ordering: `_burnReceivedTokens` is called before `_routeCollectedFees` (which calls `terminal.pay()`). This ensures a re-entrant `_burnReceivedTokens` finds zero burnable balance. Fee tokens minted during `terminal.pay()` are tracked in `_totalOutstandingFeeTokenClaims` and excluded from burnable balances.
+The contract makes multiple external calls without a `ReentrancyGuard`. Instead, it relies on two mechanisms: (1) burn-before-route ordering: `_burnReceivedTokens` is called before `_routeCollectedFees` (which calls `terminal.pay()`), ensuring a re-entrant `_burnReceivedTokens` finds zero burnable balance; and (2) pre-increment of `_totalOutstandingFeeTokenClaims` in `_routeFeesToProject` before the `terminal.pay()` call, which prevents a reentrancy through pay hooks from seeing stale claims and double-counting fee tokens in `_burnReceivedTokens` or `_handleLeftoverTokens`. The pre-incremented estimate is reconciled with the actual token count after `pay()` returns.
 
 External call sites:
 - `deployPool`: calls `terminal.cashOutTokensOf()`, `POSITION_MANAGER.modifyLiquidities()`, `terminal.addToBalanceOf()`, `controller.burnTokensOf()`
 - `collectAndRouteLPFees`: calls `POSITION_MANAGER.modifyLiquidities()`, `controller.burnTokensOf()`, `terminal.pay()`, `terminal.addToBalanceOf()`
 - `rebalanceLiquidity`: all of the above plus `BURN_POSITION` and re-`MINT_POSITION`
-- `claimFeeTokensFor`: calls `IERC20.safeTransfer()` (ERC-20 path) and `controller.transferCreditsFrom()` (credit path)
+- `claimFeeTokensFor`: calls `IERC20.transfer()` (ERC-20 path, try-catch) and `controller.transferCreditsFrom()` (credit path, try-catch)
 
 Verify that the burn-before-route ordering prevents all reentrancy paths. Pay special attention to:
 - Can `terminal.pay()` (in fee routing) re-enter through a pay hook that calls back into this contract? (burn already completed — should find 0 balance)
 - Can `terminal.cashOutTokensOf()` trigger a cashout hook that re-enters?
 - Can `POSITION_MANAGER.modifyLiquidities()` trigger callbacks that re-enter?
-- Is `_totalOutstandingFeeTokenClaims` correctly incremented before any subsequent burn could see the fee tokens?
+- Is `_totalOutstandingFeeTokenClaims` correctly pre-incremented before `terminal.pay()` and properly reconciled afterward? Can the pre-increment estimate diverge from reality in a way that causes over-burning or under-burning?
 
 ### 2. MEV on Rebalance
 
@@ -242,7 +243,7 @@ Regression tests for these findings are in `test/SplitHookRegressions.t.sol`. Se
 
 | Pattern | Where to Look | Why It's Dangerous |
 |---------|--------------|-------------------|
-| No reentrancy guard (burn-before-route ordering) | `collectAndRouteLPFees`, `_collectAndRouteFees`, `rebalanceLiquidity` | No `ReentrancyGuard` — relies on calling `_burnReceivedTokens` before `_routeCollectedFees`. Verify burn completes before any `terminal.pay()` call and that `_totalOutstandingFeeTokenClaims` correctly segregates fee tokens from burnable balances. |
+| No reentrancy guard (burn-before-route + pre-increment) | `collectAndRouteLPFees`, `_collectAndRouteFees`, `rebalanceLiquidity` | No `ReentrancyGuard` — relies on calling `_burnReceivedTokens` before `_routeCollectedFees`, plus pre-incrementing `_totalOutstandingFeeTokenClaims` before `terminal.pay()` in `_routeFeesToProject`. Verify burn completes before any `terminal.pay()` call, that the pre-increment prevents re-entrant over-burning, and that the post-pay reconciliation is correct. |
 | Balance-delta accounting | `collectAndRouteLPFees`, `deployPool` | Token amounts determined by before/after balance checks. Fee-on-transfer tokens or reentrant callbacks could skew deltas. |
 | Full position burn in rebalance | `rebalanceLiquidity` | Burns entire position and remints. Between burn and mint, raw tokens are held. MEV sandwich opportunity. |
 | `terminal.pay()` in fee routing | `_routeFeesToProject` | `terminal.pay()` triggers pay hooks. A pay hook could re-enter this contract via `processSplitWith` if this hook is in the reserved token splits. |
@@ -271,6 +272,7 @@ Regression tests for these findings are in `test/SplitHookRegressions.t.sol`. Se
 | `TerminalTokensNotAllowed` | `processSplitWith()` called with `context.groupId != 1`. This hook only processes reserved token splits (group 1), not payout splits. |
 | `InsufficientLiquidity` | `rebalanceLiquidity()` would produce a new position with zero liquidity. Reverts to prevent bricking (`tokenIdOf` would otherwise be zeroed). |
 | `ZeroAddressNotAllowed` | Constructor called with `address(0)` for `directory`, `tokens`, `poolManager`, or `positionManager`. |
+| `ZeroIssuanceRate` | `_getIssuanceRate()` returns 0 (e.g., 100% reserved rate). Reverts early to prevent division-by-zero in downstream sqrtPrice calculations. |
 
 ## Compiler and Version Info
 

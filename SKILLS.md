@@ -30,7 +30,7 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 | Function | What it does |
 |----------|-------------|
 | `collectAndRouteLPFees(projectId, terminalToken)` | **Permissionless.** Collects V4 position fees via `PositionManager.modifyLiquidities()`. Routes terminal token fees: `FEE_PERCENT` to fee project via `terminal.pay()`, remainder to original project via `addToBalanceOf()`. Burns collected project token fees. Tracks fee-project tokens for claiming. |
-| `claimFeeTokensFor(projectId, beneficiary)` | Requires `SET_BUYBACK_POOL` permission. Transfers accumulated fee-project tokens to beneficiary. |
+| `claimFeeTokensFor(projectId, beneficiary)` | Requires `SET_BUYBACK_POOL` permission. Claims both ERC-20 fee tokens and credit-based fee tokens independently. Each path uses try-catch so a failure in one does not block the other. On failure, bookkeeping is restored for retry. |
 
 ### Liquidity Management
 
@@ -129,6 +129,7 @@ Juicebox reserved-token split hook that accumulates project tokens, deploys a Un
 | `JBUniswapV4LPSplitHook_InsufficientLiquidity` | Pool has insufficient liquidity for operation |
 | `JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported` | Attempted to deploy a second pool for a project (max 1 pool per project) |
 | `JBUniswapV4LPSplitHook_Permit2AmountOverflow` | Amount exceeds `type(uint160).max` for Permit2 |
+| `JBUniswapV4LPSplitHook_ZeroIssuanceRate` | `_getIssuanceRate` returns 0 (e.g., 100% reserved rate), which would cause division by zero in downstream sqrtPrice calculations |
 
 ## Constants
 

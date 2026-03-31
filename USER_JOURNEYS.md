@@ -362,31 +362,43 @@ The LP position is repositioned to bracket the current issuance and cashout rate
 
    - Permission check: `SET_BUYBACK_POOL` from project owner
 
-2. **CEI pattern execution**
+2. **ERC-20 claim (try-catch)**
 
-   - Reads `claimableAmount = claimableFeeTokens[projectId]`
-   - Zeroes `claimableFeeTokens[projectId] = 0` (effects before interactions)
-   - If `claimableAmount > 0`: transfers fee project ERC-20 tokens to `beneficiary` via `IERC20.safeTransfer()`
+   - Reads `tokenAmount = claimableFeeTokens[projectId]`
+   - If `tokenAmount > 0`: zeroes `claimableFeeTokens[projectId]` and decrements `_totalOutstandingFeeTokenClaims` (effects before interactions)
+   - Attempts `IERC20(feeProjectToken).transfer(beneficiary, tokenAmount)`
+   - On success: claim is complete
+   - On failure (revert or `false` return): restores `claimableFeeTokens[projectId]` and `_totalOutstandingFeeTokenClaims` so the claim can be retried later
+
+3. **Credit claim (try-catch, independent of ERC-20 path)**
+
+   - Reads `creditAmount = claimableFeeCredits[projectId]`
+   - If `creditAmount > 0`: zeroes `claimableFeeCredits[projectId]` (effects before interactions)
+   - Attempts `controller.transferCreditsFrom(address(this), FEE_PROJECT_ID, beneficiary, creditAmount)`
+   - On success: claim is complete
+   - On failure: restores `claimableFeeCredits[projectId]` so the claim can be retried later
 
 ### State changes
 
-1. `hook.claimableFeeTokens[projectId]` = 0
+1. `hook.claimableFeeTokens[projectId]` = 0 (if ERC-20 transfer succeeds; restored on failure)
+2. `hook.claimableFeeCredits[projectId]` = 0 (if credit transfer succeeds; restored on failure)
 
 ### Events
 
-- `FeeTokensClaimed(uint256 indexed projectId, address indexed beneficiary, uint256 amount)` — emitted only if `claimableAmount > 0`
+- `FeeTokensClaimed(uint256 indexed projectId, address indexed beneficiary, uint256 tokenAmount, uint256 creditAmount)` — emitted if either `tokenAmount > 0` or `creditAmount > 0` after the try-catch blocks complete
 
 ### Edge cases
 
-- If `claimableAmount == 0`, no transfer occurs and no event is emitted (silent no-op)
+- If both amounts are 0, no transfer occurs and no event is emitted (silent no-op)
 - The fee project token address is looked up fresh from `TOKENS.tokenOf(FEE_PROJECT_ID)` -- not cached
-- If the fee project has not deployed an ERC-20 token, `tokenOf` returns `address(0)` and the `safeTransfer` reverts
+- If the fee project has not deployed an ERC-20 token, `tokenOf` returns `address(0)` and the ERC-20 path is skipped (credits may still be claimed)
 - Tokens are transferred to `beneficiary`, not to `msg.sender`
-- The CEI pattern prevents reentrancy (balance zeroed before transfer)
+- Each path is independent: a reverting ERC-20 transfer does not block a valid credit claim, and vice versa
+- On failure, bookkeeping is restored so the claim can be retried in a subsequent call
 
 ### Result
 
-The beneficiary receives the accumulated fee project tokens. The project's claimable balance is zeroed.
+The beneficiary receives the accumulated fee project tokens and/or credits. The project's claimable balances are zeroed for whichever paths succeed.
 
 ---
 
