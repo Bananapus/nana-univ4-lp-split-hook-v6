@@ -129,8 +129,7 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
     }
 
     /// @notice When current weight is 0 (infinite decay), access control is bypassed
-    ///         but deployment may revert downstream due to zero-price math.
-    ///         This test verifies the permission check is skipped (no Unauthorized revert).
+    ///         and the pool deploys with max upper tick range (no issuance ceiling).
     function test_deployPool_permissionless_whenWeightIsZero() public {
         _accumulateTokens(PROJECT_ID, 100e18);
 
@@ -143,11 +142,12 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
         vm.stopPrank();
 
         // The permission check is bypassed (0 * 10 <= initialWeight),
-        // but the pool deployment reverts downstream due to InvalidSqrtPrice(0).
-        // The key assertion: it does NOT revert with JBPermissioned_Unauthorized.
+        // and the pool deploys with max upper range since issuance is zero.
         vm.prank(randomUser);
-        vm.expectRevert(); // InvalidSqrtPrice(0), not Unauthorized
         hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+
+        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        assertTrue(tokenId != 0, "Pool should deploy with zero weight");
     }
 
     // ─────────────────────────────────────────────────────────────────────

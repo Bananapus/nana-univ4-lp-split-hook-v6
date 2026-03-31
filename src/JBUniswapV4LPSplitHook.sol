@@ -81,7 +81,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     error JBUniswapV4LPSplitHook_TerminalTokensNotAllowed();
     error JBUniswapV4LPSplitHook_InsufficientLiquidity();
     error JBUniswapV4LPSplitHook_ZeroAddressNotAllowed();
-    error JBUniswapV4LPSplitHook_ZeroIssuanceRate();
     error JBUniswapV4LPSplitHook_ZeroLiquidity();
 
     //*********************************************************************//
@@ -406,9 +405,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             projectTokensPerTerminalToken = tokensPerTerminalToken;
         }
 
-        // A zero issuance rate (e.g. 100% reserved rate) would cause division by zero in downstream
-        // sqrtPrice calculations. Revert early with a descriptive error.
-        if (projectTokensPerTerminalToken == 0) revert JBUniswapV4LPSplitHook_ZeroIssuanceRate();
     }
 
     /// @notice Convert issuance rate to sqrtPriceX96 (price ceiling)
@@ -424,6 +420,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         (address token0,) = _sortTokens({tokenA: terminalToken, tokenB: projectToken});
 
         uint256 projectTokensPerTerminalToken = _getIssuanceRate({projectId: projectId, terminalToken: terminalToken});
+
+        // If the issuance rate is 0 (e.g. 100% reserved rate or zero weight), return the maximum price.
+        // This pushes the LP's upper tick to maxUsable, giving it the widest possible upper range.
+        if (projectTokensPerTerminalToken == 0) return TickMath.MAX_SQRT_PRICE - 1;
 
         uint256 token0Amount = _WAD;
         uint256 token1Amount;
