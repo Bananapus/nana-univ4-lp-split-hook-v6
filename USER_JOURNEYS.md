@@ -2,48 +2,46 @@
 
 ## Who This Repo Serves
 
-- project teams turning reserved tokens into protocol-native liquidity
-- operators deploying, collecting, and rebalancing a bounded UniV4 position
-- integrators who need treasury-aware LP behavior rather than generic LP automation
+- projects that want reserved-token issuance to become managed UniV4 liquidity
+- operators deploying and later rebalancing a concentrated-liquidity position tied to project economics
+- reviewers checking fee routing, range math, and post-deployment lifecycle assumptions
 
 ## Journey 1: Accumulate Reserved Tokens Before A Pool Exists
 
-**Starting state:** the hook is configured as a reserved-token split on a project.
+**Starting state:** the project is issuing reserved tokens but has not yet deployed a UniV4 pool position.
 
-**Success:** reserved project tokens accumulate until the team is ready to deploy the LP position.
+**Success:** reserved issuance is captured by the split hook instead of being sent elsewhere.
 
 **Flow**
-1. Install the hook as a reserved-token split recipient in the project's ruleset.
-2. Each reserved-token distribution sends project tokens into the hook.
-3. The hook tracks the accumulated balance per project before any pool exists.
-4. No LP is deployed yet, so the hook is just building inventory for the eventual position.
+1. Install `JBUniswapV4LPSplitHook` as the relevant reserved-token split recipient.
+2. Let the hook accumulate project tokens over time during the pre-deployment phase.
+3. Keep the project's issuance logic in the core repo and treat this repo as the post-issuance destination for those reserves.
 
 ## Journey 2: Deploy The Initial UniV4 LP Position
 
-**Starting state:** enough project tokens have accumulated and the operator is ready to choose the terminal-token pair for this hook instance.
+**Starting state:** enough reserved tokens have accumulated and the project is ready to create market liquidity.
 
-**Success:** the project now has a concentrated liquidity position whose bounds are derived from Juicebox economics rather than arbitrary manual ticks.
+**Success:** the hook deploys or initializes the first concentrated-liquidity position using bounds derived from project economics.
 
 **Flow**
-1. Call `deployPool(...)` for the project and terminal token.
-2. The hook derives the lower and upper ticks from the project's cash-out and issuance rates.
-3. It cashes out the required fraction of project tokens for terminal tokens.
-4. It initializes the pool if needed and mints the concentrated LP position.
-5. From this point forward, the hook's identity includes that chosen project-token and terminal-token path.
+1. Use the hook's deployment surface or its deployer to create the initial position.
+2. Derive tick bounds and position shape from the project's issuance and cash-out assumptions instead of arbitrary market intuition.
+3. Register the deployed hook instance in the address registry if provenance tracking matters for the environment.
 
 ## Journey 3: Operate The Position After Deployment
 
-**Starting state:** the pool has been deployed.
+**Starting state:** the position exists and the project now needs ongoing liquidity management.
 
-**Success:** fees are collected and routed correctly, and the LP range can be refreshed when economics move.
+**Success:** the hook can collect fees, rebalance, and keep the LP position aligned with the intended economics.
 
 **Flow**
-1. Collect and route LP fees with `collectAndRouteLPFees(...)`.
-2. Send the configured fee share to the fee project and the remainder back to the original project.
-3. Burn any project-token fee residue the design says should not remain in circulation.
-4. Rebalance with `rebalanceLiquidity(...)` when the project's economics have moved enough to justify a new range.
-5. After deployment, newly received reserved tokens are burned instead of added pro rata, preventing LP dilution.
+1. Collect accrued LP fees through the hook's management surface.
+2. Rebalance when price or issuance conditions make the old range stale.
+3. Keep fee routing and fee-project assumptions aligned so management actions do not distort the intended treasury behavior.
+
+**Failure cases that matter:** stale token IDs, inverted tick bounds, reinitialization after ownership renounce, and fee-project validation mistakes that make the hook behave differently from its economic model.
 
 ## Hand-Offs
 
-- Use [univ4-router-v6](../univ4-router-v6/USER_JOURNEYS.md) to understand the oracle and routing assumptions this hook depends on.
+- Use [nana-core-v6](../nana-core-v6/USER_JOURNEYS.md) for the reserved-token issuance this hook consumes.
+- Use [univ4-router-v6](../univ4-router-v6/USER_JOURNEYS.md) when the question is about swap routing or oracle behavior rather than reserved-token liquidity deployment.
