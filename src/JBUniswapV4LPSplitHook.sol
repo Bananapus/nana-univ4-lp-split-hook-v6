@@ -1010,6 +1010,15 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint256 cashOutRate = _getCashOutRate({projectId: projectId, terminalToken: terminalToken});
 
         if (cashOutRate == 0) {
+            uint256 issuanceRate = _getIssuanceRate({projectId: projectId, terminalToken: terminalToken});
+
+            if (issuanceRate == 0) {
+                // No floor and no ceiling — full range LP.
+                tickLower = _alignTickToSpacing({tick: TickMath.MIN_TICK, spacing: TICK_SPACING}) + TICK_SPACING;
+                tickUpper = _alignTickToSpacing({tick: TickMath.MAX_TICK, spacing: TICK_SPACING}) - TICK_SPACING;
+                return (tickLower, tickUpper);
+            }
+
             // Cash out rate rounds to 0 due to precision loss (e.g. 6-decimal USDC with large token supply).
             // Center the LP range around the issuance price with minimal width.
             int24 issuanceTick = TickMath.getTickAtSqrtPrice(
