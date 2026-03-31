@@ -339,6 +339,33 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
     }
 
     // -----------------------------------------------------------------------
+    // 10b. Deploy with zero surplus AND zero issuance (full range LP)
+    // -----------------------------------------------------------------------
+
+    /// @notice When both cashout and issuance are zero, the LP should deploy
+    ///         with full tick range (minUsable to maxUsable).
+    function test_ExtremePrice_ZeroCashOutAndZeroIssuance_FullRange() public {
+        uint256 fullRangeProject = 50;
+        _setupProject(fullRangeProject);
+
+        // Zero surplus → cashOutRate = 0
+        store.setSurplus(fullRangeProject, 0);
+        // Zero weight → issuanceRate = 0
+        controller.setWeight(fullRangeProject, 0);
+        controller.setFirstWeight(fullRangeProject, 0);
+
+        _accumulateTokensForProject(fullRangeProject, 500e18);
+
+        // With zero surplus, the position is 100% single-sided project tokens.
+        // The mock PositionManager computes zero liquidity for single-sided amounts,
+        // causing deployPool to revert with ZeroLiquidity (same as test 10 above).
+        // The key assertion: it does NOT revert with InvalidTick or InvalidSqrtPrice.
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSignature("JBUniswapV4LPSplitHook_ZeroLiquidity()"));
+        hook.deployPool(fullRangeProject, address(terminalToken), 0);
+    }
+
+    // -----------------------------------------------------------------------
     // 11. Deploy with very high surplus (extreme cash out rate)
     // -----------------------------------------------------------------------
 
