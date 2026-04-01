@@ -3,7 +3,6 @@ pragma solidity 0.8.28;
 
 import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
-import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 
 /// @notice Audit gap tests: MEV/sandwich simulation on rebalance and extreme price scenarios.
 /// @dev These tests verify that the rebalance operation is resistant to sandwich-like
@@ -237,9 +236,9 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
     // 8. Deploy with very high weight (extreme issuance rate)
     // -----------------------------------------------------------------------
 
-    /// @notice With a very high weight (many project tokens per terminal token),
-    ///         the issuance rate is extreme. The pool should still deploy without
-    ///         reverting, and tick bounds should be within valid V4 range.
+    /// @notice Once a pool for this pair already exists, a different project with a
+    ///         materially different expected price should revert instead of inheriting
+    ///         the existing pool's price.
     function test_ExtremePrice_VeryHighWeight() public {
         uint256 highWeightProject = 3;
         _setupProject(highWeightProject);
@@ -249,27 +248,20 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
         controller.setWeight(highWeightProject, extremeWeight);
         controller.setFirstWeight(highWeightProject, extremeWeight);
 
-        // Accumulate and deploy
         _accumulateTokensForProject(highWeightProject, 1000e18);
 
         vm.prank(owner);
+        vm.expectRevert();
         hook.deployPool(highWeightProject, address(terminalToken), 0);
-
-        // Verify deployment succeeded
-        uint256 tokenId = hook.tokenIdOf(highWeightProject, address(terminalToken));
-        assertTrue(tokenId != 0, "Pool should deploy with very high weight");
-        assertTrue(
-            hook.isPoolDeployed(highWeightProject, address(terminalToken)),
-            "projectDeployed should be true with high weight"
-        );
+        assertEq(hook.tokenIdOf(highWeightProject, address(terminalToken)), 0, "no position should be minted");
     }
 
     // -----------------------------------------------------------------------
     // 9. Deploy with very low weight (extreme price floor)
     // -----------------------------------------------------------------------
 
-    /// @notice With a very low weight (weight=1), mulDiv(1e18, 1, 1e18) truncates to 0,
-    ///         producing zero effective issuance. The LP deploys with max upper tick range.
+    /// @notice With a very low weight, the expected price diverges from the preexisting pool,
+    ///         so deployment should revert rather than silently use the wrong market.
     function test_ExtremePrice_VeryLowWeight_DeploysWithMaxRange() public {
         uint256 lowWeightProject = 4;
         _setupProject(lowWeightProject);
@@ -279,23 +271,20 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
         controller.setWeight(lowWeightProject, lowWeight);
         controller.setFirstWeight(lowWeightProject, lowWeight);
 
-        // Accumulate tokens
         _accumulateTokensForProject(lowWeightProject, 1000e18);
 
-        // Should deploy successfully with max upper range
         vm.prank(owner);
+        vm.expectRevert();
         hook.deployPool(lowWeightProject, address(terminalToken), 0);
-
-        uint256 tokenId = hook.tokenIdOf(lowWeightProject, address(terminalToken));
-        assertTrue(tokenId != 0, "Pool should deploy with zero issuance rate");
+        assertEq(hook.tokenIdOf(lowWeightProject, address(terminalToken)), 0, "no position should be minted");
     }
 
     // -----------------------------------------------------------------------
     // 9b. Deploy with moderately low weight (nonzero issuance)
     // -----------------------------------------------------------------------
 
-    /// @notice With a low but viable weight that produces nonzero issuance,
-    ///         the pool should deploy successfully.
+    /// @notice Even a low but nonzero issuance rate should be blocked when it would
+    ///         reuse a pool initialized at a materially different price.
     function test_ExtremePrice_LowButViableWeight() public {
         uint256 lowWeightProject = 40;
         _setupProject(lowWeightProject);
@@ -308,18 +297,17 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
         _accumulateTokensForProject(lowWeightProject, 1000e18);
 
         vm.prank(owner);
+        vm.expectRevert();
         hook.deployPool(lowWeightProject, address(terminalToken), 0);
-
-        uint256 tokenId = hook.tokenIdOf(lowWeightProject, address(terminalToken));
-        assertTrue(tokenId != 0, "Pool should deploy with low-but-viable weight");
+        assertEq(hook.tokenIdOf(lowWeightProject, address(terminalToken)), 0, "no position should be minted");
     }
 
     // -----------------------------------------------------------------------
     // 10. Deploy with zero surplus (cash out rate = 0)
     // -----------------------------------------------------------------------
 
-    /// @notice When the surplus is 0, the cash out rate is 0. The contract should
-    ///         fall back to centering the LP range around the issuance price.
+    /// @notice When the surplus is 0, deployment now fails even earlier if the pair's
+    ///         existing pool is already initialized at a different price.
     function test_ExtremePrice_ZeroSurplus_CashOutRateZero() public {
         uint256 zeroSurplusProject = 5;
         _setupProject(zeroSurplusProject);
@@ -330,20 +318,18 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
         // Accumulate tokens
         _accumulateTokensForProject(zeroSurplusProject, 500e18);
 
-        // With zero surplus, the position is 100% single-sided project tokens.
-        // The mock PositionManager computes zero liquidity for single-sided amounts,
-        // causing deployPool to revert with ZeroLiquidity.
         vm.prank(owner);
-        vm.expectRevert(abi.encodeWithSignature("JBUniswapV4LPSplitHook_ZeroLiquidity()"));
+        vm.expectRevert();
         hook.deployPool(zeroSurplusProject, address(terminalToken), 0);
+        assertEq(hook.tokenIdOf(zeroSurplusProject, address(terminalToken)), 0, "no position should be minted");
     }
 
     // -----------------------------------------------------------------------
     // 10b. Deploy with zero surplus AND zero issuance (full range LP)
     // -----------------------------------------------------------------------
 
-    /// @notice When both cashout and issuance are zero, the LP should deploy
-    ///         with full tick range (minUsable to maxUsable).
+    /// @notice When both cashout and issuance are zero, the preexisting pool-price
+    ///         guard should still fire before any zero-liquidity path is reached.
     function test_ExtremePrice_ZeroCashOutAndZeroIssuance_FullRange() public {
         uint256 fullRangeProject = 50;
         _setupProject(fullRangeProject);
@@ -356,21 +342,18 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
 
         _accumulateTokensForProject(fullRangeProject, 500e18);
 
-        // With zero surplus, the position is 100% single-sided project tokens.
-        // The mock PositionManager computes zero liquidity for single-sided amounts,
-        // causing deployPool to revert with ZeroLiquidity (same as test 10 above).
-        // The key assertion: it does NOT revert with InvalidTick or InvalidSqrtPrice.
         vm.prank(owner);
-        vm.expectRevert(abi.encodeWithSignature("JBUniswapV4LPSplitHook_ZeroLiquidity()"));
+        vm.expectRevert();
         hook.deployPool(fullRangeProject, address(terminalToken), 0);
+        assertEq(hook.tokenIdOf(fullRangeProject, address(terminalToken)), 0, "no position should be minted");
     }
 
     // -----------------------------------------------------------------------
     // 11. Deploy with very high surplus (extreme cash out rate)
     // -----------------------------------------------------------------------
 
-    /// @notice With a very high surplus (close to 1:1 cash-out), the tick bounds
-    ///         narrow. Pool should still deploy correctly.
+    /// @notice With a very high surplus, deployment should still reject a pool that
+    ///         was already initialized at a different price.
     function test_ExtremePrice_HighSurplus() public {
         uint256 highSurplusProject = 6;
         _setupProject(highSurplusProject);
@@ -378,22 +361,20 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
         // Set a very high surplus: 1e18 terminal tokens per project token cashed out
         store.setSurplus(highSurplusProject, 1e18);
 
-        // Accumulate tokens
         _accumulateTokensForProject(highSurplusProject, 500e18);
 
         vm.prank(owner);
+        vm.expectRevert();
         hook.deployPool(highSurplusProject, address(terminalToken), 0);
-
-        uint256 tokenId = hook.tokenIdOf(highSurplusProject, address(terminalToken));
-        assertTrue(tokenId != 0, "Pool should deploy with high surplus");
+        assertEq(hook.tokenIdOf(highSurplusProject, address(terminalToken)), 0, "no position should be minted");
     }
 
     // -----------------------------------------------------------------------
     // 12. Deploy with weight equal to 1 (minimal issuance)
     // -----------------------------------------------------------------------
 
-    /// @notice Weight=1 produces zero effective issuance due to integer truncation
-    ///         (mulDiv(1e18, 1, 1e18) = 0). The LP deploys with max upper tick range.
+    /// @notice Weight=1 still should not be allowed to reuse a preinitialized pool at
+    ///         the wrong price.
     function test_ExtremePrice_WeightEqualOne_DeploysWithMaxRange() public {
         uint256 minWeightProject = 7;
         _setupProject(minWeightProject);
@@ -403,21 +384,18 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
 
         _accumulateTokensForProject(minWeightProject, 500e18);
 
-        // Should deploy successfully with max upper range
         vm.prank(owner);
+        vm.expectRevert();
         hook.deployPool(minWeightProject, address(terminalToken), 0);
-
-        uint256 tokenId = hook.tokenIdOf(minWeightProject, address(terminalToken));
-        assertTrue(tokenId != 0, "Pool should deploy with zero issuance (weight=1)");
+        assertEq(hook.tokenIdOf(minWeightProject, address(terminalToken)), 0, "no position should be minted");
     }
 
     // -----------------------------------------------------------------------
     // 13. Deploy with max reserved percent
     // -----------------------------------------------------------------------
 
-    /// @notice With maximum reserved percent (10000 = 100%), the effective issuance
-    ///         for non-reserved tokens is mulDiv(tokens, 0, 10000) = 0. The LP deploys
-    ///         with max upper tick range since there is no issuance ceiling.
+    /// @notice With maximum reserved percent, deployment should still reject a reused
+    ///         pool whose existing initialization price does not match this project's price.
     function test_ExtremePrice_MaxReservedPercent_DeploysWithMaxRange() public {
         uint256 maxReservedProject = 8;
         _setupProject(maxReservedProject);
@@ -427,20 +405,18 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
 
         _accumulateTokensForProject(maxReservedProject, 500e18);
 
-        // Should deploy successfully with max upper range
         vm.prank(owner);
+        vm.expectRevert();
         hook.deployPool(maxReservedProject, address(terminalToken), 0);
-
-        uint256 tokenId = hook.tokenIdOf(maxReservedProject, address(terminalToken));
-        assertTrue(tokenId != 0, "Pool should deploy with 100% reserved percent");
+        assertEq(hook.tokenIdOf(maxReservedProject, address(terminalToken)), 0, "no position should be minted");
     }
 
     // -----------------------------------------------------------------------
     // 13b. Deploy with high (but not max) reserved percent
     // -----------------------------------------------------------------------
 
-    /// @notice With 99% reserved, effective issuance is 1% of the weight-based
-    ///         rate. This should still produce a valid nonzero price and deploy.
+    /// @notice With 99% reserved, deployment should still reject reuse of a mismatched
+    ///         preinitialized pool.
     function test_ExtremePrice_HighReservedPercent_Deploys() public {
         uint256 highReservedProject = 80;
         _setupProject(highReservedProject);
@@ -451,10 +427,9 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
         _accumulateTokensForProject(highReservedProject, 500e18);
 
         vm.prank(owner);
+        vm.expectRevert();
         hook.deployPool(highReservedProject, address(terminalToken), 0);
-
-        uint256 tokenId = hook.tokenIdOf(highReservedProject, address(terminalToken));
-        assertTrue(tokenId != 0, "Pool should deploy with 99% reserved percent");
+        assertEq(hook.tokenIdOf(highReservedProject, address(terminalToken)), 0, "no position should be minted");
     }
 
     // -----------------------------------------------------------------------

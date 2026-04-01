@@ -396,10 +396,9 @@ contract LPSplitHookForkTest is Test {
     // ───────────────────────── Existing Pool (pre-initialized)
     // ─────────────
 
-    /// @notice When the pool was already initialized by another party (e.g. REVDeployer)
-    ///         at a different sqrtPrice than _computeInitialSqrtPrice would return,
-    ///         deployPool should still succeed by reading the pool's actual price via getSlot0.
-    function test_fork_deployPool_existingPool_addsLiquidity() public {
+    /// @notice When the pool was already initialized by another party at a different sqrtPrice,
+    ///         deployPool should revert instead of inheriting the external price.
+    function test_fork_deployPool_existingPoolAtUnexpectedPrice_reverts() public {
         // Build the same pool key the hook will use.
         address projToken = address(projectToken);
         Currency termCurrency = Currency.wrap(address(0)); // native ETH
@@ -427,25 +426,16 @@ contract LPSplitHookForkTest is Test {
         (uint160 sqrtPriceBefore,,,) = V4_POOL_MANAGER.getSlot0(poolId);
         assertEq(sqrtPriceBefore, externalSqrtPrice, "pool should be at external price");
 
-        // Now deploy via the hook — it should detect the existing pool and use its actual price.
+        // Now deploy via the hook — it should reject the existing mismatched price.
         vm.prank(multisig);
+        vm.expectRevert();
         hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
 
-        // Verify deployment succeeded.
-        assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should be deployed");
-        uint256 tokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
-        assertTrue(tokenId != 0, "should hold a position NFT");
-
-        // Verify position has liquidity.
-        uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
-        assertTrue(posLiq > 0, "position should have liquidity in existing pool");
-
-        // Verify the pool price didn't change (adding liquidity doesn't move the price).
+        assertFalse(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should remain undeployed");
+        assertEq(hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN), 0, "no position NFT should be minted");
         (uint160 sqrtPriceAfter,,,) = V4_POOL_MANAGER.getSlot0(poolId);
-        assertEq(sqrtPriceAfter, sqrtPriceBefore, "pool price should not change from liquidity add");
-
-        // Accumulated tokens should be cleared.
-        assertEq(hook.accumulatedProjectTokens(projectId), 0, "accumulated should be 0 after deploy");
+        assertEq(sqrtPriceAfter, sqrtPriceBefore, "existing pool price should remain unchanged");
+        assertEq(hook.accumulatedProjectTokens(projectId), 100_000e18, "accumulated tokens should remain untouched");
     }
 
     // ───────────────────────── Weight Decay Permissionless Deploy
