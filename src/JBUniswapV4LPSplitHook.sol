@@ -154,34 +154,52 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     // --------------------- public stored properties -------------------- //
     //*********************************************************************//
 
-    /// @notice ProjectID => Terminal token => Uniswap V4 PoolKey
-    mapping(uint256 projectId => mapping(address terminalToken => PoolKey)) public _poolKeys;
-
-    /// @notice ProjectID => Terminal token => PositionManager tokenId
-    mapping(uint256 projectId => mapping(address terminalToken => uint256 tokenId)) public tokenIdOf;
-
-    /// @notice ProjectID => Accumulated project token balance
+    /// @notice The accumulated project-token balance currently held for each project before its first pool deployment.
+    /// @dev `processSplitWith` accumulates project tokens here while the project is still in pre-deployment mode.
+    /// Once a pool is deployed for a project, the project permanently transitions out of this accumulation path.
+    /// The public getter accepts a `projectId` and returns that project's currently accumulated project-token balance.
     mapping(uint256 projectId => uint256 accumulatedProjectTokens) public accumulatedProjectTokens;
 
-    /// @notice ProjectID => Number of deployed pools for this project.
-    /// @dev This is intentionally capped at 1. `processSplitWith` only receives the project token and cannot tell
-    ///      which terminal token a reserved-token distribution is intended for, so one deployment permanently flips
-    ///      the project from accumulation to burn mode.
-    mapping(uint256 projectId => uint256 count) public deployedPoolCount;
-
-    /// @notice ProjectID => Fee tokens claimable by that project
-    mapping(uint256 projectId => uint256 claimableFeeTokens) public claimableFeeTokens;
-
-    /// @notice ProjectID => Fee token contract currently backing `claimableFeeTokens`.
-    mapping(uint256 projectId => address token) public claimableFeeTokenOf;
-
-    /// @notice ProjectID => Fee token credits (not ERC-20) claimable by that project.
-    /// @dev Accumulated when terminal.pay() mints credits (fee project has no ERC-20 deployed).
-    /// Claimed via controller.transferCreditsFrom().
+    /// @notice The fee-project credits, rather than ERC-20s, currently claimable by each project.
+    /// @dev These credits accrue when fee routing reaches `terminal.pay()` while the fee project has no ERC-20.
+    /// They are later claimed through `controller.transferCreditsFrom()`.
+    /// The public getter accepts a `projectId` and returns that project's currently claimable fee-credit balance.
     mapping(uint256 projectId => uint256 claimableFeeCredits) public claimableFeeCredits;
 
-    /// @notice ProjectID => The weight of the ruleset when the hook first started accumulating tokens.
+    /// @notice The fee-project ERC-20 currently backing each project's `claimableFeeTokens` balance.
+    /// @dev When fee routing mints ERC-20s instead of credits, the token address is recorded here alongside the
+    /// amount in `claimableFeeTokens` so claim processing can transfer the correct asset later.
+    /// The public getter accepts a `projectId` and returns the ERC-20 currently backing that project's claim.
+    mapping(uint256 projectId => address claimToken) public claimableFeeTokenOf;
+
+    /// @notice The amount of fee-project ERC-20 tokens claimable by each project.
+    /// @dev This balance is denominated in the token stored in `claimableFeeTokenOf[projectId]`.
+    /// The public getter accepts a `projectId` and returns that project's currently claimable fee-token balance.
+    mapping(uint256 projectId => uint256 claimableFeeTokens) public claimableFeeTokens;
+
+    /// @notice Whether each project has already deployed its single supported Uniswap V4 pool.
+    /// @dev This is a boolean because the hook intentionally supports only one deployed terminal-token pool per
+    /// project. `processSplitWith` only receives project tokens, so once a pool exists the project permanently flips
+    /// from accumulation mode into burn-and-route mode.
+    /// The public getter accepts a `projectId` and returns whether that project has already deployed its pool.
+    mapping(uint256 projectId => bool hasDeployedPool) public hasDeployedPool;
+
+    /// @notice The ruleset weight recorded when the hook first starts accumulating project tokens for each project.
+    /// @dev This snapshot is later used to decide whether permissionless deployment is allowed after sufficient weight
+    /// decay from the original accumulation-era ruleset.
+    /// The public getter accepts a `projectId` and returns the first accumulation-era ruleset weight for that project.
     mapping(uint256 projectId => uint256 weight) public initialWeightOf;
+
+    /// @notice The Uniswap V4 pool key configured for each project and terminal-token pair.
+    /// @dev A project can only deploy one terminal-token pool, but the pool key still needs the terminal token as part
+    /// of the lookup because deployment-time and fee-routing logic are keyed by that pair.
+    /// The public getter accepts a `projectId` and `terminalToken` and returns the configured pool key for that pair.
+    mapping(uint256 projectId => mapping(address terminalToken => PoolKey)) public poolKeysOf;
+
+    /// @notice The Uniswap V4 PositionManager token ID for each deployed project and terminal-token pair.
+    /// @dev This is zero before deployment and nonzero after the first successful position mint.
+    /// The public getter accepts a `projectId` and `terminalToken` and returns that pair's LP position token ID.
+    mapping(uint256 projectId => mapping(address terminalToken => uint256 tokenId)) public tokenIdOf;
 
     /// @notice Whether this clone instance has been initialized.
     bool public initialized;
@@ -282,7 +300,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Get the PoolKey for a deployed project/terminal token pair
     function poolKeyOf(uint256 projectId, address terminalToken) public view returns (PoolKey memory key) {
-        return _poolKeys[projectId][terminalToken];
+        return poolKeysOf[projectId][terminalToken];
     }
 
     //*********************************************************************//
@@ -557,10 +575,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     // --------------------- external transactions ----------------------- //
     //*********************************************************************//
 
-    /// @notice Claim fee tokens for a beneficiary.
-    /// @dev Requires SET_BUYBACK_POOL permission from the project owner.
-    /// @dev Claims both ERC-20 fee tokens and credit-based fee tokens independently. Each path uses
-    /// try-catch so a failure in one does not block the other. Credits accumulate when the fee project has no ERC-20.
+    /// @notice Claims accumulated fee proceeds for `projectId` and sends them to `beneficiary`.
+    /// @dev Requires `SET_BUYBACK_POOL` permission from the project's owner.
+    /// @dev ERC-20 fee tokens are claimed first, followed by any fee credits that were accrued while the fee project
+    /// had no ERC-20. A revert in either transfer path reverts the whole claim so bookkeeping stays in sync with the
+    /// underlying token or credit movement.
+    /// @param projectId The project whose accumulated fee proceeds are being claimed.
+    /// @param beneficiary The address that should receive any claimed fee proceeds.
     function claimFeeTokensFor(uint256 projectId, address beneficiary) external {
         _requirePermissionFrom({
             account: IJBDirectory(DIRECTORY).PROJECTS().ownerOf(projectId),
@@ -568,55 +589,49 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             permissionId: JBPermissionIds.SET_BUYBACK_POOL
         });
 
-        // Claim ERC-20 fee tokens (if any). Wrapped in try-catch so a reverting ERC-20
-        // transfer does not block a valid credit claim, and vice versa.
         uint256 tokenAmount = claimableFeeTokens[projectId];
         if (tokenAmount > 0) {
-            try this._claimFeeTokens(projectId, beneficiary, tokenAmount) {
-            // Success.
-            }
-                catch {}
+            _claimFeeTokens({projectId: projectId, beneficiary: beneficiary, tokenAmount: tokenAmount});
         }
 
-        // Claim credit-based fee tokens (if any). Independent try-catch so a reverting
-        // credit transfer does not block a valid ERC-20 claim.
         uint256 creditAmount = claimableFeeCredits[projectId];
         if (creditAmount > 0) {
-            // Execute the credit transfer in a separate frame so a failed controller call
-            // fully reverts the provisional state change while still allowing this function
-            // to continue and emit ERC-20 claim success.
-            try this._claimFeeCredits(projectId, beneficiary, creditAmount) {
-            // Success — creditAmount stays as-is for the event.
-            }
-            catch {
-                creditAmount = 0;
-            }
+            _claimFeeCredits({projectId: projectId, beneficiary: beneficiary, creditAmount: creditAmount});
         }
     }
 
-    /// @notice Claims ERC-20 fee tokens for a project.
-    /// @dev Must be called through `this` so failures revert only this subcall and preserve the caller frame.
-    function _claimFeeTokens(uint256 projectId, address beneficiary, uint256 tokenAmount) external {
-        if (msg.sender != address(this)) revert JBUniswapV4LPSplitHook_UnauthorizedCaller();
-
+    /// @notice Claims ERC-20 fee tokens that have accrued for `projectId`.
+    /// @dev State is cleared before the transfer so any revert from the ERC-20 send restores both bookkeeping and the
+    /// event in the same frame.
+    /// @param projectId The project whose fee-token claim is being processed.
+    /// @param beneficiary The address that should receive the claimed ERC-20 fee tokens.
+    /// @param tokenAmount The number of ERC-20 fee tokens to transfer.
+    function _claimFeeTokens(uint256 projectId, address beneficiary, uint256 tokenAmount) internal {
+        // Snapshot the token currently backing this project's fee claim before clearing storage.
         address feeProjectToken = claimableFeeTokenOf[projectId];
 
+        // Clear the project's claim state first so a reverting transfer restores both storage and logs atomically.
         claimableFeeTokens[projectId] = 0;
         claimableFeeTokenOf[projectId] = address(0);
+        // Release the reserved-balance accounting for the tokens that are about to leave the hook.
         _totalOutstandingFeeTokenClaims[feeProjectToken] -= tokenAmount;
 
+        // Emit the claim after bookkeeping so the event only survives if the downstream transfer does too.
         emit FeeTokensClaimed(projectId, beneficiary, tokenAmount);
+        // slither-disable-next-line reentrancy-no-eth,reentrancy-events
         IERC20(feeProjectToken).safeTransfer(beneficiary, tokenAmount);
     }
 
-    /// @notice Claims credit-based fee accruals for a project.
-    /// @dev Must be called through `this` so failures revert only this subcall and preserve the caller frame.
-    function _claimFeeCredits(uint256 projectId, address beneficiary, uint256 creditAmount) external {
-        if (msg.sender != address(this)) revert JBUniswapV4LPSplitHook_UnauthorizedCaller();
-
+    /// @notice Claims fee proceeds that were accrued as fee-project credits for `projectId`.
+    /// @dev Credits are zeroed before the controller call so a revert restores both the credit balance and the event.
+    /// @param projectId The project whose fee-credit claim is being processed.
+    /// @param beneficiary The address that should receive the claimed fee-project credits.
+    /// @param creditAmount The number of fee-project credits to transfer.
+    function _claimFeeCredits(uint256 projectId, address beneficiary, uint256 creditAmount) internal {
         claimableFeeCredits[projectId] = 0;
 
         emit FeeTokensClaimed(projectId, beneficiary, creditAmount);
+        // slither-disable-next-line reentrancy-no-eth,reentrancy-events
         IJBController(address(IJBDirectory(DIRECTORY).controllerOf(FEE_PROJECT_ID)))
             .transferCreditsFrom({
                 holder: address(this), projectId: FEE_PROJECT_ID, recipient: beneficiary, creditCount: creditAmount
@@ -630,7 +645,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         if (tokenId == 0) revert JBUniswapV4LPSplitHook_InvalidStageForAction();
 
         address projectToken = address(IJBTokens(TOKENS).tokenOf(projectId));
-        PoolKey memory key = _poolKeys[projectId][terminalToken];
+        PoolKey memory key = poolKeysOf[projectId][terminalToken];
 
         // Track balances before fee collection
         uint256 bal0Before = _currencyBalance(key.currency0);
@@ -688,7 +703,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
 
         if (tokenIdOf[projectId][terminalToken] != 0) revert JBUniswapV4LPSplitHook_PoolAlreadyDeployed();
-        if (deployedPoolCount[projectId] != 0) revert JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported();
+        if (hasDeployedPool[projectId]) revert JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported();
 
         address projectToken = address(IJBTokens(TOKENS).tokenOf(projectId));
         uint256 projectTokenBalance = accumulatedProjectTokens[projectId];
@@ -701,7 +716,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         // Flip the project into post-deploy burn mode before any external calls so reentrancy cannot
         // observe the project as still being in accumulation mode.
-        deployedPoolCount[projectId]++;
+        hasDeployedPool[projectId] = true;
 
         _deployPoolAndAddLiquidity({
             projectId: projectId,
@@ -710,7 +725,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             minCashOutReturn: minCashOutReturn
         });
 
-        emit ProjectDeployed(projectId, terminalToken, PoolId.unwrap(_poolKeys[projectId][terminalToken].toId()));
+        emit ProjectDeployed(projectId, terminalToken, PoolId.unwrap(poolKeysOf[projectId][terminalToken].toId()));
     }
 
     /// @notice IJBSplitHook: called by JuiceboxV4 controller when sending funds to designated split hook
@@ -726,7 +741,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         address projectToken = context.token;
 
-        if (deployedPoolCount[context.projectId] == 0) {
+        if (!hasDeployedPool[context.projectId]) {
             // Record the initial weight on first accumulation.
             if (initialWeightOf[context.projectId] == 0) {
                 (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(context.projectId);
@@ -776,7 +791,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         if (tokenId == 0) revert JBUniswapV4LPSplitHook_InvalidStageForAction();
 
         address projectToken = address(IJBTokens(TOKENS).tokenOf(projectId));
-        PoolKey memory key = _poolKeys[projectId][terminalToken];
+        PoolKey memory key = poolKeysOf[projectId][terminalToken];
 
         _collectAndRouteFees({
             projectId: projectId, projectToken: projectToken, terminalToken: terminalToken, tokenId: tokenId, key: key
@@ -836,7 +851,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         // Read the pool's actual current price. The pool may have been initialized by another party
         // (e.g. REVDeployer) at a different price than _computeInitialSqrtPrice would return.
-        PoolKey memory key = _poolKeys[projectId][terminalToken];
+        PoolKey memory key = poolKeysOf[projectId][terminalToken];
         (uint160 sqrtPriceInit,,,) = POOL_MANAGER.getSlot0(key.toId());
 
         uint256 cashOutAmount = _computeOptimalCashOutAmount({
@@ -1265,6 +1280,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint160 sqrtPriceX96 =
             _computeInitialSqrtPrice({projectId: projectId, terminalToken: terminalToken, projectToken: projectToken});
 
+        // If a pool was already initialized, only accept it when it matches the price this deployment expects.
+        // Otherwise, the first initializer chose the starting price and this project would inherit a skewed market.
         (uint160 existingSqrtPriceX96,,,) = POOL_MANAGER.getSlot0(key.toId());
         if (existingSqrtPriceX96 != 0 && existingSqrtPriceX96 != sqrtPriceX96) {
             revert JBUniswapV4LPSplitHook_PoolInitializedAtUnexpectedPrice(sqrtPriceX96, existingSqrtPriceX96);
@@ -1274,7 +1291,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         POSITION_MANAGER.initializePool({key: key, sqrtPriceX96: sqrtPriceX96});
 
         // Store the pool key
-        _poolKeys[projectId][terminalToken] = key;
+        poolKeysOf[projectId][terminalToken] = key;
     }
 
     /// @notice Get balance of a currency held by this contract
@@ -1647,10 +1664,16 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         emit LPFeesRouted(projectId, terminalToken, amount, feeAmount, remainingAmount, beneficiaryTokenCount);
     }
 
-    /// @notice Returns the amount of a token balance that should be treated as reserved.
-    /// @dev While a fee route is in flight for `token`, reentrant code must treat the full current balance as
-    /// unavailable until the eventual claim bookkeeping is finalized.
+    /// @notice Returns the portion of this contract's balance of `token` that is not currently free to reuse.
+    /// @dev When no fee route is in flight, the reserved amount is the total ERC-20 balance already promised to
+    /// project beneficiaries through `claimableFeeTokens`.
+    /// @dev While fee routing for `token` is mid-flight, reentrant code must conservatively treat the full current
+    /// balance as reserved because the final claim bookkeeping has not been written yet.
+    /// @param token The ERC-20 token whose reserved balance should be returned.
+    /// @return reservedBalance The amount of `token` balance that callers must treat as unavailable.
     function _reservedTokenBalance(address token) internal view returns (uint256) {
+        // During fee routing, the contract may already be holding freshly minted fee tokens that have not yet been
+        // reflected in `_totalOutstandingFeeTokenClaims`. Treat the whole balance as reserved until routing finishes.
         if (_inflightFeeRoutingCount[token] != 0) return IERC20(token).balanceOf(address(this));
         return _totalOutstandingFeeTokenClaims[token];
     }
