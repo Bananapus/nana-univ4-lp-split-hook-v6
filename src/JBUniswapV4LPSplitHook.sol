@@ -623,7 +623,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // Emit the claim after bookkeeping so the event only survives if the downstream transfer does too.
         emit FeeTokensClaimed(projectId, beneficiary, tokenAmount);
         // slither-disable-next-line reentrancy-no-eth,reentrancy-events
-        IERC20(feeProjectToken).safeTransfer(beneficiary, tokenAmount);
+        IERC20(feeProjectToken).safeTransfer({to: beneficiary, value: tokenAmount});
     }
 
     /// @notice Claims fee proceeds that were accrued as fee-project credits for `projectId`.
@@ -636,25 +636,19 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // Optimistically clear the credit claim before the external call so reentrant reads cannot double-spend it.
         claimableFeeCredits[projectId] = 0;
 
-        // Use a low-level call so a paused or reverting fee-project controller does not unwind a successful ERC-20
-        // claim that already happened earlier in this function.
-        // slither-disable-next-line low-level-calls
-        (bool success,) = address(IJBDirectory(DIRECTORY).controllerOf(FEE_PROJECT_ID))
-            .call(
-                abi.encodeCall(
-                    IJBController.transferCreditsFrom, (address(this), FEE_PROJECT_ID, beneficiary, creditAmount)
-                )
-            );
-
-        if (!success) {
+        // Try the credit transfer directly. If the fee-project controller is paused or misconfigured, restore the
+        // pending credits instead of unwinding an ERC-20 fee-token claim that already succeeded earlier in the frame.
+        try IJBController(address(IJBDirectory(DIRECTORY).controllerOf(FEE_PROJECT_ID)))
+            .transferCreditsFrom({
+                holder: address(this), projectId: FEE_PROJECT_ID, recipient: beneficiary, creditCount: creditAmount
+            }) {
+            // slither-disable-next-line reentrancy-events
+            emit FeeTokensClaimed(projectId, beneficiary, creditAmount);
+        } catch {
             // Restore the pending credits so the project owner can retry once the fee-project controller is usable.
             // slither-disable-next-line reentrancy-no-eth,reentrancy-events,reentrancy-benign
             claimableFeeCredits[projectId] = creditAmount;
-            return;
         }
-
-        // slither-disable-next-line reentrancy-events
-        emit FeeTokensClaimed(projectId, beneficiary, creditAmount);
     }
 
     /// @notice Collect LP fees and route them back to the project
@@ -1600,7 +1594,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 // fee tokens in _burnReceivedTokens or _handleLeftoverTokens.
                 address feeProjectToken = address(IJBTokens(TOKENS).tokenOf(FEE_PROJECT_ID));
 
+                // If this project already has unclaimed ERC-20 fee tokens, keep using that snapshotted token address.
+                // Otherwise a fee-project token migration could strand the earlier claim behind a new token contract.
                 address claimToken = claimableFeeTokenOf[projectId];
+                // Reject mixing outstanding claims across different fee-project ERC-20s in the same project bucket.
                 if (claimToken != address(0) && claimToken != feeProjectToken) {
                     revert JBUniswapV4LPSplitHook_UnclaimedFeeTokenChanged(claimToken, feeProjectToken);
                 }
