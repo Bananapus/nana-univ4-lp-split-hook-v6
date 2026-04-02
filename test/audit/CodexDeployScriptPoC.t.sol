@@ -13,7 +13,7 @@ contract CodexDeployScriptHarness is DeployScript {
 }
 
 contract CodexDeployScriptPoC is Test {
-    function test_getPoolManager_revertsOnOptimismSepoliaDespiteConfiguredSupport() public {
+    function test_getPoolManager_revertsOnUnsupportedOptimismSepolia() public {
         CodexDeployScriptHarness harness = new CodexDeployScriptHarness();
 
         vm.chainId(11_155_420);

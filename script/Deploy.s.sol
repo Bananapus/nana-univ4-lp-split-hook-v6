@@ -83,9 +83,6 @@ contract DeployScript is Script, Sphinx {
         } else if (block.chainid == 8453) {
             // Base Mainnet
             positionManager = IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e);
-        } else if (block.chainid == 11_155_420) {
-            // Optimism Sepolia
-            positionManager = IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e);
         } else if (block.chainid == 84_532) {
             // Base Sepolia
             positionManager = IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e);
