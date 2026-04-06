@@ -17,7 +17,7 @@ import {MockJBController} from "./mock/MockJBContracts.sol";
 /// @notice Combined controller + terminal that re-enters processSplitWith during cashOutTokensOf.
 /// @dev When the hook calls cashOutTokensOf during deployPool, this contract calls back into
 ///      processSplitWith. Since it IS the registered controller, the msg.sender check passes.
-///      The deployedPoolCount defense ensures re-entry routes to burn, not accumulation.
+///      The deployment flag ensures re-entry routes to burn, not accumulation.
 contract ReentrantControllerTerminal is MockJBController {
     JBUniswapV4LPSplitHook public hook;
     MockERC20 public _projectToken;
@@ -108,7 +108,7 @@ contract ReentrantControllerTerminal is MockJBController {
 
             // RE-ENTER: this contract IS the controller (registered in directory),
             // so the msg.sender == controller check passes.
-            // If deployedPoolCount defense works, this goes to burn path, not accumulation.
+            // If the deployment flag is already set, this goes to burn path instead of accumulation.
             try hook.processSplitWith(ctx) {
                 reentrancySucceeded = true;
             } catch {
@@ -243,7 +243,7 @@ contract ReentrantFeeTerminal {
 // ═══════════════════════════════════════════════════════════════════════
 
 /// @notice Reentrancy safety tests for JBUniswapV4LPSplitHook.
-/// @dev Proves that state ordering (deployedPoolCount++ before external calls),
+/// @dev Proves that state ordering (`hasDeployedPool = true` before external calls),
 ///      access controls (SET_BUYBACK_POOL permission), and fee collection idempotency
 ///      prevent reentrancy from causing double-accumulation, unauthorized rebalancing,
 ///      or double-fee-collection.
@@ -253,7 +253,7 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
     // ─────────────────────────────────────────────────────────────────────
 
     /// @notice A malicious controller+terminal re-enters processSplitWith during deployPool's
-    ///         cashOutTokensOf call. The re-entry hits deployedPoolCount > 0 and routes to the
+    ///         cashOutTokensOf call. The re-entry hits `hasDeployedPool == true` and routes to the
     ///         burn path instead of accumulating. No double-accumulation.
     function test_reentrancy_deployPool_cannotDoubleAccumulate() public {
         // 1. Create malicious controller+terminal
@@ -294,11 +294,11 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
         // 6. Verify re-entry was attempted and succeeded (via burn path)
         assertTrue(malicious.reentrancyAttempted(), "Re-entry should have been attempted during cashOutTokensOf");
         assertTrue(
-            malicious.reentrancySucceeded(), "Re-entry should succeed (burn path, not revert) - deployedPoolCount > 0"
+            malicious.reentrancySucceeded(), "Re-entry should succeed (burn path, not revert) once deployment is set"
         );
 
-        // 7. Verify: accumulatedProjectTokens was NOT inflated by re-entry
-        // During re-entry, deployedPoolCount > 0 routes to burn path.
+        // 7. Verify: accumulatedProjectTokens was NOT inflated by re-entry.
+        // During re-entry, `hasDeployedPool` is already true, so the hook routes to the burn path.
         // After deployPool completes, accumulatedProjectTokens is cleared to 0.
         assertEq(
             hook.accumulatedProjectTokens(PROJECT_ID),

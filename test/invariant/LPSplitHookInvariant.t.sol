@@ -104,7 +104,7 @@ contract LPSplitHookHandler is Test {
         amount = bound(amount, 0, 1e30);
 
         // Skip if pool already deployed for this project (processSplitWith would burn, not accumulate).
-        if (hook.deployedPoolCount(projectId) > 0) return;
+        if (hook.hasDeployedPool(projectId)) return;
 
         // Mint tokens to the hook (simulates controller sending reserved tokens).
         projectToken.mint(address(hook), amount);
@@ -139,7 +139,7 @@ contract LPSplitHookHandler is Test {
     function accumulateZero(uint256 projectIdSeed) external {
         uint256 projectId = bound(projectIdSeed, 1, MAX_PROJECT_ID);
 
-        if (hook.deployedPoolCount(projectId) > 0) return;
+        if (hook.hasDeployedPool(projectId)) return;
 
         JBSplitHookContext memory context = JBSplitHookContext({
             token: address(projectToken),
@@ -174,7 +174,7 @@ contract LPSplitHookHandler is Test {
         uint256 projectId = bound(projectIdSeed, 1, MAX_PROJECT_ID);
 
         // Guard: only run if pool is deployed for this project.
-        if (hook.deployedPoolCount(projectId) == 0) return;
+        if (!hook.hasDeployedPool(projectId)) return;
 
         uint256 tokenId = hook.tokenIdOf(projectId, address(terminalToken));
         if (tokenId == 0) return;
@@ -219,7 +219,7 @@ contract LPSplitHookHandler is Test {
         uint256 projectId = bound(projectIdSeed, 1, MAX_PROJECT_ID);
 
         // Guard: only run if pool is deployed for this project.
-        if (hook.deployedPoolCount(projectId) == 0) return;
+        if (!hook.hasDeployedPool(projectId)) return;
 
         uint256 tokenId = hook.tokenIdOf(projectId, address(terminalToken));
         if (tokenId == 0) return;
@@ -253,7 +253,7 @@ contract LPSplitHookHandler is Test {
 /// @notice Invariant tests for JBUniswapV4LPSplitHook accounting properties.
 /// @dev Verifies:
 ///   1. accumulatedProjectTokens[projectId] <= actual ERC20 balance held by the hook
-///   2. tokenIdOf[projectId][terminalToken] != 0 iff deployedPoolCount[projectId] > 0
+///   2. tokenIdOf[projectId][terminalToken] != 0 iff hasDeployedPool[projectId] is true
 ///      (for the terminal tokens we track)
 ///   3. accumulatedProjectTokens[projectId] == sum of all amounts passed to processSplitWith
 ///      (cross-checked against ghost variable)
@@ -414,27 +414,27 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Invariant 2: tokenIdOf consistency with deployedPoolCount
+    // Invariant 2: tokenIdOf consistency with hasDeployedPool
     // ═══════════════════════════════════════════════════════════════════════
 
     /// @notice If tokenIdOf[projectId][terminalToken] is nonzero, then
-    ///         deployedPoolCount[projectId] must be > 0.
+    ///         hasDeployedPool[projectId] must be true.
     /// @dev In the accumulation-only handler, no pools are deployed, so both should
     ///      always be zero. This invariant verifies that processSplitWith alone never
     ///      sets tokenIdOf (which would indicate a critical state corruption).
     function invariant_tokenIdConsistentWithDeployedCount() public view {
         for (uint256 i = 1; i <= handler.MAX_PROJECT_ID(); i++) {
             uint256 tokenId = hook.tokenIdOf(i, address(terminalToken));
-            uint256 poolCount = hook.deployedPoolCount(i);
+            bool poolDeployed = hook.hasDeployedPool(i);
 
             if (tokenId != 0) {
-                assertGt(poolCount, 0, "INVARIANT VIOLATED: tokenIdOf nonzero but deployedPoolCount is zero");
+                assertTrue(poolDeployed, "INVARIANT VIOLATED: tokenIdOf nonzero but hasDeployedPool is false");
             }
 
             // Reverse direction: if no pool deployed for this project, tokenId must be zero
             // (for the terminal tokens we track).
-            if (poolCount == 0) {
-                assertEq(tokenId, 0, "INVARIANT VIOLATED: deployedPoolCount is zero but tokenIdOf is nonzero");
+            if (!poolDeployed) {
+                assertEq(tokenId, 0, "INVARIANT VIOLATED: hasDeployedPool is false but tokenIdOf is nonzero");
             }
         }
     }
@@ -450,7 +450,7 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
     function invariant_accumulatedMatchesMinted() public view {
         for (uint256 i = 1; i <= handler.MAX_PROJECT_ID(); i++) {
             // Only check projects that haven't had pools deployed (handler skips those).
-            if (hook.deployedPoolCount(i) == 0) {
+            if (!hook.hasDeployedPool(i)) {
                 assertEq(
                     hook.accumulatedProjectTokens(i),
                     handler.totalMintedToHook(i),
@@ -501,7 +501,7 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
     // ═══════════════════════════════════════════════════════════════════════
 
     /// @notice tokenIdOf[projectId][terminalToken] must be nonzero only when
-    ///         deployedPoolCount[projectId] > 0. This is a strengthened version of
+    ///         hasDeployedPool[projectId] is true. This is a strengthened version of
     ///         invariant 2 that also accounts for rebalanceLiquidity, which replaces
     ///         tokenIdOf but must never zero it out.
     /// @dev rebalanceLiquidity reverts with InsufficientLiquidity rather than storing
@@ -509,16 +509,16 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
     function invariant_positionLifecycleConsistency() public view {
         for (uint256 i = 1; i <= handler.MAX_PROJECT_ID(); i++) {
             uint256 tokenId = hook.tokenIdOf(i, address(terminalToken));
-            uint256 poolCount = hook.deployedPoolCount(i);
+            bool poolDeployed = hook.hasDeployedPool(i);
 
             // If a pool is deployed, tokenIdOf should be nonzero (rebalance preserves this).
-            if (poolCount > 0) {
-                assertGt(tokenId, 0, "INVARIANT VIOLATED: deployedPoolCount > 0 but tokenIdOf is zero");
+            if (poolDeployed) {
+                assertGt(tokenId, 0, "INVARIANT VIOLATED: hasDeployedPool is true but tokenIdOf is zero");
             }
 
             // If no pool deployed, tokenIdOf must be zero.
-            if (poolCount == 0) {
-                assertEq(tokenId, 0, "INVARIANT VIOLATED: deployedPoolCount is zero but tokenIdOf is nonzero");
+            if (!poolDeployed) {
+                assertEq(tokenId, 0, "INVARIANT VIOLATED: hasDeployedPool is false but tokenIdOf is nonzero");
             }
         }
     }

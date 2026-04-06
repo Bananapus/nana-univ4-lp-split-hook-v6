@@ -202,17 +202,17 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         );
     }
 
-    /// @notice deployedPoolCount increments per deployment.
-    function test_M2_deployedPoolCount_increments() public view {
+    /// @notice hasDeployedPool flips to true after deployment.
+    function test_M2_hasDeployedPool_flipsTrue() public view {
         // After the setUp, one pool is deployed for PROJECT_ID
-        assertEq(hook.deployedPoolCount(PROJECT_ID), 1, "deployedPoolCount should be 1 after first deploy");
+        assertTrue(hook.hasDeployedPool(PROJECT_ID), "hasDeployedPool should be true after first deploy");
     }
 
-    /// @notice processSplitWith uses deployedPoolCount to decide accumulate vs burn.
-    ///         After deploying a pool, new tokens are burned (count > 0).
+    /// @notice processSplitWith uses hasDeployedPool to decide accumulate vs burn.
+    ///         After deploying a pool, new tokens are burned once the flag is true.
     function test_M2_processSplitWith_burnsAfterDeploy() public {
-        // PROJECT_ID has a deployed pool (deployedPoolCount == 1)
-        assertEq(hook.deployedPoolCount(PROJECT_ID), 1, "should have 1 deployed pool");
+        // PROJECT_ID has a deployed pool.
+        assertTrue(hook.hasDeployedPool(PROJECT_ID), "should have a deployed pool");
 
         uint256 burnCountBefore = controller.burnCallCount();
 
@@ -238,7 +238,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         jbProjects.setOwner(freshProjectId, owner);
         jbTokens.setToken(freshProjectId, address(projectToken));
 
-        assertEq(hook.deployedPoolCount(freshProjectId), 0, "No pools deployed for fresh project");
+        assertFalse(hook.hasDeployedPool(freshProjectId), "No pools deployed for fresh project");
 
         // Accumulate tokens
         uint256 amount = 100e18;

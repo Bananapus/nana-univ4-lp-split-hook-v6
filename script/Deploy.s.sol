@@ -42,7 +42,7 @@ contract DeployScript is Script, Sphinx {
     function configureSphinx() public override {
         sphinxConfig.projectName = "nana-univ4-lp-split-hook-v6";
         sphinxConfig.mainnets = ["ethereum", "optimism", "base", "arbitrum"];
-        sphinxConfig.testnets = ["ethereum_sepolia", "optimism_sepolia", "base_sepolia", "arbitrum_sepolia"];
+        sphinxConfig.testnets = ["ethereum_sepolia", "base_sepolia", "arbitrum_sepolia"];
     }
 
     function run() public {
@@ -83,9 +83,6 @@ contract DeployScript is Script, Sphinx {
         } else if (block.chainid == 8453) {
             // Base Mainnet
             positionManager = IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e);
-        } else if (block.chainid == 11_155_420) {
-            // Optimism Sepolia
-            positionManager = IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e);
         } else if (block.chainid == 84_532) {
             // Base Sepolia
             positionManager = IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e);
@@ -115,26 +112,27 @@ contract DeployScript is Script, Sphinx {
             router.hook
         );
 
-        if (!_isDeployed(hookSalt, type(JBUniswapV4LPSplitHook).creationCode, hookArgs)) {
-            new JBUniswapV4LPSplitHook{salt: hookSalt}(
-                address(core.directory),
-                core.permissions,
-                address(core.tokens),
-                poolManager,
-                positionManager,
-                IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
-                router.hook
+        address hookImplAddress = vm.computeCreate2Address({
+            salt: hookSalt,
+            initCodeHash: keccak256(abi.encodePacked(type(JBUniswapV4LPSplitHook).creationCode, hookArgs))
+        });
+        bool hookAlreadyDeployed = hookImplAddress.code.length != 0;
+        if (!hookAlreadyDeployed) {
+            hookImplAddress = address(
+                new JBUniswapV4LPSplitHook{salt: hookSalt}(
+                    address(core.directory),
+                    core.permissions,
+                    address(core.tokens),
+                    poolManager,
+                    positionManager,
+                    IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
+                    router.hook
+                )
             );
         }
 
-        // Resolve the hook address (deployed above or already existing) for the deployer constructor.
-        JBUniswapV4LPSplitHook hookImpl = JBUniswapV4LPSplitHook(
-            payable(vm.computeCreate2Address({
-                    salt: hookSalt,
-                    initCodeHash: keccak256(abi.encodePacked(type(JBUniswapV4LPSplitHook).creationCode, hookArgs)),
-                    deployer: address(0x4e59b44847b379578588920cA78FbF26c0B4956C)
-                }))
-        );
+        // Thread the actual implementation address from the active deployment path into the deployer constructor.
+        JBUniswapV4LPSplitHook hookImpl = JBUniswapV4LPSplitHook(payable(hookImplAddress));
 
         if (!_isDeployed(
                 deployerSalt,

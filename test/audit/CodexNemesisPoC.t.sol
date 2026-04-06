@@ -107,9 +107,13 @@ contract BurningController {
 }
 
 contract MintThenReenterFeeTerminal {
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
     JBUniswapV4LPSplitHook public immutable hook;
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
     MockERC20 public immutable feeProjectToken;
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
     uint256 public immutable reentryProjectId;
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
     address public immutable terminalToken;
 
     bool internal _entered;
@@ -149,6 +153,7 @@ contract MintThenReenterFeeTerminal {
     }
 
     function accountingContextForTokenOf(uint256, address token) external pure returns (JBAccountingContext memory) {
+        // forge-lint: disable-next-line(unsafe-typecast)
         return JBAccountingContext({token: token, decimals: 18, currency: uint32(uint160(token))});
     }
 

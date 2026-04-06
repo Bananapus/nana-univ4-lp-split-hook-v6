@@ -50,6 +50,7 @@ This file focuses on the risks in turning reserved Juicebox tokens into a bounde
 - **LP fee extraction timing** -- Fees accrue per-swap in the V4 pool. A searcher who generates swap volume (e.g., wash trading) before calling `collectAndRouteLPFees` can accumulate fees to themselves (as an LP in the same pool range) at the cost of 1% per swap. Not directly extracting from the hook, but gaming the fee distribution.
 - **Atomic NFT position swap** -- The burn-then-mint in `rebalanceLiquidity` happens atomically within one transaction. No external actor can insert operations between the burn and mint. However, the fee collection step is a separate `modifyLiquidities` call from the burn step, creating two PoolManager unlocks. V4 hooks (ORACLE_HOOK) execute callbacks during each unlock, creating a theoretical reentrancy surface if the oracle hook is malicious.
 - **deployPool initial price manipulation** -- An attacker can pay into the project to inflate surplus, causing `_computeInitialSqrtPrice` to return a skewed midpoint. The 2.5% JB protocol fee on payments and the `minCashOutReturn` parameter limit the attack's profitability but do not eliminate it.
+- **Public pool pre-initialization before first LP mint.** The pool key is public before the hook deploys its first position. An outside actor can initialize the pool first. This is acceptable if the observed initialized price is still within the intended economic band between the Juicebox cash-out floor and issuance ceiling; otherwise deployment can be blocked until operators intentionally recover or redeploy.
 
 ---
 
@@ -97,9 +98,9 @@ This file focuses on the risks in turning reserved Juicebox tokens into a bounde
 - **Token conservation across rebalance** -- Total tokens (hook + PositionManager) should not increase after `rebalanceLiquidity`. Leftover project tokens are burned (deflationary). Leftover terminal tokens are returned to project balance. Verified in `TestAuditGaps.test_Rebalance_ConservesTokenBalances`.
 - **No value creation from rebalance** -- The hook cannot mint tokens or create surplus. Rebalance only redistributes existing tokens between the LP position and the project balance. An external observer should see: `position_value_after + leftovers_burned + leftovers_returned <= position_value_before + accrued_fees`.
 - **Fee routing completeness** -- For every `collectAndRouteLPFees` or rebalance fee collection: `feeAmount + remainingAmount == totalCollected`. The fee project receives `floor(total * FEE_PERCENT / BPS)`, the project receives the rest. Rounding error <= 1 wei per operation.
-- **`tokenIdOf` never zero for deployed projects** -- After `deployPool` sets `tokenIdOf != 0`, `rebalanceLiquidity` either updates it to a new nonzero value or reverts entirely. The invariant `tokenIdOf[projectId][terminalToken] != 0 iff deployedPoolCount[projectId] > 0` should always hold.
+- **`tokenIdOf` never zero for deployed projects** -- After `deployPool` sets `tokenIdOf != 0`, `rebalanceLiquidity` either updates it to a new nonzero value or reverts entirely. The invariant `tokenIdOf[projectId][terminalToken] != 0 iff hasDeployedPool[projectId]` should always hold.
 - **`accumulatedProjectTokens` cleared on deploy** -- After `_addUniswapLiquidity` succeeds, `accumulatedProjectTokens[projectId]` is set to 0. No path exists where tokens are deployed but the accumulator retains a nonzero balance.
-- **Cross-project isolation** -- `accumulatedProjectTokens`, `tokenIdOf`, `_poolKeys`, `claimableFeeTokens`, `claimableFeeCredits`, and `deployedPoolCount` are all keyed by `projectId`. Operations on one project must never read or write another project's state.
+- **Cross-project isolation** -- `accumulatedProjectTokens`, `tokenIdOf`, `poolKeysOf`, `claimableFeeTokens`, `claimableFeeCredits`, and `hasDeployedPool` are all keyed by `projectId`. Operations on one project must never read or write another project's state.
 - **Fee tokens match actual balance** -- `claimableFeeTokens[projectId]` should equal the actual fee project ERC-20 token balance attributable to that project. `claimableFeeCredits[projectId]` should equal the credit balance held by the hook for that project. In `claimFeeTokensFor`, each path (ERC-20 and credits) zeroes bookkeeping before the external call; on failure, bookkeeping is restored for retry. In `_routeFeesToProject`, `_totalOutstandingFeeTokenClaims` is pre-incremented before the `terminal.pay()` call and reconciled after, preventing reentrancy from seeing stale claims.
 - **Tick bounds always valid** -- `tickLower < tickUpper`, both aligned to TICK_SPACING (200), both within `[MIN_TICK + TICK_SPACING, MAX_TICK - TICK_SPACING]`. The sorting fix and clamp enforce this.
 - **One pool per (projectId, terminalToken)** -- `deployPool` reverts with `PoolAlreadyDeployed` if `tokenIdOf != 0`. No path creates a second pool for the same pair.
@@ -110,11 +111,11 @@ This file focuses on the risks in turning reserved Juicebox tokens into a bounde
 
 ### 8.1 Reentrancy trust boundary during `deployPool`
 
-`deployPool` writes `_poolKeys` and `tokenIdOf` before `deployedPoolCount` is incremented. During `_mintPosition`, external contracts (`POSITION_MANAGER`, `IJBMultiTerminal`) execute callbacks. If a compromised contract re-entered `processSplitWith`, tokens would be accumulated via `_accumulateTokens` and then lost when `accumulatedProjectTokens` is zeroed. Multiple guards make this a non-issue in practice:
+`deployPool` writes `poolKeysOf` and sets `hasDeployedPool = true` before the external position mint. During `_mintPosition`, external contracts (`POSITION_MANAGER`, `IJBMultiTerminal`) execute callbacks. If a compromised contract re-entered `processSplitWith`, tokens would be accumulated via `_accumulateTokens` and then lost when `accumulatedProjectTokens` is zeroed. Multiple guards make this a non-issue in practice:
 
 - The Juicebox security model treats `POSITION_MANAGER`, `IJBMultiTerminal`, and `IJBController` as trusted, non-malicious contracts.
 - The `processSplitWith` entry point is gated to `msg.sender == controllerOf(projectId)`, so only the JB controller can invoke it.
-- The `tokenIdOf != 0` guard prevents re-entering `deployPool` once the position is minted, and `deployedPoolCount == 0` routes to accumulation only before the first pool is deployed.
+- The `tokenIdOf != 0` guard prevents re-entering `deployPool` once the position is minted, and `hasDeployedPool == false` routes to accumulation only before the first pool is deployed.
 - The practical reentrancy surface requires a compromised core protocol contract, which is outside this hook's threat model.
 
 ### 8.2 Fee routing uses `minReturnedTokens: 0` (no slippage floor)
@@ -132,3 +133,7 @@ This file focuses on the risks in turning reserved Juicebox tokens into a bounde
 ### 8.4 Balance guard in `processSplitWith` for custom controllers
 
 After `_accumulateTokens`, `processSplitWith` verifies `IERC20(projectToken).balanceOf(address(this)) >= accumulatedProjectTokens[projectId]` and reverts with `JBUniswapV4LPSplitHook_InsufficientBalance` if violated. The standard JB controller transfers tokens before calling the split hook, so this check always passes under normal operation. However, projects may use custom controllers that do not guarantee transfer-before-callback ordering — the guard prevents silent accounting drift in that case.
+
+### 8.5 Pre-initialized pools can be accepted when price stays inside the expected band
+
+`deployPool` does not need to treat every outsider-initialized pool as fatal. The acceptable recovery policy is: if the pool was initialized before the hook's first LP mint, operators may proceed as long as the observed initialized price remains within the expected Juicebox-derived floor-to-ceiling band. If the initialized price is outside that band, operators should treat the deployment as blocked and recover operationally rather than mint liquidity into a mispriced pool.

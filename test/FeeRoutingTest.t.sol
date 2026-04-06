@@ -165,9 +165,9 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
         // Storage layout (from forge inspect):
         //   slot 0 = FEE_PROJECT_ID
         //   slot 1 = FEE_PERCENT
-        //   slot 2 = _poolKeys
-        //   slot 3 = tokenIdOf
-        bytes32 outerSlot = keccak256(abi.encode(PROJECT_ID, uint256(3)));
+        //   slot 8 = poolKeysOf
+        //   slot 9 = tokenIdOf
+        bytes32 outerSlot = keccak256(abi.encode(PROJECT_ID, uint256(9)));
         bytes32 slot = keccak256(abi.encode(address(terminalToken), outerSlot));
         vm.store(address(hook), slot, bytes32(0));
 
