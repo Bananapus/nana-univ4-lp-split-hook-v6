@@ -50,6 +50,7 @@ This file focuses on the risks in turning reserved Juicebox tokens into a bounde
 - **LP fee extraction timing** -- Fees accrue per-swap in the V4 pool. A searcher who generates swap volume (e.g., wash trading) before calling `collectAndRouteLPFees` can accumulate fees to themselves (as an LP in the same pool range) at the cost of 1% per swap. Not directly extracting from the hook, but gaming the fee distribution.
 - **Atomic NFT position swap** -- The burn-then-mint in `rebalanceLiquidity` happens atomically within one transaction. No external actor can insert operations between the burn and mint. However, the fee collection step is a separate `modifyLiquidities` call from the burn step, creating two PoolManager unlocks. V4 hooks (ORACLE_HOOK) execute callbacks during each unlock, creating a theoretical reentrancy surface if the oracle hook is malicious.
 - **deployPool initial price manipulation** -- An attacker can pay into the project to inflate surplus, causing `_computeInitialSqrtPrice` to return a skewed midpoint. The 2.5% JB protocol fee on payments and the `minCashOutReturn` parameter limit the attack's profitability but do not eliminate it.
+- **Public pool pre-initialization before first LP mint.** The pool key is public before the hook deploys its first position. An outside actor can initialize the pool first. This is acceptable if the observed initialized price is still within the intended economic band between the Juicebox cash-out floor and issuance ceiling; otherwise deployment can be blocked until operators intentionally recover or redeploy.
 
 ---
 
@@ -132,3 +133,7 @@ This file focuses on the risks in turning reserved Juicebox tokens into a bounde
 ### 8.4 Balance guard in `processSplitWith` for custom controllers
 
 After `_accumulateTokens`, `processSplitWith` verifies `IERC20(projectToken).balanceOf(address(this)) >= accumulatedProjectTokens[projectId]` and reverts with `JBUniswapV4LPSplitHook_InsufficientBalance` if violated. The standard JB controller transfers tokens before calling the split hook, so this check always passes under normal operation. However, projects may use custom controllers that do not guarantee transfer-before-callback ordering — the guard prevents silent accounting drift in that case.
+
+### 8.5 Pre-initialized pools can be accepted when price stays inside the expected band
+
+`deployPool` does not need to treat every outsider-initialized pool as fatal. The acceptable recovery policy is: if the pool was initialized before the hook's first LP mint, operators may proceed as long as the observed initialized price remains within the expected Juicebox-derived floor-to-ceiling band. If the initialized price is outside that band, operators should treat the deployment as blocked and recover operationally rather than mint liquidity into a mispriced pool.
