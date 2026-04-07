@@ -3,7 +3,10 @@ pragma solidity 0.8.28;
 
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
+import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
+import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
+import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
@@ -26,6 +29,16 @@ contract CodexPriceMathHook is JBUniswapV4LPSplitHook {
         )
     {}
 
+    /// @dev Helper to fetch controller and ruleset for a project.
+    function _fetchControllerAndRuleset(uint256 projectId)
+        internal
+        view
+        returns (address controller, JBRuleset memory ruleset)
+    {
+        controller = address(IJBDirectory(DIRECTORY).controllerOf(projectId));
+        (ruleset,) = IJBController(controller).currentRulesetOf(projectId);
+    }
+
     // forge-lint: disable-next-line(mixed-case-function)
     function exposed_calculateTickBounds(
         uint256 projectId,
@@ -36,7 +49,8 @@ contract CodexPriceMathHook is JBUniswapV4LPSplitHook {
         view
         returns (int24, int24)
     {
-        return _calculateTickBounds(projectId, terminalToken, projectToken);
+        (address controller, JBRuleset memory ruleset) = _fetchControllerAndRuleset(projectId);
+        return _calculateTickBounds(projectId, terminalToken, projectToken, controller, ruleset);
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
@@ -49,7 +63,8 @@ contract CodexPriceMathHook is JBUniswapV4LPSplitHook {
         view
         returns (uint160)
     {
-        return _computeInitialSqrtPrice(projectId, terminalToken, projectToken);
+        (address controller, JBRuleset memory ruleset) = _fetchControllerAndRuleset(projectId);
+        return _computeInitialSqrtPrice(projectId, terminalToken, projectToken, controller, ruleset);
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
@@ -66,8 +81,17 @@ contract CodexPriceMathHook is JBUniswapV4LPSplitHook {
         view
         returns (uint256)
     {
+        (address controller, JBRuleset memory ruleset) = _fetchControllerAndRuleset(projectId);
         return _computeOptimalCashOutAmount(
-            projectId, terminalToken, projectToken, totalProjectTokens, sqrtPriceInit, tickLower, tickUpper
+            projectId,
+            terminalToken,
+            projectToken,
+            totalProjectTokens,
+            sqrtPriceInit,
+            tickLower,
+            tickUpper,
+            controller,
+            ruleset
         );
     }
 }
