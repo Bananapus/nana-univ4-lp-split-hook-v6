@@ -80,7 +80,7 @@ script/
 ## Risks And Notes
 
 - once a pool path is chosen for a deployed project-token pair, that choice becomes part of the hook's operational identity
-- first-pool deployment is publicly observable; if a third party initializes the V4 pool first, operators should only proceed when the live initialized price is still within the expected floor-to-ceiling band
+- first-pool deployment is publicly observable; if a third party initializes the V4 pool first, the contract automatically reverts when the existing price is outside the expected floor-to-ceiling band and accepts it when inside
 - LP deployment and rebalancing depend on current project economics and live market structure
 - after deployment, newly received reserved tokens are intentionally burned instead of added pro rata to avoid LP dilution
 - TWAP and oracle assumptions come from the UniV4 router and should be evaluated as part of the same liquidity design
