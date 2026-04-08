@@ -132,8 +132,8 @@ contract CodexPreinitializedPoolPricePoC is LPSplitHookV4TestBase {
             tickUpper
         );
 
-        // An attacker can initialize the public pool close to the upper bound before deployPool().
-        uint160 attackerSqrtPrice = TickMath.getSqrtPriceAtTick(tickUpper - hook.TICK_SPACING());
+        // An attacker can initialize the public pool outside the LP band before deployPool().
+        uint160 attackerSqrtPrice = TickMath.getSqrtPriceAtTick(tickUpper + hook.TICK_SPACING());
         uint256 attackerChosenCashOut = mathHook.exposed_computeOptimalCashOutAmount(
             PROJECT_ID,
             address(terminalToken),
@@ -174,7 +174,7 @@ contract CodexPreinitializedPoolPricePoC is LPSplitHookV4TestBase {
         assertEq(terminal.lastCashOutAmount(), 0, "deployment should fail before using the attacker-chosen price");
     }
 
-    function test_preinitializedPoolWithinBandStillLocksDeploymentAndStrandsAccumulator() public {
+    function test_preinitializedPoolWithinBandAcceptedByDeployment() public {
         uint256 totalProjectTokens = 100e18;
         _accumulateTokens(PROJECT_ID, totalProjectTokens);
 
@@ -185,10 +185,10 @@ contract CodexPreinitializedPoolPricePoC is LPSplitHookV4TestBase {
             mathHook.exposed_computeInitialSqrtPrice(PROJECT_ID, address(terminalToken), address(projectToken));
 
         // Pick a price still inside the computed LP band, but not equal to the exact midpoint that deployPool expects.
-        uint160 attackerSqrtPrice = TickMath.getSqrtPriceAtTick(tickLower + hook.TICK_SPACING());
-        assertTrue(attackerSqrtPrice != expectedSqrtPrice, "precondition: attacker price must differ from midpoint");
-        assertTrue(attackerSqrtPrice > TickMath.getSqrtPriceAtTick(tickLower), "precondition: price stays in-band");
-        assertTrue(attackerSqrtPrice < TickMath.getSqrtPriceAtTick(tickUpper), "precondition: price stays in-band");
+        uint160 inBandSqrtPrice = TickMath.getSqrtPriceAtTick(tickLower + hook.TICK_SPACING());
+        assertTrue(inBandSqrtPrice != expectedSqrtPrice, "precondition: in-band price must differ from midpoint");
+        assertTrue(inBandSqrtPrice > TickMath.getSqrtPriceAtTick(tickLower), "precondition: price stays in-band");
+        assertTrue(inBandSqrtPrice < TickMath.getSqrtPriceAtTick(tickUpper), "precondition: price stays in-band");
 
         Currency terminalCurrency = Currency.wrap(address(terminalToken));
         Currency projectCurrency = Currency.wrap(address(projectToken));
@@ -204,24 +204,13 @@ contract CodexPreinitializedPoolPricePoC is LPSplitHookV4TestBase {
             hooks: IHooks(address(0))
         });
 
-        positionManager.initializePool(key, attackerSqrtPrice);
+        positionManager.initializePool(key, inBandSqrtPrice);
 
+        // In-band pre-initialization should be accepted — the bounded price check tolerates it.
         vm.prank(owner);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PoolInitializedAtUnexpectedPrice.selector,
-                expectedSqrtPrice,
-                attackerSqrtPrice
-            )
-        );
         hook.deployPool(PROJECT_ID, address(terminalToken), 0);
 
-        assertEq(
-            hook.accumulatedProjectTokens(PROJECT_ID),
-            totalProjectTokens,
-            "the failed deployment leaves the pre-deployment accumulator stranded"
-        );
-        assertEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "no LP position should be created");
-        assertFalse(hook.hasDeployedPool(PROJECT_ID), "the project remains undeployed after the revert");
+        assertTrue(hook.hasDeployedPool(PROJECT_ID), "the project should deploy successfully with an in-band price");
+        assertGt(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "an LP position should be created");
     }
 }

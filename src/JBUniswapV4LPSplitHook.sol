@@ -836,6 +836,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         // Cache controller and ruleset once for _mintRebalancedPosition and its callees.
         address controller = address(IJBDirectory(DIRECTORY).controllerOf(projectId));
+        // slither-disable-next-line unused-return
         (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
 
         _mintRebalancedPosition({
@@ -1416,8 +1417,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // position's tick bounds. This prevents inheriting a price that is completely outside the range
         // where this project would provide liquidity, while still tolerating minor deviations from the
         // exact computed price (e.g. when another deployer initialized the pool at a slightly different price).
+        // slither-disable-next-line unused-return
         (uint160 existingSqrtPriceX96,,,) = POOL_MANAGER.getSlot0(key.toId());
         if (existingSqrtPriceX96 != 0) {
+            // Compute the LP position's tick range to determine the acceptable price band.
             (int24 tickLower, int24 tickUpper) = _calculateTickBounds({
                 projectId: projectId,
                 terminalToken: terminalToken,
@@ -1425,11 +1428,14 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 controller: controller,
                 ruleset: ruleset
             });
+            // Convert tick bounds to sqrt prices for comparison.
             uint160 lowerBound = TickMath.getSqrtPriceAtTick(tickLower);
             uint160 upperBound = TickMath.getSqrtPriceAtTick(tickUpper);
+            // Revert if the existing pool price is outside the LP band — the position would be single-sided.
             if (existingSqrtPriceX96 < lowerBound || existingSqrtPriceX96 > upperBound) {
                 revert JBUniswapV4LPSplitHook_PoolInitializedAtUnexpectedPrice(sqrtPriceX96, existingSqrtPriceX96);
             }
+            // Accept the in-band price so liquidity deploys around the existing market rate.
             sqrtPriceX96 = existingSqrtPriceX96;
         }
 
