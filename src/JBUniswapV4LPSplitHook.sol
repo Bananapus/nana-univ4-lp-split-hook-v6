@@ -328,6 +328,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         view
         returns (uint256 terminalTokensPerProjectToken)
     {
+        // Silence "unused parameter" warning — controller is required by callers for interface consistency.
+        controller;
         // Resolve the project's primary terminal for this token.
         IJBMultiTerminal terminal = IJBMultiTerminal(
             address(IJBDirectory(DIRECTORY).primaryTerminalOf({projectId: projectId, token: terminalToken}))
@@ -1410,11 +1412,25 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             ruleset: ruleset
         });
 
-        // If a pool was already initialized, only accept it when it matches the price this deployment expects.
-        // Otherwise, the first initializer chose the starting price and this project would inherit a skewed market.
+        // If a pool was already initialized, accept it only when the existing price falls within the LP
+        // position's tick bounds. This prevents inheriting a price that is completely outside the range
+        // where this project would provide liquidity, while still tolerating minor deviations from the
+        // exact computed price (e.g. when another deployer initialized the pool at a slightly different price).
         (uint160 existingSqrtPriceX96,,,) = POOL_MANAGER.getSlot0(key.toId());
-        if (existingSqrtPriceX96 != 0 && existingSqrtPriceX96 != sqrtPriceX96) {
-            revert JBUniswapV4LPSplitHook_PoolInitializedAtUnexpectedPrice(sqrtPriceX96, existingSqrtPriceX96);
+        if (existingSqrtPriceX96 != 0) {
+            (int24 tickLower, int24 tickUpper) = _calculateTickBounds({
+                projectId: projectId,
+                terminalToken: terminalToken,
+                projectToken: projectToken,
+                controller: controller,
+                ruleset: ruleset
+            });
+            uint160 lowerBound = TickMath.getSqrtPriceAtTick(tickLower);
+            uint160 upperBound = TickMath.getSqrtPriceAtTick(tickUpper);
+            if (existingSqrtPriceX96 < lowerBound || existingSqrtPriceX96 > upperBound) {
+                revert JBUniswapV4LPSplitHook_PoolInitializedAtUnexpectedPrice(sqrtPriceX96, existingSqrtPriceX96);
+            }
+            sqrtPriceX96 = existingSqrtPriceX96;
         }
 
         // Best-effort initialize the pool. Uniswap's PositionManager swallows initialize reverts and returns

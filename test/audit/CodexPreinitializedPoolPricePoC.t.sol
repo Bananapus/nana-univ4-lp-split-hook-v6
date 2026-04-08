@@ -173,4 +173,55 @@ contract CodexPreinitializedPoolPricePoC is LPSplitHookV4TestBase {
         assertLt(attackerChosenCashOut, expectedCashOut, "attacker price would reduce the cash-out amount");
         assertEq(terminal.lastCashOutAmount(), 0, "deployment should fail before using the attacker-chosen price");
     }
+
+    function test_preinitializedPoolWithinBandStillLocksDeploymentAndStrandsAccumulator() public {
+        uint256 totalProjectTokens = 100e18;
+        _accumulateTokens(PROJECT_ID, totalProjectTokens);
+
+        (int24 tickLower, int24 tickUpper) =
+            mathHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
+
+        uint160 expectedSqrtPrice =
+            mathHook.exposed_computeInitialSqrtPrice(PROJECT_ID, address(terminalToken), address(projectToken));
+
+        // Pick a price still inside the computed LP band, but not equal to the exact midpoint that deployPool expects.
+        uint160 attackerSqrtPrice = TickMath.getSqrtPriceAtTick(tickLower + hook.TICK_SPACING());
+        assertTrue(attackerSqrtPrice != expectedSqrtPrice, "precondition: attacker price must differ from midpoint");
+        assertTrue(attackerSqrtPrice > TickMath.getSqrtPriceAtTick(tickLower), "precondition: price stays in-band");
+        assertTrue(attackerSqrtPrice < TickMath.getSqrtPriceAtTick(tickUpper), "precondition: price stays in-band");
+
+        Currency terminalCurrency = Currency.wrap(address(terminalToken));
+        Currency projectCurrency = Currency.wrap(address(projectToken));
+        (Currency currency0, Currency currency1) = terminalCurrency < projectCurrency
+            ? (terminalCurrency, projectCurrency)
+            : (projectCurrency, terminalCurrency);
+
+        PoolKey memory key = PoolKey({
+            currency0: currency0,
+            currency1: currency1,
+            fee: hook.POOL_FEE(),
+            tickSpacing: hook.TICK_SPACING(),
+            hooks: IHooks(address(0))
+        });
+
+        positionManager.initializePool(key, attackerSqrtPrice);
+
+        vm.prank(owner);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PoolInitializedAtUnexpectedPrice.selector,
+                expectedSqrtPrice,
+                attackerSqrtPrice
+            )
+        );
+        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+
+        assertEq(
+            hook.accumulatedProjectTokens(PROJECT_ID),
+            totalProjectTokens,
+            "the failed deployment leaves the pre-deployment accumulator stranded"
+        );
+        assertEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "no LP position should be created");
+        assertFalse(hook.hasDeployedPool(PROJECT_ID), "the project remains undeployed after the revert");
+    }
 }
