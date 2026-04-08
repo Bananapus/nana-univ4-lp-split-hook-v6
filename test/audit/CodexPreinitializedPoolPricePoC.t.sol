@@ -3,7 +3,10 @@ pragma solidity 0.8.28;
 
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
+import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
+import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
+import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
@@ -26,6 +29,16 @@ contract CodexPriceMathHook is JBUniswapV4LPSplitHook {
         )
     {}
 
+    /// @dev Helper to fetch controller and ruleset for a project.
+    function _fetchControllerAndRuleset(uint256 projectId)
+        internal
+        view
+        returns (address controller, JBRuleset memory ruleset)
+    {
+        controller = address(IJBDirectory(DIRECTORY).controllerOf(projectId));
+        (ruleset,) = IJBController(controller).currentRulesetOf(projectId);
+    }
+
     // forge-lint: disable-next-line(mixed-case-function)
     function exposed_calculateTickBounds(
         uint256 projectId,
@@ -36,7 +49,8 @@ contract CodexPriceMathHook is JBUniswapV4LPSplitHook {
         view
         returns (int24, int24)
     {
-        return _calculateTickBounds(projectId, terminalToken, projectToken);
+        (address controller, JBRuleset memory ruleset) = _fetchControllerAndRuleset(projectId);
+        return _calculateTickBounds(projectId, terminalToken, projectToken, controller, ruleset);
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
@@ -49,7 +63,8 @@ contract CodexPriceMathHook is JBUniswapV4LPSplitHook {
         view
         returns (uint160)
     {
-        return _computeInitialSqrtPrice(projectId, terminalToken, projectToken);
+        (address controller, JBRuleset memory ruleset) = _fetchControllerAndRuleset(projectId);
+        return _computeInitialSqrtPrice(projectId, terminalToken, projectToken, controller, ruleset);
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
@@ -66,8 +81,17 @@ contract CodexPriceMathHook is JBUniswapV4LPSplitHook {
         view
         returns (uint256)
     {
+        (address controller, JBRuleset memory ruleset) = _fetchControllerAndRuleset(projectId);
         return _computeOptimalCashOutAmount(
-            projectId, terminalToken, projectToken, totalProjectTokens, sqrtPriceInit, tickLower, tickUpper
+            projectId,
+            terminalToken,
+            projectToken,
+            totalProjectTokens,
+            sqrtPriceInit,
+            tickLower,
+            tickUpper,
+            controller,
+            ruleset
         );
     }
 }
@@ -108,8 +132,8 @@ contract CodexPreinitializedPoolPricePoC is LPSplitHookV4TestBase {
             tickUpper
         );
 
-        // An attacker can initialize the public pool close to the upper bound before deployPool().
-        uint160 attackerSqrtPrice = TickMath.getSqrtPriceAtTick(tickUpper - hook.TICK_SPACING());
+        // An attacker can initialize the public pool outside the LP band before deployPool().
+        uint160 attackerSqrtPrice = TickMath.getSqrtPriceAtTick(tickUpper + hook.TICK_SPACING());
         uint256 attackerChosenCashOut = mathHook.exposed_computeOptimalCashOutAmount(
             PROJECT_ID,
             address(terminalToken),
@@ -148,5 +172,45 @@ contract CodexPreinitializedPoolPricePoC is LPSplitHookV4TestBase {
 
         assertLt(attackerChosenCashOut, expectedCashOut, "attacker price would reduce the cash-out amount");
         assertEq(terminal.lastCashOutAmount(), 0, "deployment should fail before using the attacker-chosen price");
+    }
+
+    function test_preinitializedPoolWithinBandAcceptedByDeployment() public {
+        uint256 totalProjectTokens = 100e18;
+        _accumulateTokens(PROJECT_ID, totalProjectTokens);
+
+        (int24 tickLower, int24 tickUpper) =
+            mathHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
+
+        uint160 expectedSqrtPrice =
+            mathHook.exposed_computeInitialSqrtPrice(PROJECT_ID, address(terminalToken), address(projectToken));
+
+        // Pick a price still inside the computed LP band, but not equal to the exact midpoint that deployPool expects.
+        uint160 inBandSqrtPrice = TickMath.getSqrtPriceAtTick(tickLower + hook.TICK_SPACING());
+        assertTrue(inBandSqrtPrice != expectedSqrtPrice, "precondition: in-band price must differ from midpoint");
+        assertTrue(inBandSqrtPrice > TickMath.getSqrtPriceAtTick(tickLower), "precondition: price stays in-band");
+        assertTrue(inBandSqrtPrice < TickMath.getSqrtPriceAtTick(tickUpper), "precondition: price stays in-band");
+
+        Currency terminalCurrency = Currency.wrap(address(terminalToken));
+        Currency projectCurrency = Currency.wrap(address(projectToken));
+        (Currency currency0, Currency currency1) = terminalCurrency < projectCurrency
+            ? (terminalCurrency, projectCurrency)
+            : (projectCurrency, terminalCurrency);
+
+        PoolKey memory key = PoolKey({
+            currency0: currency0,
+            currency1: currency1,
+            fee: hook.POOL_FEE(),
+            tickSpacing: hook.TICK_SPACING(),
+            hooks: IHooks(address(0))
+        });
+
+        positionManager.initializePool(key, inBandSqrtPrice);
+
+        // In-band pre-initialization should be accepted — the bounded price check tolerates it.
+        vm.prank(owner);
+        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+
+        assertTrue(hook.hasDeployedPool(PROJECT_ID), "the project should deploy successfully with an in-band price");
+        assertGt(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "an LP position should be created");
     }
 }

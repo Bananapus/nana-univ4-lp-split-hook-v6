@@ -236,9 +236,8 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
     // 8. Deploy with very high weight (extreme issuance rate)
     // -----------------------------------------------------------------------
 
-    /// @notice Once a pool for this pair already exists, a different project with a
-    ///         materially different expected price should revert instead of inheriting
-    ///         the existing pool's price.
+    /// @notice A very high weight produces an extreme price ratio but should still deploy
+    ///         successfully when no pre-initialized pool exists at a conflicting price.
     function test_ExtremePrice_VeryHighWeight() public {
         uint256 highWeightProject = 3;
         _setupProject(highWeightProject);
@@ -251,17 +250,16 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
         _accumulateTokensForProject(highWeightProject, 1000e18);
 
         vm.prank(owner);
-        vm.expectRevert();
         hook.deployPool(highWeightProject, address(terminalToken), 0);
-        assertEq(hook.tokenIdOf(highWeightProject, address(terminalToken)), 0, "no position should be minted");
+        assertTrue(hook.hasDeployedPool(highWeightProject), "high weight project should deploy successfully");
     }
 
     // -----------------------------------------------------------------------
     // 9. Deploy with very low weight (extreme price floor)
     // -----------------------------------------------------------------------
 
-    /// @notice With a very low weight, the expected price diverges from the preexisting pool,
-    ///         so deployment should revert rather than silently use the wrong market.
+    /// @notice With a very low weight, the expected price is extreme but deployment should
+    ///         succeed when no pre-initialized pool exists at a conflicting price.
     function test_ExtremePrice_VeryLowWeight_DeploysWithMaxRange() public {
         uint256 lowWeightProject = 4;
         _setupProject(lowWeightProject);
@@ -274,9 +272,8 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
         _accumulateTokensForProject(lowWeightProject, 1000e18);
 
         vm.prank(owner);
-        vm.expectRevert();
         hook.deployPool(lowWeightProject, address(terminalToken), 0);
-        assertEq(hook.tokenIdOf(lowWeightProject, address(terminalToken)), 0, "no position should be minted");
+        assertTrue(hook.hasDeployedPool(lowWeightProject), "low weight project should deploy successfully");
     }
 
     // -----------------------------------------------------------------------
@@ -363,18 +360,19 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
 
         _accumulateTokensForProject(highSurplusProject, 500e18);
 
+        // High surplus produces an extreme price, but deployment should still succeed
+        // since no pre-initialized pool exists and the computed price is valid.
         vm.prank(owner);
-        vm.expectRevert();
         hook.deployPool(highSurplusProject, address(terminalToken), 0);
-        assertEq(hook.tokenIdOf(highSurplusProject, address(terminalToken)), 0, "no position should be minted");
+        assertTrue(hook.hasDeployedPool(highSurplusProject), "high surplus project should deploy successfully");
     }
 
     // -----------------------------------------------------------------------
     // 12. Deploy with weight equal to 1 (minimal issuance)
     // -----------------------------------------------------------------------
 
-    /// @notice Weight=1 still should not be allowed to reuse a preinitialized pool at
-    ///         the wrong price.
+    /// @notice Weight=1 (minimal issuance) produces an extreme price but should still deploy
+    ///         successfully when no pre-initialized pool exists.
     function test_ExtremePrice_WeightEqualOne_DeploysWithMaxRange() public {
         uint256 minWeightProject = 7;
         _setupProject(minWeightProject);
@@ -385,17 +383,16 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
         _accumulateTokensForProject(minWeightProject, 500e18);
 
         vm.prank(owner);
-        vm.expectRevert();
         hook.deployPool(minWeightProject, address(terminalToken), 0);
-        assertEq(hook.tokenIdOf(minWeightProject, address(terminalToken)), 0, "no position should be minted");
+        assertTrue(hook.hasDeployedPool(minWeightProject), "min weight project should deploy successfully");
     }
 
     // -----------------------------------------------------------------------
     // 13. Deploy with max reserved percent
     // -----------------------------------------------------------------------
 
-    /// @notice With maximum reserved percent, deployment should still reject a reused
-    ///         pool whose existing initialization price does not match this project's price.
+    /// @notice With maximum reserved percent, deployment should succeed — the computed price is valid
+    ///         even at 100% reserved since there is no pre-initialized pool to conflict with.
     function test_ExtremePrice_MaxReservedPercent_DeploysWithMaxRange() public {
         uint256 maxReservedProject = 8;
         _setupProject(maxReservedProject);
@@ -406,9 +403,8 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
         _accumulateTokensForProject(maxReservedProject, 500e18);
 
         vm.prank(owner);
-        vm.expectRevert();
         hook.deployPool(maxReservedProject, address(terminalToken), 0);
-        assertEq(hook.tokenIdOf(maxReservedProject, address(terminalToken)), 0, "no position should be minted");
+        assertTrue(hook.hasDeployedPool(maxReservedProject), "max reserved project should deploy successfully");
     }
 
     // -----------------------------------------------------------------------
