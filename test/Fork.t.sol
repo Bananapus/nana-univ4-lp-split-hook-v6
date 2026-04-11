@@ -503,8 +503,9 @@ contract LPSplitHookForkTest is Test {
         ExposedJBUniswapV4LPSplitHook exposedHook = ExposedJBUniswapV4LPSplitHook(payable(address(hook)));
         (int24 tickLower,) =
             exposedHook.exposed_calculateTickBounds(projectId, JBConstants.NATIVE_TOKEN, projToken, controller, ruleset);
-        uint160 midpointSqrtPrice =
-            exposedHook.exposed_computeInitialSqrtPrice(projectId, JBConstants.NATIVE_TOKEN, projToken, controller, ruleset);
+        uint160 midpointSqrtPrice = exposedHook.exposed_computeInitialSqrtPrice(
+            projectId, JBConstants.NATIVE_TOKEN, projToken, controller, ruleset
+        );
         uint160 externalSqrtPrice = TickMath.getSqrtPriceAtTick(tickLower + hook.TICK_SPACING());
 
         assertTrue(externalSqrtPrice != midpointSqrtPrice, "precondition: use a non-midpoint in-band price");
