@@ -50,6 +50,48 @@ import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookCont
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
+contract ExposedJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
+    constructor(
+        address directory,
+        IJBPermissions permissions,
+        address tokens,
+        IPoolManager poolManager,
+        IPositionManager positionManager,
+        IAllowanceTransfer permit2,
+        IHooks oracleHook
+    )
+        JBUniswapV4LPSplitHook(directory, permissions, tokens, poolManager, positionManager, permit2, oracleHook)
+    {}
+
+    function exposed_calculateTickBounds(
+        uint256 projectId,
+        address terminalToken,
+        address projectToken,
+        address controller,
+        JBRuleset memory ruleset
+    )
+        external
+        view
+        returns (int24, int24)
+    {
+        return _calculateTickBounds(projectId, terminalToken, projectToken, controller, ruleset);
+    }
+
+    function exposed_computeInitialSqrtPrice(
+        uint256 projectId,
+        address terminalToken,
+        address projectToken,
+        address controller,
+        JBRuleset memory ruleset
+    )
+        external
+        view
+        returns (uint160)
+    {
+        return _computeInitialSqrtPrice(projectId, terminalToken, projectToken, controller, ruleset);
+    }
+}
+
 /// @notice Fork tests for JBUniswapV4LPSplitHook with real V4 PoolManager + PositionManager
 ///         and real JB core. Exercises the full lifecycle: accumulate → deploy pool → verify V4 state.
 contract LPSplitHookForkTest is Test {
@@ -130,7 +172,7 @@ contract LPSplitHookForkTest is Test {
         });
 
         // Deploy the hook with real V4 contracts.
-        JBUniswapV4LPSplitHook hookImpl = new JBUniswapV4LPSplitHook(
+        ExposedJBUniswapV4LPSplitHook hookImpl = new ExposedJBUniswapV4LPSplitHook(
             address(jbDirectory),
             IJBPermissions(address(jbPermissions)),
             address(jbTokens),
@@ -396,9 +438,9 @@ contract LPSplitHookForkTest is Test {
     // ───────────────────────── Existing Pool (pre-initialized)
     // ─────────────
 
-    /// @notice When the pool was already initialized by another party at a different sqrtPrice,
+    /// @notice When the pool was already initialized by another party at a price outside the LP band,
     ///         deployPool should revert instead of inheriting the external price.
-    function test_fork_deployPool_existingPoolAtUnexpectedPrice_reverts() public {
+    function test_fork_deployPool_existingPoolOutsideBand_reverts() public {
         // Build the same pool key the hook will use.
         address projToken = address(projectToken);
         Currency termCurrency = Currency.wrap(address(0)); // native ETH
@@ -415,10 +457,8 @@ contract LPSplitHookForkTest is Test {
             hooks: IHooks(address(0))
         });
 
-        // Initialize the pool externally at the issuance rate price (different from the
-        // geometric mean that _computeInitialSqrtPrice would compute).
-        // Use a price that's clearly different from the midpoint.
-        uint160 externalSqrtPrice = TickMath.getSqrtPriceAtTick(int24(69_000));
+        // Initialize the pool externally at an extreme price that is well outside the expected LP band.
+        uint160 externalSqrtPrice = TickMath.getSqrtPriceAtTick(int24(88_000));
         V4_POSITION_MANAGER.initializePool(key, externalSqrtPrice);
 
         // Verify pool is initialized with our external price.
@@ -426,7 +466,7 @@ contract LPSplitHookForkTest is Test {
         (uint160 sqrtPriceBefore,,,) = V4_POOL_MANAGER.getSlot0(poolId);
         assertEq(sqrtPriceBefore, externalSqrtPrice, "pool should be at external price");
 
-        // Now deploy via the hook — it should reject the existing mismatched price.
+        // Now deploy via the hook — it should reject the existing out-of-band price.
         vm.prank(multisig);
         vm.expectRevert();
         hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
@@ -436,6 +476,55 @@ contract LPSplitHookForkTest is Test {
         (uint160 sqrtPriceAfter,,,) = V4_POOL_MANAGER.getSlot0(poolId);
         assertEq(sqrtPriceAfter, sqrtPriceBefore, "existing pool price should remain unchanged");
         assertEq(hook.accumulatedProjectTokens(projectId), 100_000e18, "accumulated tokens should remain untouched");
+    }
+
+    /// @notice When the pool was already initialized within the expected LP band,
+    ///         deployPool should reuse the live price and proceed.
+    function test_fork_deployPool_existingPoolWithinBand_succeeds() public {
+        address projToken = address(projectToken);
+        Currency termCurrency = Currency.wrap(address(0)); // native ETH
+        Currency projCurrency = Currency.wrap(projToken);
+
+        (Currency currency0, Currency currency1) =
+            termCurrency < projCurrency ? (termCurrency, projCurrency) : (projCurrency, termCurrency);
+
+        PoolKey memory key = PoolKey({
+            currency0: currency0,
+            currency1: currency1,
+            fee: hook.POOL_FEE(),
+            tickSpacing: hook.TICK_SPACING(),
+            hooks: IHooks(address(0))
+        });
+
+        // Pick a nearby price inside the expected band but not equal to the geometric-mean midpoint.
+        address controller = address(jbDirectory.controllerOf(projectId));
+        (JBRuleset memory ruleset,) = JBController(controller).currentRulesetOf(projectId);
+
+        ExposedJBUniswapV4LPSplitHook exposedHook = ExposedJBUniswapV4LPSplitHook(payable(address(hook)));
+        (int24 tickLower,) =
+            exposedHook.exposed_calculateTickBounds(projectId, JBConstants.NATIVE_TOKEN, projToken, controller, ruleset);
+        uint160 midpointSqrtPrice = exposedHook.exposed_computeInitialSqrtPrice(
+            projectId, JBConstants.NATIVE_TOKEN, projToken, controller, ruleset
+        );
+        uint160 externalSqrtPrice = TickMath.getSqrtPriceAtTick(tickLower + hook.TICK_SPACING());
+
+        assertTrue(externalSqrtPrice != midpointSqrtPrice, "precondition: use a non-midpoint in-band price");
+
+        V4_POSITION_MANAGER.initializePool(key, externalSqrtPrice);
+
+        PoolId poolId = key.toId();
+        (uint160 sqrtPriceBefore,,,) = V4_POOL_MANAGER.getSlot0(poolId);
+        assertEq(sqrtPriceBefore, externalSqrtPrice, "pool should be at external price");
+
+        vm.prank(multisig);
+        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
+
+        assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should deploy successfully");
+        assertGt(hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN), 0, "position NFT should be minted");
+        assertEq(hook.accumulatedProjectTokens(projectId), 0, "accumulated tokens should be consumed");
+
+        (uint160 sqrtPriceAfter,,,) = V4_POOL_MANAGER.getSlot0(poolId);
+        assertEq(sqrtPriceAfter, sqrtPriceBefore, "existing in-band pool price should be reused");
     }
 
     // ───────────────────────── Weight Decay Permissionless Deploy
