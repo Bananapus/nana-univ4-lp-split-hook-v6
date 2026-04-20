@@ -23,4 +23,4 @@
 - [`test/AccumulationStageTest.t.sol`](../test/AccumulationStageTest.t.sol) and [`test/DeploymentStageTest.t.sol`](../test/DeploymentStageTest.t.sol) for lifecycle behavior.
 - [`test/FeeRoutingTest.t.sol`](../test/FeeRoutingTest.t.sol) for fee behavior.
 - [`test/RebalanceTest.t.sol`](../test/RebalanceTest.t.sol) for position updates.
-- [`test/Fork.t.sol`](../test/Fork.t.sol), [`test/invariant/`](../test/invariant/), and [`test/regression/`](../test/regression/) for broader safety.
+- [`test/Fork.t.sol`](../test/Fork.t.sol), [`test/SecurityTest.t.sol`](../test/SecurityTest.t.sol), [`test/ReentrancyTest.t.sol`](../test/ReentrancyTest.t.sol), and [`test/SplitHookRegressions.t.sol`](../test/SplitHookRegressions.t.sol) for broader safety.

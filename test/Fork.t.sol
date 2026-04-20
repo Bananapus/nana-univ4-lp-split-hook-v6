@@ -345,7 +345,7 @@ contract LPSplitHookForkTest is Test {
         jbPermissions = new JBPermissions(trustedForwarder);
         jbProjects = new JBProjects(multisig, address(0), trustedForwarder);
         jbDirectory = new JBDirectory(jbPermissions, jbProjects, multisig);
-        JBERC20 jbErc20 = new JBERC20();
+        JBERC20 jbErc20 = new JBERC20(jbPermissions, jbProjects);
         jbTokens = new JBTokens(jbDirectory, jbErc20);
         jbRulesets = new JBRulesets(jbDirectory);
         jbPrices = new JBPrices(jbDirectory, jbPermissions, jbProjects, multisig, trustedForwarder);

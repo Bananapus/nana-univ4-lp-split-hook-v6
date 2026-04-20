@@ -3,7 +3,12 @@
 `@bananapus/univ4-lp-split-hook-v6` is a split hook that accumulates reserved Juicebox project tokens and then deploys them into a Uniswap V4 concentrated liquidity position bounded by the project's issuance and cash-out economics.
 
 Docs: <https://docs.juicebox.money>
-Architecture: [ARCHITECTURE.md](./ARCHITECTURE.md)
+Architecture: [ARCHITECTURE.md](./ARCHITECTURE.md)  
+User journeys: [USER_JOURNEYS.md](./USER_JOURNEYS.md)  
+Skills: [SKILLS.md](./SKILLS.md)  
+Risks: [RISKS.md](./RISKS.md)  
+Administration: [ADMINISTRATION.md](./ADMINISTRATION.md)  
+Audit instructions: [AUDIT_INSTRUCTIONS.md](./AUDIT_INSTRUCTIONS.md)
 
 ## Overview
 
@@ -42,6 +47,20 @@ It does not own the project's issuance logic itself.
 3. `univ4-router-v6/src/JBUniswapV4Hook.sol`
 4. `nana-core-v6/src/JBController.sol` for reserved-token origin context
 
+## Integration Traps
+
+- this hook governs post-issuance liquidity, so it should not be used to infer how project tokens were originally priced or minted
+- first-pool deployment assumptions are economically sensitive because external actors can initialize the pool first
+- LP management behavior depends on both live market state and live Juicebox economics, not on either in isolation
+- teams often miss that newly received reserved tokens are intentionally burned after deployment instead of added to the LP
+
+## Where State Lives
+
+- accumulation-stage and deployed-position behavior live in `JBUniswapV4LPSplitHook`
+- deployment and registration flows live in `JBUniswapV4LPSplitHookDeployer`
+- oracle and route assumptions live in `univ4-router-v6`
+- reserved-token origin economics live upstream in `nana-core-v6`
+
 ## Install
 
 ```bash
@@ -62,7 +81,7 @@ Useful scripts:
 
 ## Deployment Notes
 
-This repo composes with the UniV4 router package, the address registry, core protocol contracts, and Permit2. Teams generally deploy one hook instance per project and terminal-token pair they want to manage.
+This repo composes with the UniV4 router package, the address registry, core protocol contracts, and Permit2. Teams should usually deploy one hook instance per project and terminal-token pair they want to manage, especially because fee-token accounting becomes more complex when clones are shared.
 
 ## Repository Layout
 
@@ -84,3 +103,8 @@ script/
 - LP deployment and rebalancing depend on current project economics and live market structure
 - after deployment, newly received reserved tokens are intentionally burned instead of added pro rata to avoid LP dilution
 - TWAP and oracle assumptions come from the UniV4 router and should be evaluated as part of the same liquidity design
+
+## For AI Agents
+
+- Treat this repo as reserved-token liquidity management, not as the swap router itself.
+- Read the deployment-stage, rebalance, and preinitialized-pool tests before summarizing failure modes.

@@ -2,7 +2,7 @@
 
 This repo turns reserved project tokens into a Uniswap V4 LP position. Audit it as a treasury-management hook with meaningful external-call, pricing, and lifecycle risk.
 
-## Objective
+## Audit Objective
 
 Find issues that:
 - misprice or misbound the LP position relative to Juicebox economics
@@ -23,7 +23,12 @@ Key integrations:
 - `nana-core-v6`
 - `univ4-router-v6`
 
-## System Model
+## Start Here
+
+1. `src/JBUniswapV4LPSplitHook.sol`
+2. `src/JBUniswapV4LPSplitHookDeployer.sol`
+
+## Security Model
 
 Lifecycle:
 - before pool deployment, reserved project tokens accumulate in the hook
@@ -31,6 +36,21 @@ Lifecycle:
 - after deployment, later reserved distributions are burned rather than added to the LP
 - fees can be collected, split between the project and fee project, and later claimed
 - the position can be rebalanced as issuance and cash-out conditions change
+
+## Roles And Privileges
+
+| Role | Powers | How constrained |
+|------|--------|-----------------|
+| Project authority | Configure or trigger pool lifecycle actions | Must not repurpose another project's state |
+| Hook clone | Hold reserved tokens and LP accounting state | Must be one-shot initialized and project-isolated |
+| Fee claimant | Recover accrued fee entitlements | Must not double-claim or exceed tracked balances |
+
+## Integration Assumptions
+
+| Dependency | Assumption | What breaks if wrong |
+|------------|------------|----------------------|
+| `nana-core-v6` | Reserved-token flow and fee-project semantics match hook expectations | Treasury accounting drifts |
+| `univ4-router-v6` | Pool and oracle assumptions stay coherent | LP geometry and pricing bounds become unsafe |
 
 ## Critical Invariants
 
@@ -52,28 +72,16 @@ Collected LP fees must be distributed, tracked, or burned exactly according to t
 6. Clone initialization is one-shot
 No caller should be able to reinitialize or repurpose a deployed clone.
 
-## Threat Model
+## Attack Surfaces
 
-Prioritize:
-- reentrancy during deploy, collect, rebalance, and fee-claim paths
-- stale `tokenIdOf` or position metadata
-- incorrect fee-project self-routing
-- boundary inversion in tick math
-- permissionless deployment after 10x weight decay
-- one-project or one-terminal assumptions leaking into another project’s state
+- pool deployment and first LP position creation
+- fee collection, fee accounting, and fee claims
+- rebalance and position metadata updates
+- tick bound and price initialization math
+- clone initialization and per-project state isolation
 
-## Build And Verification
+## Verification
 
-Standard workflow:
 - `npm install`
 - `forge build`
 - `forge test`
-
-Current tests focus on:
-- accumulation and deployment stages
-- fee routing and fee claiming
-- reentrancy
-- tick-bound and position regressions
-- invariant coverage
-
-Good findings here show treasury value leakage, incorrect LP geometry, incorrect fee accounting, or lifecycle state that becomes trusted after the underlying position has changed.
