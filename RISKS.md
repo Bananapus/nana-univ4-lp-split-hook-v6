@@ -1,139 +1,88 @@
-# UniV4 LP Split Hook Risk Register
+# Juicebox UniV4 LP Split Hook Risk Register
 
-This file focuses on the risks in turning reserved Juicebox tokens into a bounded Uniswap V4 LP position, then operating that position over time.
+This file focuses on the lifecycle, pricing, and fee-accounting risks in `JBUniswapV4LPSplitHook`. The main question is whether the hook moves reserved-token value into liquidity without losing track of ownership, bounds, or fee claims.
 
 ## How to use this file
 
-- Read `Priority risks` first; they identify the main ways LP deployment or operation can become mispriced or stuck.
-- Use the detailed sections for economics, MEV, rebalance mechanics, and edge-case pricing.
-- Treat `Invariants to Verify` as mandatory before relying on the hook for treasury-facing liquidity.
+- Read `Priority risks` first.
+- Use the detailed sections to separate deployment-stage risks from post-deployment management risks.
+- Treat `Accepted Behaviors` and `Invariants to Verify` as the line between intended lifecycle behavior and bugs.
 
 ## Priority risks
 
 | Priority | Risk | Why it matters | Primary controls |
 |----------|------|----------------|------------------|
-| P0 | Miscomputed tick bounds or cash-out fraction | The hook derives LP bounds from Juicebox economics; bad math can deploy treasury liquidity into the wrong price range. | Strong math tests, rebalance checks, and explicit edge-case handling around zero or low surplus. |
-| P1 | MEV around deployment and rebalancing | LP creation and rebalancing expose a timing surface where external traders can exploit predictable treasury actions. | Oracle or TWAP usage, bounded formulas, and operator discipline around execution timing. |
-| P1 | Post-deploy burn and accumulation assumptions | The hook changes behavior after deployment, burning future reserved tokens to avoid dilution. Integration mistakes here can surprise operators. | Clear lifecycle documentation, invariant checks, and deployment-specific monitoring. |
+| P0 | Wrong LP bounds or rebalance math | Bad price math can misplace treasury liquidity and destroy value. | Bound validation, lifecycle tests, and careful review of deployment/rebalance formulas. |
+| P1 | Public first-pool initialization | Outside actors can initialize the target pool first. | Contract-side range validation and operator awareness. |
+| P1 | Post-deploy burn and fee-accounting assumptions | After deployment the hook changes behavior sharply, and tracked fee value must remain separate from burnable balances. | Lifecycle docs, claim-segregation tests, and accounting invariants. |
 
 ## 1. Trust Assumptions
 
-- **Uniswap V4 PoolManager** -- All LP positions are custodied by PoolManager. A bug or governance change there affects every pool managed by this hook. No migration path exists; positions cannot be moved to a different V4 deployment.
-- **Uniswap V4 PositionManager** -- Immutable at construction. Burn, mint, decrease-liquidity, and fee collection all route through it. If PositionManager is paused or bricked, all LP operations freeze (no fallback).
-- **ORACLE_HOOK** -- Baked into every PoolKey. A malicious or broken oracle hook can manipulate swap behavior for all pools. Cannot be changed post-deployment.
-- **Permit2** -- Used for ERC-20 approvals to PositionManager. A Permit2 exploit could drain approved tokens during the `_mintPosition` window.
-- **JB Directory / Controller** -- `controllerOf()`, `primaryTerminalOf()`, and `PROJECTS().ownerOf()` are all trusted. Directory compromise = full hook compromise. `processSplitWith` trusts `msg.sender == controllerOf(projectId)` as its sole authentication.
-- **Fee routing (configurable split)** -- `FEE_PERCENT` and `FEE_PROJECT_ID` are set once in `initialize()` and are immutable thereafter. The split ratio (e.g., 38/62) is caller-specified at initialization, not a protocol default. The fee project must maintain a functioning terminal for the terminal token. If `primaryTerminalOf(FEE_PROJECT_ID, token)` returns `address(0)`, the hook does not retain a stranded fee slice; it sets `feeAmount = 0` and routes the full amount back through the project's normal split-hook flow, so the fee project simply misses that collection. Fee claiming supports both ERC-20 tokens (via `transfer`) and internal credits (via `controller.transferCreditsFrom`). Each claim path is independent: a failure in the credit-transfer path does not block ERC-20 claims, and failed credit claims restore bookkeeping for retry.
-- **ERC-20 project token required** -- `processSplitWith` reverts with `InvalidProjectId` if `context.token == address(0)` (credit-only project). Credits are internal JBTokens accounting and cannot be paired as Uniswap V4 LP. Projects must deploy an ERC-20 via `JBTokens.deployERC20For` before using this hook. The standard controller passes `address(token)` from `tokenOf(projectId)` — if no ERC-20 is deployed, token is `address(0)` and the hook rejects the split.
-- **Clone initialization** -- Implementation contract can be `initialize()`d by anyone. No practical impact since clones have separate storage, but the implementation's `FEE_PROJECT_ID` / `FEE_PERCENT` could be set to arbitrary values.
-
----
+- **Uniswap V4 PoolManager.** All LP positions are ultimately held through PoolManager.
+- **Uniswap V4 PositionManager.** Burn, mint, decrease-liquidity, and fee collection depend on it.
+- **Oracle hook.** The chosen hook in the pool key is immutable. A bad oracle hook can affect every pool managed by the split hook.
+- **Permit2.** Used for ERC-20 approvals into the position-management flow.
+- **JB Directory and Controller.** `controllerOf`, `primaryTerminalOf`, and project-owner resolution are all trusted integration points.
+- **Fee routing config.** `FEE_PROJECT_ID` and `FEE_PERCENT` are fixed at initialization.
 
 ## 2. Economic Risks
 
-- **LP range derived from bonding curve** -- Tick bounds are computed from `_getCashOutRate` (price floor) and `_getIssuanceRate` (price ceiling), both read from on-chain JB state. These are spot values, not time-weighted. A single large payment or cashout in the same block can shift the range before `deployPool` or `rebalanceLiquidity` executes.
-- **Cash-out rate: local vs. total surplus** -- `_getCashOutRate` conditionally uses local (single-terminal) surplus or total (cross-terminal) surplus based on the project's `useTotalSurplusForCashOuts` ruleset flag. When the flag is `true`, `currentTotalReclaimableSurplusOf` is called, which aggregates surplus across all terminals. When `false` (default), `currentReclaimableSurplusOf` queries only the primary terminal. The flag is read from the packed ruleset metadata via `JBRulesetMetadataResolver.useTotalSurplusForCashOuts()`. A mismatch between the LP hook's surplus view and the terminal's actual cashout behavior would produce tick bounds that do not reflect the real price floor. Both paths are try-catch wrapped and fall back to 0 on revert.
-- **Extreme weight scenarios** -- Weight=1 produces `mulDiv(1e18, 1, 1e18) = 0` project tokens, yielding `sqrtPriceX96 = 0` (invalid). Correctly reverts with `TickMath.InvalidSqrtPrice(0)`. Weight=0 (after full decay) similarly reverts. Very high weight (1e30+) deploys successfully but produces extreme tick values near MIN_TICK/MAX_TICK boundaries.
-- **Zero surplus** -- When `cashOutRate == 0`, `_calculateTickBounds` falls back to a minimal range centered on the issuance tick (+/- one TICK_SPACING = 200 ticks). `_computeOptimalCashOutAmount` returns 0, so the entire LP position is single-sided project tokens.
-- **Max reserved percent (100%)** -- `_getIssuanceRate` returns 0 because `(10000-10000)/10000 = 0`. Reverts early with `JBUniswapV4LPSplitHook_ZeroIssuanceRate()` before any sqrtPrice calculation. At 99% reserved, effective issuance is 1% of weight-based rate; deploys but with a very different tick range than lower reserved percents.
-- **Dust handling** -- 1 wei accumulated tokens can produce zero liquidity in `LiquidityAmounts.getLiquidityForAmounts`, leading to a zero-liquidity mint. During `_addUniswapLiquidity` this mints a position with 0 liquidity (no explicit guard). During `rebalanceLiquidity`, the `InsufficientLiquidity` revert catches this. During `deployPool`, a zero-liquidity mint from `_addUniswapLiquidity` would succeed (no explicit guard in the deploy path), creating a V4 position with tokenId != 0 but zero liquidity. Subsequent `rebalanceLiquidity` calls would attempt to burn zero liquidity, which succeeds but collects zero fees. The position is effectively inert until enough tokens accumulate for a meaningful rebalance. This is a degraded but not dangerous state — the `InsufficientLiquidity` guard in rebalance prevents setting `tokenIdOf` to a new zero-liquidity position.
-- **Rebalance value conservation** -- Rebalance burns old position, collects fees, then mints new. Leftover project tokens are burned via `_burnProjectTokens`. Leftover terminal tokens are returned via `_addToProjectBalance`. Value is conserved within rounding, but the new position's tick range may not capture all recovered tokens if the price has shifted, causing more leftovers to be burned/returned than optimal.
-- **Impermanent loss amplification** -- Concentrated liquidity between cashout and issuance ticks amplifies IL compared to full-range. If market price exits the range, the position becomes 100% single-sided and earns zero fees until rebalanced.
-- **Accumulation period idle capital** -- Between first `processSplitWith` and `deployPool`, tokens earn no yield. Value decays as issuance weight drops. The 10x weight decay permissionless threshold ensures eventual deployment but may take multiple ruleset cycles.
+- **LP range derived from bonding-curve state.** Tick bounds come from live Juicebox issuance and cash-out economics, not from a market oracle.
+- **Local versus total surplus.** Cash-out-rate derivation depends on whether the project uses local surplus or total surplus for cash outs.
+- **Extreme weight scenarios.** Very low or zero effective issuance rates can make deployment invalid; very high weights can push tick bounds toward the edges.
+- **Zero-surplus fallback.** If cash-out rate is effectively zero, the hook falls back to a minimal issuance-centered range.
+- **Dust handling.** Very small token balances can produce inert or effectively zero-liquidity outcomes.
+- **Rebalance value conservation.** Rebalance conserves value only within rounding and leftover handling; extra leftover tokens are burned or returned, not magically preserved in-range.
+- **Impermanent loss amplification.** This is concentrated liquidity. If price exits the range, the position becomes single-sided.
+- **Accumulation-period idle capital.** Before deployment, accumulated reserved tokens are idle.
 
----
+## 3. MEV And Timing Risks
 
-## 3. MEV / Sandwich Risks
+- **Rebalance sandwich risk.** Rebalance depends on spot pool price at execution time. A searcher can try to skew the price around the transaction.
+- **Permissionless fee collection timing.** Anyone can trigger some fee-collection paths, so adversarial timing is possible even if direct extraction is limited.
+- **Public pool pre-initialization.** The target pool can be initialized before the hook deploys its first position. The contract defends by rejecting prices outside the expected band.
 
-- **Rebalance sandwich** -- `rebalanceLiquidity` burns and re-mints in one tx. Between BURN_POSITION and MINT_POSITION, the hook holds raw token balances. A searcher can: (1) front-run with a swap to skew the pool price, (2) let the burn return skewed amounts, (3) back-run to extract value from the new position. `decreaseAmount0Min` / `decreaseAmount1Min` provide slippage protection on the burn, but the mint has no explicit slippage params -- it uses whatever `LiquidityAmounts.getLiquidityForAmounts` computes. Default of 0 for min amounts = no protection.
-- **collectAndRouteLPFees is permissionless** -- Anyone can trigger fee collection (no access control). A searcher can time collection to coincide with favorable pool state. Impact is limited because fee collection does not move the pool price -- it only harvests accrued swap fees. However, the `_routeFeesToProject` call pays into the fee project with `minReturnedTokens: 0`, allowing MEV extraction on that payment.
-- **LP fee extraction timing** -- Fees accrue per-swap in the V4 pool. A searcher who generates swap volume (e.g., wash trading) before calling `collectAndRouteLPFees` can accumulate fees to themselves (as an LP in the same pool range) at the cost of 1% per swap. Not directly extracting from the hook, but gaming the fee distribution.
-- **Atomic NFT position swap** -- The burn-then-mint in `rebalanceLiquidity` happens atomically within one transaction. No external actor can insert operations between the burn and mint. However, the fee collection step is a separate `modifyLiquidities` call from the burn step, creating two PoolManager unlocks. V4 hooks (ORACLE_HOOK) execute callbacks during each unlock, creating a theoretical reentrancy surface if the oracle hook is malicious.
-- **deployPool initial price manipulation** -- An attacker can pay into the project to inflate surplus, causing `_computeInitialSqrtPrice` to return a skewed midpoint. The 2.5% JB protocol fee on payments and the `minCashOutReturn` parameter limit the attack's profitability but do not eliminate it.
-- **Public pool pre-initialization before first LP mint.** The pool key is public before the hook deploys its first position. An outside actor can initialize the pool first. `_createAndInitializePool` handles this automatically: it computes the LP tick bounds, checks the existing initialized price against them, and reverts if the price is outside the band. If the price is inside the band the deployment proceeds without operator intervention.
+## 4. Rebalance Risks
 
----
+- **Authorization is narrower than fee collection.** Rebalance is owner or delegate gated, but fee collection is not always gated.
+- **Consecutive rebalance safety matters.** New position IDs must only be stored after successful remint.
+- **Leftover token handling matters.** Leftover project tokens are burned; leftover terminal tokens are returned to project balance.
+- **Fee collection order matters.** Collected fees should be separated before burning and reminting principal.
+- **Spot price is used during rebalance.** Operators should treat rebalance timing as economically sensitive.
 
-## 4. Rebalance Mechanics
+## 5. Access Control Risks
 
-- **Authorization** -- Requires `SET_BUYBACK_POOL` permission from the project owner. Cannot be triggered by arbitrary callers, unlike `collectAndRouteLPFees`. This prevents forced rebalances at manipulated prices.
-- **Consecutive rebalance safety** -- Each rebalance burns the old position and mints a new one. The new `tokenIdOf` is written only after a successful mint. If the mint fails with `InsufficientLiquidity`, the entire tx reverts, preserving the old position. Two consecutive rebalances work correctly because each reads the current `tokenIdOf` and operates on it.
-- **Leftover token handling** -- After minting the new position, `_handleLeftoverTokens` burns remaining project tokens and returns remaining terminal tokens to the project balance. This means rebalance is slightly deflationary on the project token side (leftovers are destroyed, not recycled).
-- **Fee collection ordering** -- Rebalance collects fees first (Step 1), routes them, then burns the principal (Step 2). This ordering is critical: if fees were not collected first, they would be included in the burn amounts and the fee split would apply to principal + fees together (which is what happens for the burn step -- the entire terminal token delta gets fee-split, see SplitHookRegressions test_M1).
-- **Zero-liquidity revert guard** -- If after burn, the recovered tokens produce zero liquidity for the new tick range (e.g., price moved entirely out of range), `rebalanceLiquidity` reverts with `InsufficientLiquidity`. This prevents bricking the position by setting `tokenIdOf = 0`. The downside: rebalance is impossible until conditions change.
-- **Pool price vs. Juicebox price divergence** -- The new position's tick bounds are derived from JB bonding curve rates, but the pool's actual price may have diverged due to external swaps. `rebalanceLiquidity` reads the real pool price from `POOL_MANAGER.getSlot0()` for liquidity calculation (ensuring optimal token split), but if the actual pool price is outside the new tick bounds, the minted position is single-sided (one token amount = 0), and `LiquidityAmounts.getLiquidityForAmounts` may return low liquidity.
-- **Spot price usage in rebalance** -- `rebalanceLiquidity` uses `POOL_MANAGER.getSlot0()`, which returns the instantaneous spot price, not a time-weighted average (TWAP). This means the liquidity calculation is sensitive to the pool price at the exact moment the transaction executes. **Operational advice for project owners:**
- - **Avoid rebalancing during volatile conditions.** If the pool price has significantly diverged from the Juicebox issuance price (e.g., after a large swap or external market event), the spot price may not reflect fair value. Rebalancing at a skewed price positions liquidity suboptimally, increasing leftover tokens (burned/returned) and reducing the effective depth of the new position.
- - **Front-running risk.** An attacker who observes a pending `rebalanceLiquidity` transaction in the public mempool can manipulate the spot price beforehand (e.g., via a large swap), causing the rebalance to compute liquidity from a skewed `sqrtPriceX96`. The attacker then back-runs to reverse their swap, profiting from the suboptimal positioning. The `decreaseAmount0Min` / `decreaseAmount1Min` parameters protect the burn step, but the mint step has no explicit slippage guard.
- - **Mitigation: use private transaction submission.** Submit `rebalanceLiquidity` transactions via private mempools (Flashbots Protect, MEV Blocker, or similar services) to prevent searchers from observing and front-running the transaction. Alternatively, rebalance during periods of low pool activity when manipulation cost is higher relative to potential profit.
- - **Mitigation: permission gate limits exposure.** The `SET_BUYBACK_POOL` permission requirement ensures that only the project owner or an authorized operator can trigger rebalancing. Arbitrary searchers cannot force a rebalance at a manipulated price -- they would need the attacker to also hold the permission, which reduces the attack surface to compromised operator keys.
+- **`deployPool` can become permissionless after weight decay.** This is intentional so tokens do not remain locked forever.
+- **`rebalanceLiquidity` stays gated.** Absent or hostile operators can leave a stale position un-rebalanced.
+- **`claimFeeTokensFor` is gated.** Unclaimed fee tokens or fee credits can sit in the hook indefinitely.
+- **`initialize` is one-shot.** First-call semantics on clones matter.
 
----
+## 6. Invariants to Verify
 
-## 5. Price Edge Cases
+- Token conservation across rebalance.
+- No value creation from rebalance.
+- Fee routing completeness for collected fees.
+- `tokenIdOf` stays nonzero for deployed project paths unless the whole transaction reverts.
+- `accumulatedProjectTokens` clears on successful deployment.
+- Cross-project isolation holds across all keyed storage.
+- Fee-token and fee-credit bookkeeping match actual claimable balances.
+- Tick bounds stay valid, aligned, and ordered.
+- Only one deployed pool identity exists per `(projectId, terminalToken)` path.
 
-- **Very low weight (weight < 1e18)** -- `_getProjectTokensOutForTerminalTokensIn` computes `mulDiv(1e18, weight, weightRatio)`. When `weight < weightRatio` (typically 1e18), this truncates to 0. `sqrtPriceX96 = sqrt(0) * Q96 / sqrt(1e18) = 0`. Reverts with `InvalidSqrtPrice(0)`. Safe but means pool cannot be deployed.
-- **Very high weight (1e30+)** -- Produces large `projectTokensPerTerminalToken`, pushing the issuance tick near `MAX_TICK`. The clamp (`minUsable` / `maxUsable`) prevents TickMath overflow. Deploys but with tick bounds near the V4 boundary -- liquidity is extremely diluted.
-- **Zero surplus, nonzero weight** -- `_getCashOutRate` returns 0. `_getCashOutRateSqrtPriceX96` returns `TickMath.MIN_SQRT_PRICE`. Tick bounds use the issuance-centered fallback. Pool is initialized at the issuance rate price. Position is 100% project tokens (no terminal tokens paired).
-- **Max reserved percent (10000)** -- Effective issuance = 0. `_getIssuanceRate` reverts early with `JBUniswapV4LPSplitHook_ZeroIssuanceRate()` before any sqrtPrice calculation, preventing division-by-zero in downstream price math.
-- **Narrow tick ranges** -- When cashout rate is close to issuance rate (high surplus), the tick range collapses toward `tickLower == tickUpper`. The fallback centers on the current JB price with +/- one TICK_SPACING. This produces highly concentrated liquidity vulnerable to any price movement.
-- **Token ordering inversion** -- When `terminalToken < projectToken` (terminal is token0, e.g., native ETH), the cashout tick can be higher than the issuance tick. Fixed by sorting, but the inverted ordering means the economic interpretation (cashout=floor, issuance=ceiling) maps to different tick assignments depending on token ordering.
-- **Low-decimal terminal tokens (e.g., USDC, 6 decimals)** -- `_getCashOutRate` passes `_getTokenDecimals(terminalToken)` to `currentReclaimableSurplusOf`. With 6 decimals and large token supply, the reclaimable amount can round to 0, triggering the `cashOutRate == 0` fallback. LP range becomes issuance-centered with minimal width.
+## 7. Accepted Behaviors
 
----
+### 7.1 Reentrancy trust boundary during `deployPool`
 
-## 6. Access Control
+The design assumes trusted Juicebox and Uniswap components on the critical external-call boundary during deployment. Re-entering through a compromised core dependency is outside the local threat model.
 
-- **`deployPool`** -- Requires `SET_BUYBACK_POOL` permission OR current weight has decayed to <= 1/10th of `initialWeightOf`. The permissionless path prevents indefinite token lockup by absent owners. When `initialWeightOf == 0` (no accumulation yet), permission is always required (`initialWeight == 0 || ...`).
-- **`rebalanceLiquidity`** -- Always requires `SET_BUYBACK_POOL` permission. No permissionless fallback. A hostile or absent owner can prevent rebalancing indefinitely, leaving the position at stale tick bounds.
-- **`collectAndRouteLPFees`** -- Fully permissionless. Any address can trigger. Enables keeper-based fee harvesting but also enables adversarial timing.
-- **`claimFeeTokensFor`** -- Requires `SET_BUYBACK_POOL` permission. Fee tokens accumulate in `claimableFeeTokens[projectId]` (ERC-20) and `claimableFeeCredits[projectId]` (credits). Both are drained in a single call. Each path (ERC-20 via `transfer` and credits via `controller.transferCreditsFrom`) is wrapped in an independent try-catch, so a failure in one does not block the other. On failure, bookkeeping is restored so the claim can be retried later. If unclaimed, tokens/credits sit in the hook contract indefinitely.
-- **`processSplitWith`** -- Only callable by `controllerOf(projectId)`. Validates `context.split.hook == address(this)` and `context.groupId == 1` (reserved tokens only).
-- **`initialize`** -- One-shot, no access control. First caller wins. The deployer factory calls it immediately after clone creation (in deployer). Validates `feePercent <= BPS` and `feeProjectId != 0` when `feePercent > 0`.
+### 7.2 Fee routing uses `minReturnedTokens: 0`
 
----
+Fee routing into the fee project intentionally does not set a local slippage floor. The fee project's own terminal and hook logic are expected to own that behavior.
 
-## 7. Invariants to Verify
+### 7.3 Permit2 approval overflow is guarded explicitly
 
-- **Token conservation across rebalance** -- Total tokens (hook + PositionManager) should not increase after `rebalanceLiquidity`. Leftover project tokens are burned (deflationary). Leftover terminal tokens are returned to project balance. Verified in `TestAuditGaps.test_Rebalance_ConservesTokenBalances`.
-- **No value creation from rebalance** -- The hook cannot mint tokens or create surplus. Rebalance only redistributes existing tokens between the LP position and the project balance. An external observer should see: `position_value_after + leftovers_burned + leftovers_returned <= position_value_before + accrued_fees`.
-- **Fee routing completeness** -- For every `collectAndRouteLPFees` or rebalance fee collection: `feeAmount + remainingAmount == totalCollected`. The fee project receives `floor(total * FEE_PERCENT / BPS)`, the project receives the rest. Rounding error <= 1 wei per operation.
-- **`tokenIdOf` never zero for deployed projects** -- After `deployPool` sets `tokenIdOf != 0`, `rebalanceLiquidity` either updates it to a new nonzero value or reverts entirely. The invariant `tokenIdOf[projectId][terminalToken] != 0 iff hasDeployedPool[projectId]` should always hold.
-- **`accumulatedProjectTokens` cleared on deploy** -- After `_addUniswapLiquidity` succeeds, `accumulatedProjectTokens[projectId]` is set to 0. No path exists where tokens are deployed but the accumulator retains a nonzero balance.
-- **Cross-project isolation** -- `accumulatedProjectTokens`, `tokenIdOf`, `poolKeysOf`, `claimableFeeTokens`, `claimableFeeCredits`, and `hasDeployedPool` are all keyed by `projectId`. Operations on one project must never read or write another project's state.
-- **Fee tokens match actual balance** -- `claimableFeeTokens[projectId]` should equal the actual fee project ERC-20 token balance attributable to that project. `claimableFeeCredits[projectId]` should equal the credit balance held by the hook for that project. In `claimFeeTokensFor`, each path (ERC-20 and credits) zeroes bookkeeping before the external call; on failure, bookkeeping is restored for retry. In `_routeFeesToProject`, `_totalOutstandingFeeTokenClaims` is pre-incremented before the `terminal.pay()` call and reconciled after, preventing reentrancy from seeing stale claims.
-- **Tick bounds always valid** -- `tickLower < tickUpper`, both aligned to TICK_SPACING (200), both within `[MIN_TICK + TICK_SPACING, MAX_TICK - TICK_SPACING]`. The sorting fix and clamp enforce this.
-- **One pool per (projectId, terminalToken)** -- `deployPool` reverts with `PoolAlreadyDeployed` if `tokenIdOf != 0`. No path creates a second pool for the same pair.
+The hook checks for `uint160` overflow before narrowing approval amounts for Permit2.
 
----
+### 7.4 Pre-initialized pools are validated against the expected band
 
-## 8. Accepted Behaviors
-
-### 8.1 Reentrancy trust boundary during `deployPool`
-
-`deployPool` writes `poolKeysOf` and sets `hasDeployedPool = true` before the external position mint. During `_mintPosition`, external contracts (`POSITION_MANAGER`, `IJBMultiTerminal`) execute callbacks. If a compromised contract re-entered `processSplitWith`, tokens would be accumulated via `_accumulateTokens` and then lost when `accumulatedProjectTokens` is zeroed. Multiple guards make this a non-issue in practice:
-
-- The Juicebox security model treats `POSITION_MANAGER`, `IJBMultiTerminal`, and `IJBController` as trusted, non-malicious contracts.
-- The `processSplitWith` entry point is gated to `msg.sender == controllerOf(projectId)`, so only the JB controller can invoke it.
-- The `tokenIdOf != 0` guard prevents re-entering `deployPool` once the position is minted, and `hasDeployedPool == false` routes to accumulation only before the first pool is deployed.
-- The practical reentrancy surface requires a compromised core protocol contract, which is outside this hook's threat model.
-
-### 8.2 Fee routing uses `minReturnedTokens: 0` (no slippage floor)
-
-`_routeFeesToProject` pays LP fees into the fee project's terminal with `minReturnedTokens: 0`. This is by design:
-
-- **Slippage protection is the fee project's responsibility.** The fee project (Juicebox protocol, project ID 1) controls its own data hook and buyback hook, which handle routing and slippage for incoming payments. The LP split hook has no oracle or TWAP reference for the fee project's token price, so any floor it sets would be arbitrary.
-- **A non-zero floor would revert on dust amounts.** When `feeAmount` is small (e.g., 1-100 wei), the fee project's weight-based minting via `mulDiv(feeAmount, weight, weightRatio)` can truncate to 0 tokens. Setting `minReturnedTokens: 1` would cause these payments to revert, blocking fee collection for the main project entirely.
-- **MEV surface is limited.** The fee payment does not move the LP pool price (it routes to a JB terminal, not V4). A sandwich attacker would need to manipulate the fee project's terminal state, which requires its own payment/cashout cycle — the payoff does not justify the complexity for the small amounts involved (typically 38% of accrued LP swap fees).
-
-### 8.3 Permit2 approval guards `uint160` overflow with explicit revert
-
-`_approveViaPermit2` checks `amount > type(uint160).max` and reverts with `JBUniswapV4LPSplitHook_Permit2AmountOverflow` before the narrowing cast. This is preferred over `SafeCast.toUint160` to avoid an external library dependency for a single check. The overflow condition is unreachable in practice — no ERC-20 in production has supply exceeding `type(uint160).max` (~1.46e48), and Permit2 itself enforces uint160 approval amounts at the protocol level — but the explicit revert provides defense-in-depth against silent truncation.
-
-### 8.4 Balance guard in `processSplitWith` for custom controllers
-
-After `_accumulateTokens`, `processSplitWith` verifies `IERC20(projectToken).balanceOf(address(this)) >= accumulatedProjectTokens[projectId]` and reverts with `JBUniswapV4LPSplitHook_InsufficientBalance` if violated. The standard JB controller transfers tokens before calling the split hook, so this check always passes under normal operation. However, projects may use custom controllers that do not guarantee transfer-before-callback ordering — the guard prevents silent accounting drift in that case.
-
-### 8.5 Pre-initialized pools are contract-validated against the expected band
-
-`deployPool` does not treat every outsider-initialized pool as fatal. `_createAndInitializePool` computes the LP tick bounds from the Juicebox-derived floor and ceiling, then checks the existing pool's initialized price: if the price falls within the expected band the deployment proceeds; if the price is outside the band the transaction reverts. This is a contract-enforced invariant, not an operator-level policy -- no manual judgment or operational recovery is required.
+The hook does not treat every outsider-initialized pool as fatal. It accepts pre-initialized pools only if the initialized price still falls inside the expected range.

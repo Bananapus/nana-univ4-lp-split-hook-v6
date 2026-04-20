@@ -27,7 +27,7 @@
 
 - Reserved-token issuance and cash-out economics come from `nana-core-v6`.
 - Pool and position behavior come from Uniswap V4.
-- Oracle behavior comes from the selected compatible hook configuration, commonly `univ4-router-v6`.
+- Oracle behavior comes from the selected compatible hook configuration, usually `univ4-router-v6`.
 
 ## Critical Flows
 
@@ -47,16 +47,16 @@ post-deployment
 
 ## Accounting Model
 
-The hook owns its local staging and LP-management state. It does not own reserved-token issuance or terminal accounting, which remain in `nana-core-v6`.
+The hook owns local staging and LP-management state. It does not own reserved-token issuance or terminal accounting.
 
-It also owns claim segregation for routed LP fees. Outstanding fee-token claims are tracked separately so project-token burn paths do not accidentally consume fee assets being held on behalf of projects.
+It also owns claim segregation for routed LP fees. Outstanding fee-token claims are tracked separately so project-token burn paths do not consume fee assets being held for beneficiaries.
 
 ## Security Model
 
 - The main risks are price-bound math, optimal cash-out math, and staged behavior drift.
 - Rebalance is effectively a remove-collect-recompute-mint pipeline and should be reviewed as one unit.
 - Pool initialization race conditions matter on first deployment.
-- Burn logic, fee routing, and outstanding-claim accounting are coupled. A change that treats raw balances as freely burnable can destroy fee claims reserved for beneficiaries.
+- Burn logic, fee routing, and outstanding-claim accounting are coupled.
 
 ## Safe Change Guide
 
@@ -64,7 +64,7 @@ It also owns claim segregation for routed LP fees. Outstanding fee-token claims 
 - Keep price-bound math, optimal cash-out math, and rebalance logic synchronized.
 - If you change fee routing or burn behavior, re-check outstanding fee-token claim segregation and in-flight fee routing assumptions.
 - If fee routing changes, inspect downstream fee-project behavior and claim paths.
-- Keep deployer assumptions aligned with address registry and deployment scripts.
+- Keep deployer assumptions aligned with the address registry and deployment scripts.
 
 ## Canonical Checks
 

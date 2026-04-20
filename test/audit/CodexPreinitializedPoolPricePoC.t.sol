@@ -113,36 +113,17 @@ contract CodexPreinitializedPoolPricePoC is LPSplitHookV4TestBase {
         mathHook.initialize(FEE_PROJECT_ID, FEE_PERCENT);
     }
 
-    function test_preinitializedPoolAtUnexpectedPriceRevertsDeployment() public {
+    /// @notice After M-4 fix: pre-initialized pool at unexpected price no longer reverts.
+    ///         The hook accepts the existing price and adds liquidity (possibly out-of-range).
+    function test_preinitializedPoolAtUnexpectedPrice_DeploySucceeds() public {
         uint256 totalProjectTokens = 100e18;
         _accumulateTokens(PROJECT_ID, totalProjectTokens);
 
-        (int24 tickLower, int24 tickUpper) =
+        (int24 tickLower,) =
             mathHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
 
-        uint160 expectedSqrtPrice =
-            mathHook.exposed_computeInitialSqrtPrice(PROJECT_ID, address(terminalToken), address(projectToken));
-        uint256 expectedCashOut = mathHook.exposed_computeOptimalCashOutAmount(
-            PROJECT_ID,
-            address(terminalToken),
-            address(projectToken),
-            totalProjectTokens,
-            expectedSqrtPrice,
-            tickLower,
-            tickUpper
-        );
-
-        // An attacker can initialize the public pool outside the LP band before deployPool().
-        uint160 attackerSqrtPrice = TickMath.getSqrtPriceAtTick(tickUpper + hook.TICK_SPACING());
-        uint256 attackerChosenCashOut = mathHook.exposed_computeOptimalCashOutAmount(
-            PROJECT_ID,
-            address(terminalToken),
-            address(projectToken),
-            totalProjectTokens,
-            attackerSqrtPrice,
-            tickLower,
-            tickUpper
-        );
+        // An attacker initializes the public pool outside the LP band before deployPool().
+        uint160 attackerSqrtPrice = TickMath.getSqrtPriceAtTick(tickLower - hook.TICK_SPACING() * 5);
 
         Currency terminalCurrency = Currency.wrap(address(terminalToken));
         Currency projectCurrency = Currency.wrap(address(projectToken));
@@ -160,18 +141,12 @@ contract CodexPreinitializedPoolPricePoC is LPSplitHookV4TestBase {
 
         positionManager.initializePool(key, attackerSqrtPrice);
 
+        // M-4 fix: deployment succeeds instead of reverting.
         vm.prank(owner);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PoolInitializedAtUnexpectedPrice.selector,
-                expectedSqrtPrice,
-                attackerSqrtPrice
-            )
-        );
         hook.deployPool(PROJECT_ID, address(terminalToken), 0);
 
-        assertLt(attackerChosenCashOut, expectedCashOut, "attacker price would reduce the cash-out amount");
-        assertEq(terminal.lastCashOutAmount(), 0, "deployment should fail before using the attacker-chosen price");
+        assertTrue(hook.hasDeployedPool(PROJECT_ID), "project should deploy successfully with attacker price");
+        assertGt(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "LP position should be created");
     }
 
     function test_preinitializedPoolWithinBandAcceptedByDeployment() public {

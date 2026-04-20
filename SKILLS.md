@@ -3,7 +3,7 @@
 ## Use This File For
 
 - Use this file when the task involves LP split accumulation, pool deployment, fee routing, rebalancing, fee claiming, or concentrated-liquidity math around the V4 LP split hook.
-- Start here, then decide whether the issue is still in accumulation mode, already in post-deployment burn-and-manage mode, or actually in clone/deployer setup. The lifecycle stage matters more than the file layout.
+- Start here, then decide whether the issue is still in accumulation mode, already in post-deployment burn-and-manage mode, or actually in clone/deployer setup.
 
 ## Read This Next
 
@@ -32,17 +32,16 @@ Reserved-token split hook that accumulates Juicebox project tokens, deploys them
 
 ## Reference Files
 
-- Open [`references/runtime.md`](./references/runtime.md) when you need the lifecycle stages, pool-deployment math, or the main invariants around accumulation, burn mode, and fee routing.
-- Open [`references/operations.md`](./references/operations.md) when you need deployer behavior, permission gates, test breadcrumbs, or the common stale assumptions around rebalancing and terminal-token choice.
+- Open [`references/runtime.md`](./references/runtime.md) for lifecycle stages, pool-deployment math, and the main invariants around accumulation, burn mode, and fee routing.
+- Open [`references/operations.md`](./references/operations.md) for deployer behavior, permission gates, test breadcrumbs, and common stale assumptions around rebalancing and terminal-token choice.
 
 ## Working Rules
 
 - Start in [`src/JBUniswapV4LPSplitHook.sol`](./src/JBUniswapV4LPSplitHook.sol) for runtime behavior, but check the deployer when the problem might be clone config or provenance.
 - Pool deployment is a one-way lifecycle transition. Once a project has a pool, assume the repo is in burn-and-manage mode unless the code proves otherwise.
-- Treat pool deployment, rebalance logic, fee routing, and fee claiming as high-risk. Small math or accounting changes there alter economic behavior directly.
-- `deployPool(...)` is usually gated by `SET_BUYBACK_POOL`, but becomes permissionless once the current ruleset weight has decayed to 1/10th or less of `initialWeightOf[projectId]`.
+- Treat pool deployment, rebalance logic, fee routing, and fee claiming as high-risk.
+- `deployPool(...)` is usually gated by `SET_BUYBACK_POOL`, but becomes permissionless once the current ruleset weight has decayed enough.
 - This hook supports only one deployed terminal-token pool per project because split contexts do not carry terminal-token identity.
-- Fee accounting can end up as ERC-20 fee tokens or fee credits depending on whether the fee project has an ERC-20 deployed. Check both `claimableFeeTokens` and `claimableFeeCredits`.
-- Rebalancing and fee claim logic share accounting surfaces. Verify outstanding fee-token claims before changing token or routing assumptions.
+- Fee accounting can end up as ERC-20 fee tokens or fee credits depending on whether the fee project has an ERC-20 deployed.
+- Rebalancing and fee-claim logic share accounting surfaces. Verify outstanding fee-token claims before changing token or routing assumptions.
 - When a task touches oracle or V4 hook assumptions, confirm whether the source of truth is this repo or `univ4-router-v6`.
-- Once a pool is deployed for a project-token pair, treat that deployment as the switch from accumulation mode into burn-and-manage mode unless the code clearly says otherwise.
