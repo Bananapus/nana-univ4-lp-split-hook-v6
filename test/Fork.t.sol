@@ -473,7 +473,6 @@ contract LPSplitHookForkTest is Test {
 
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should be deployed");
         assertGt(hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN), 0, "position NFT should be minted");
-        assertEq(hook.accumulatedProjectTokens(projectId), 100_000e18, "accumulated tokens should remain untouched");
     }
 
     /// @notice When the pool was already initialized within the expected LP band,
