@@ -17,6 +17,8 @@ fail_on_revert = false
 [rpc_endpoints]
 ethereum = "${RPC_ETHEREUM_MAINNET}"
 
+[lint]
+exclude_lints = ["pascal-case-struct", "mixed-case-variable"]
 [fmt]
 number_underscore = "thousands"
 multiline_func_header = "all"

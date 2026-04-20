@@ -1,158 +1,78 @@
 # Administration
 
-Admin privileges and their scope in univ4-lp-split-hook-v6.
-
 ## At A Glance
 
 | Item | Details |
-|------|---------|
-| Scope | Reserved-token accumulation, one-time pool deployment, rebalancing, and LP-fee routing for a project's V4 liquidity hook. |
-| Operators | Project owners, `SET_BUYBACK_POOL` delegates, the hook deployer, and the project's JB controller. |
-| Highest-risk actions | Deploying the pool on the wrong terminal-token path, misunderstanding the permissionless deployment trigger after weight decay, or assuming fees can be rerouted arbitrarily. |
-| Recovery posture | Once a project path transitions into deployed burn mode, you do not get an "undo" button. Recovery usually means using a different hook instance for future configuration. |
+| --- | --- |
+| Scope | Per-project LP split hook lifecycle from accumulation to live Uniswap V4 LP management |
+| Control posture | Project-owner or `SET_BUYBACK_POOL` delegated control over key lifecycle functions |
+| Highest-risk actions | Premature `deployPool(...)`, incorrect rebalance assumptions, and bad hook initialization |
+| Recovery posture | Usually requires replacement hooks or future split reconfiguration; no rollback to accumulation mode |
 
-## Routine Operations
+## Purpose
 
-- Verify the intended terminal token and economic bounds before calling `deployPool()`, because that action permanently chooses the active path for the hook instance.
-- Use `rebalanceLiquidity()` to refresh bounds as project economics evolve instead of trying to mutate pool identity.
-- Expect LP fee routing to follow the hardcoded project and fee-project terminal paths rather than an arbitrary payout destination.
-- Plan around the fact that anyone can trigger pool deployment once the 10x weight-decay condition is met.
+`univ4-lp-split-hook-v6` is administered per project path, with one major irreversible transition: the move from accumulation mode to deployed LP mode. The key admin surfaces are pool deployment, rebalance, and fee-claim paths gated by project ownership or `SET_BUYBACK_POOL`.
 
-## One-Way Or High-Risk Actions
+## Control Model
 
-- `initialize()` is one-time per clone.
-- `deployPool()` is the irreversible transition from accumulation to deployed burn mode for that project path.
-- Fee-project routing parameters on the clone are fixed at initialization.
-
-## Recovery Notes
-
-- If a hook instance was initialized or deployed against the wrong economic path, deploy a replacement hook and update the project's split configuration to use it for future reserved-token routing.
-- There is no direct rescue or rollback path to pull accumulated tokens out arbitrarily once the hook is live.
+- Project owner or `SET_BUYBACK_POOL` delegate controls the key lifecycle functions.
+- The deployer path is permissionless for creating a new hook instance.
+- Some post-deployment fee collection is permissionless.
+- Router, pool manager, and position manager dependencies are immutable.
 
 ## Roles
 
-### 1. Project Owner
+| Role | How Assigned | Scope | Notes |
+| --- | --- | --- | --- |
+| Project owner | `JBProjects.ownerOf(projectId)` through directory lookup | Per project | May delegate through `JBPermissions` |
+| Pool delegate | `SET_BUYBACK_POOL` permission | Per project | Controls deploy, rebalance, and fee-claim paths |
+| Hook deployer caller | Anyone | Per new hook instance | Can deploy a clone through the deployer |
 
-- **Assigned by:** Owning the JBProjects ERC-721 NFT for the given `projectId`.
-- **Scope:** Per-project. Each project has its own owner, and ownership is verified through `IJBDirectory(DIRECTORY).PROJECTS().ownerOf(projectId)`.
-- **Used for:** Gating `deployPool`, `rebalanceLiquidity`, and `claimFeeTokensFor`.
+## Privileged Surfaces
 
-### 2. Authorized Operator (SET_BUYBACK_POOL)
+| Contract | Function | Who Can Call | Effect |
+| --- | --- | --- | --- |
+| `JBUniswapV4LPSplitHook` | `deployPool(...)` | Project owner or `SET_BUYBACK_POOL` delegate, and eventually permissionless after the configured decay condition | Irreversibly transitions a project path into deployed LP mode |
+| `JBUniswapV4LPSplitHook` | `rebalanceLiquidity(...)` | Project owner or `SET_BUYBACK_POOL` delegate | Rebuilds the LP position within the current economic envelope |
+| `JBUniswapV4LPSplitHook` | `claimFeeTokensFor(...)` | Project owner or `SET_BUYBACK_POOL` delegate | Claims fee-project token balances |
+| `JBUniswapV4LPSplitHookDeployer` | `deployHookFor(...)` | Anyone | Deploys and initializes a new hook clone |
 
-- **Assigned by:** Project owner granting `JBPermissionIds.SET_BUYBACK_POOL` (permission ID 28) via `JBPermissions.setPermissionsFor(...)`.
-- **Scope:** Per-project, per-operator. The operator can act on behalf of the project owner for functions that require `SET_BUYBACK_POOL`.
-- **Used for:** Same functions as the project owner -- `deployPool`, `rebalanceLiquidity`, and `claimFeeTokensFor`.
+## Immutable And One-Way
 
-### 3. Hook Deployer (Anyone)
+- Clone initialization is one-time.
+- `deployPool(...)` is the irreversible lifecycle transition for a project path.
+- Fee-project configuration on a clone is fixed at initialization.
+- Constructor dependencies such as directory, permissions, pool manager, position manager, and oracle hook are immutable.
 
-- **Assigned by:** No assignment required. Anyone can call `JBUniswapV4LPSplitHookDeployer.deployHookFor()`.
-- **Scope:** Global. The caller becomes the initial context for the deployed clone (their address is included in the CREATE2 salt scoping).
+## Operational Notes
 
-### 4. JB Controller (System Role)
+- Validate terminal token and expected economic bounds before calling `deployPool(...)`.
+- Treat the accumulate-to-deployed transition as a treasury policy decision, not a routine action.
+- Review rebalance logic as remove, collect, recompute, and mint together.
+- Treat fee-token and credit-claim paths as retry-sensitive; some downstream failures preserve pending state for later recovery instead of cleanly unwinding every step.
 
-- **Assigned by:** The Juicebox directory's `controllerOf(projectId)` mapping. Not directly assignable by the hook.
-- **Scope:** Per-project. Only the controller registered for a given project can call `processSplitWith`.
-- **Used for:** Sending reserved tokens to the hook during distribution.
+## Machine Notes
 
-## Privileged Functions
+- Do not treat `deployPool(...)` as a reversible setup step; it is the main lifecycle boundary.
+- Inspect `src/JBUniswapV4LPSplitHook.sol` and the clone initialization path together before documenting authority.
+- If live pool identity or initialization params differ from intended config, stop and use a replacement hook path rather than assuming patchability.
+- If rebalance or fee-claim flows leave pending credits or hit zero-liquidity reverts, analyze the preserved state before assuming the project has been irreversibly bricked.
 
-### JBUniswapV4LPSplitHook
+## Recovery
 
-| Function | Required Role | Permission ID | Scope | What It Does |
-|----------|--------------|---------------|-------|-------------|
-| `deployPool(projectId, terminalToken, minCashOutReturn)` | Project owner or SET_BUYBACK_POOL operator. **Becomes permissionless** when the current ruleset weight has decayed to 1/10th or less of `initialWeightOf[projectId]`. | `JBPermissionIds.SET_BUYBACK_POOL` (28) | Per-project, single terminal-token path | Creates a Uniswap V4 pool at the geometric mean of issuance/cashout rates. If the public pool was already initialized, the hook reuses that live price when it still falls inside the LP band and reverts only when the existing price is outside the band. It then cashes out a computed fraction of accumulated project tokens for terminal tokens, mints a concentrated LP position, and transitions the project from accumulation to burn mode. This permanently commits the hook instance to one terminal-token path for that project. |
-| `rebalanceLiquidity(projectId, terminalToken, ...)` | Project owner or SET_BUYBACK_POOL operator | `JBPermissionIds.SET_BUYBACK_POOL` (28) | Per-project, per-terminal-token | Burns the existing LP position NFT, collects and routes accrued fees, recalculates tick bounds from current issuance/cashout rates, and mints a new position with updated bounds. Reverts with `InsufficientLiquidity` if the new position would have zero liquidity. |
-| `claimFeeTokensFor(projectId, beneficiary)` | Project owner or SET_BUYBACK_POOL operator | `JBPermissionIds.SET_BUYBACK_POOL` (28) | Per-project | Transfers accumulated fee-project tokens to the specified beneficiary address. Validates the caller's permission, not the beneficiary's identity. Zeroes `claimableFeeTokens[projectId]` before transferring. |
-| `processSplitWith(context)` | JB Controller (system) | None (checked via `controllerOf`) | Per-project | Only callable by the project's registered controller. Accumulates project tokens (pre-deployment) or burns them (post-deployment). Validates `context.split.hook == address(this)`, `groupId == 1`, and controller identity. |
-| `initialize(feeProjectId, feePercent)` | Anyone (once only) | None | Per-clone instance | Sets `FEE_PROJECT_ID` and `FEE_PERCENT` on a clone. Can only be called once per clone (`initialized` flag). In practice, called immediately by the deployer factory. |
-
-### JBUniswapV4LPSplitHookDeployer
-
-| Function | Required Role | Permission ID | Scope | What It Does |
-|----------|--------------|---------------|-------|-------------|
-| `deployHookFor(feeProjectId, feePercent, salt)` | Anyone | None | Global | Deploys a new hook clone via `LibClone`, calls `initialize()` on it, and registers it in the `JBAddressRegistry`. CREATE2 salt is scoped to `msg.sender`. |
-
-### Permissionless Functions (No Privilege Required)
-
-| Function | Scope | What It Does |
-|----------|-------|-------------|
-| `collectAndRouteLPFees(projectId, terminalToken)` | Per-project, per-terminal-token | Collects accrued V4 position fees and routes them: `FEE_PERCENT` of terminal token fees to the fee project via `terminal.pay()`, the remainder to the original project via `addToBalanceOf()`. Project token fees are burned. Safe because funds always go to verified project terminals. |
-| `isPoolDeployed(projectId, terminalToken)` | View | Returns whether `tokenIdOf[projectId][terminalToken] != 0`. |
-| `poolKeyOf(projectId, terminalToken)` | View | Returns the stored `PoolKey` for a deployed pool. |
-| `supportsInterface(interfaceId)` | View | Returns `true` for `IJBUniswapV4LPSplitHook` and `IJBSplitHook`. |
-| `receive()` | Accepts ETH | Required for cash-out with native ETH and V4 TAKE operations. |
-
-## Lifecycle States
-
-Each project-terminal-token path on the hook transitions through two states:
-
-```
-ACCUMULATING --> DEPLOYED (burn mode)
-```
-
-| State | Condition | Behavior |
-|-------|-----------|----------|
-| **ACCUMULATING** | `hasDeployedPool[projectId] == false` | `processSplitWith()` accumulates project tokens in the hook's balance. `deployPool()` is available (permissioned or permissionless after 10x decay). |
-| **DEPLOYED** | `hasDeployedPool[projectId] == true` | `processSplitWith()` burns incoming project tokens via the controller. `deployPool()` reverts with `PoolAlreadyDeployed` (same terminal token) or `OnlyOneTerminalTokenSupported` (different terminal token). `rebalanceLiquidity()` becomes available. LP fee collection is permissionless. |
-
-**Transition:** `deployPool()` is the one-way transition. It sets `hasDeployedPool[projectId] = true` before any external calls, then cashes out a fraction of accumulated tokens for terminal tokens, creates a Uniswap V4 pool, mints a concentrated LP position, and stores the position's token ID in `tokenIdOf`. Setting the flag early ensures reentrancy cannot observe the project as still accumulating. This transition is irreversible -- there is no mechanism to return to the accumulating state.
-
-**Note:** `isPoolDeployed(projectId, terminalToken)` checks `tokenIdOf[projectId][terminalToken] != 0`, which is a per-terminal-token view. The accumulate-vs-burn decision in `processSplitWith` uses `hasDeployedPool[projectId]`, which is a per-project flag. This distinction matters because the flag is set before the external mint call that sets `tokenIdOf`, making the state transition reentrancy-safe.
-
-**Permissionless deployment trigger:** Once the current ruleset weight decays to 1/10th or less of `initialWeightOf[projectId]`, the `SET_BUYBACK_POOL` permission check is bypassed and anyone can call `deployPool()`. This ensures pools eventually deploy even if the project owner is inactive.
-
-## Immutable Configuration
-
-These values are set at deploy time and cannot be changed afterward.
-
-### Implementation-Level (Constructor, Shared Across All Clones)
-
-| Parameter | Set In | Value Source |
-|-----------|--------|-------------|
-| `DIRECTORY` | Constructor | JBDirectory address |
-| `TOKENS` | Constructor | JBTokens address |
-| `POOL_MANAGER` | Constructor | Uniswap V4 PoolManager address |
-| `POSITION_MANAGER` | Constructor | Uniswap V4 PositionManager address |
-| `ORACLE_HOOK` | Constructor | Oracle hook (`IHooks`) for all JB V4 pools. Set in `PoolKey.hooks` when creating pools. Provides TWAP via `observe()`. |
-| `PERMISSIONS` | Inherited from `JBPermissioned` constructor | JBPermissions address |
-
-### Clone-Level (initialize(), Per-Instance)
-
-| Parameter | Set In | Value Source |
-|-----------|--------|-------------|
-| `FEE_PROJECT_ID` | `initialize()` | Project ID receiving LP fee share |
-| `FEE_PERCENT` | `initialize()` | Basis points (0-10000) of LP fees routed to fee project |
-
-### Protocol Constants (Hardcoded)
-
-| Constant | Value | Purpose |
-|----------|-------|---------|
-| `BPS` | 10,000 | 100% in basis points |
-| `POOL_FEE` | 10,000 | 1% Uniswap V4 fee tier |
-| `TICK_SPACING` | 200 | Tick spacing for the 1% fee tier |
+- If a hook instance was initialized or deployed against the wrong path, use a replacement hook instance and update split config for future flows.
+- There is no generic rollback to accumulation mode.
+- Some downstream controller failures are intentionally retryable because pending credits or fee-claim state can remain preserved for a later successful call.
 
 ## Admin Boundaries
 
-What admins **cannot** do:
+- Admins cannot rewrite fee configuration after clone initialization.
+- Admins cannot create multiple deployed pool identities for the same hook and project path.
+- Admins cannot mutate constructor immutables or retroactively change the pool manager or oracle hook.
+- Nobody can turn the permissionless fee-collection path into a gated path after deployment.
 
-1. **Cannot change fee configuration after initialization.** `FEE_PROJECT_ID` and `FEE_PERCENT` are write-once via `initialize()`. The `initialized` flag prevents re-initialization, even by the original deployer.
+## Source Map
 
-2. **Cannot withdraw accumulated tokens directly.** There is no `withdraw()` or `rescue()` function. Accumulated project tokens can only exit via `deployPool()` (into LP) or post-deployment burning.
-
-3. **Cannot redirect LP fees to arbitrary addresses.** Fee routing is hardcoded to go through `primaryTerminalOf` for both the fee project and the original project. There is no admin-settable destination.
-
-4. **Cannot modify pool parameters after deployment.** The `PoolKey` (fee tier, tick spacing, hook address, currency pair) is set during `_createAndInitializePool()` and stored immutably in `poolKeysOf`.
-
-5. **Cannot deploy a second pool for the same project/terminal-token pair.** `deployPool()` reverts with `PoolAlreadyDeployed` if `tokenIdOf[projectId][terminalToken] != 0`.
-
-6. **Cannot deploy a second terminal-token pool for the same project.** `processSplitWith` only receives the project token, not the terminal token. Once any pool is deployed, the project enters burn mode and `deployPool()` reverts with `OnlyOneTerminalTokenSupported` for other terminal tokens.
-
-7. **Cannot prevent permissionless fee collection.** `collectAndRouteLPFees()` has no access control. Anyone can trigger fee collection and routing for any deployed pool.
-
-8. **Cannot prevent permissionless pool deployment after 10x weight decay.** Once the current ruleset weight drops to 1/10th of `initialWeightOf[projectId]`, the `SET_BUYBACK_POOL` permission check is bypassed and anyone can deploy.
-
-9. **Cannot change the Uniswap V4 infrastructure contracts.** `POOL_MANAGER`, `POSITION_MANAGER`, `ORACLE_HOOK`, `DIRECTORY`, `TOKENS`, and `PERMISSIONS` are immutable, set in the implementation constructor, and shared across all clones.
-
-10. **Cannot control which project tokens are sent via `processSplitWith`.** The controller decides when and how much to distribute. The hook only receives what the JB protocol sends it.
-
-11. **Cannot recover funds sent to the wrong clone.** If tokens are sent directly (not through `processSplitWith`), there is no mechanism to retrieve them. Only project tokens sent via the controller accumulate correctly.
+- `src/JBUniswapV4LPSplitHook.sol`
+- `src/JBUniswapV4LPSplitHookDeployer.sol`
+- `test/`

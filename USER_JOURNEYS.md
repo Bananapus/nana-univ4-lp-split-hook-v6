@@ -1,59 +1,120 @@
 # User Journeys
 
-## Who This Repo Serves
+## Repo Purpose
+
+This repo takes reserved Juicebox token issuance and turns it into a managed UniV4 liquidity position.
+It owns the post-issuance lifecycle of accumulation, first-pool deployment, rebalancing, and fee tracking. It does not
+own the project's issuance logic or the lower-level UniV4 routing primitive it depends on.
+
+## Primary Actors
 
 - projects that want reserved-token issuance to become managed UniV4 liquidity
-- operators deploying and later rebalancing a concentrated-liquidity position tied to project economics
-- reviewers checking fee routing, range math, and post-deployment lifecycle assumptions
+- operators deploying and later rebalancing the position
+- auditors checking range math, fee tracking, and post-deployment lifecycle assumptions
+
+## Key Surfaces
+
+- `JBUniswapV4LPSplitHook`: accumulation, deployment, rebalancing, and fee tracking
+- `JBUniswapV4LPSplitHookDeployer`: clone and provenance packaging
+- `deployPool(...)`: first-pool deployment entrypoint
+- `rebalance(...)` / `claimFeeTokensFor(...)`: operate the position and release tracked fee value
 
 ## Journey 1: Accumulate Reserved Tokens Before A Pool Exists
 
-**Starting state:** the project is issuing reserved tokens but has not yet deployed a UniV4 pool position.
+**Actor:** project operator.
 
-**Success:** reserved issuance is captured by the split hook instead of being sent elsewhere.
+**Intent:** collect reserved issuance into the LP hook before liquidity exists.
 
-**Flow**
-1. Install `JBUniswapV4LPSplitHook` as the relevant reserved-token split recipient.
-2. Let the hook accumulate project tokens over time during the pre-deployment phase.
-3. Keep the project's issuance logic in the core repo and treat this repo as the post-issuance destination for those reserves.
+**Preconditions**
+- the project is issuing reserved tokens
+- the split hook is installed as the reserved-token destination
+
+**Main Flow**
+1. Install `JBUniswapV4LPSplitHook` as the reserved-token split recipient.
+2. Let reserved issuance accumulate during the pre-deployment phase.
+3. Treat core issuance as upstream and this repo as the post-issuance destination.
+
+**Failure Modes**
+- teams expect this repo to create reserved issuance rather than receive it
+- split configuration points reserved tokens somewhere else
+
+**Postconditions**
+- reserved issuance accumulates in the LP hook and is ready for later pool deployment
 
 ## Journey 2: Deploy The Initial UniV4 LP Position
 
-**Starting state:** enough reserved tokens have accumulated and the project is ready to create market liquidity.
+**Actor:** operator or, after weight decay, a permissionless caller.
 
-**Success:** the hook deploys or initializes the first concentrated-liquidity position using bounds derived from project economics.
+**Intent:** create the first bounded LP position using project economics.
 
-**Flow**
-1. Use `deployPool(...)` directly, or deploy a clone through the repo's deployer when the clone-creation path is what you need.
-2. Normally this requires `SET_BUYBACK_POOL`, but the deployment path becomes permissionless once the current ruleset weight has decayed to 1/10th or less of `initialWeightOf[projectId]`.
-3. Derive tick bounds and position shape from the project's issuance and cash-out assumptions instead of arbitrary market intuition.
-4. Register the deployed hook instance in the address registry if provenance tracking matters for the environment.
+**Preconditions**
+- enough reserved tokens have accumulated
+- the terminal token and project-token assumptions are correct
+- the caller understands when deployment is permissioned versus permissionless
 
-**Failure cases that matter:** attempting to deploy a second terminal-token pool for the same project, using an invalid terminal token, and assuming permission is always required even after the explicit weight-decay threshold is crossed.
+**Main Flow**
+1. Call `deployPool(...)` directly or use the deployer clone path.
+2. Respect the normal `SET_BUYBACK_POOL` requirement unless the explicit weight-decay threshold has been crossed.
+3. Derive tick bounds from issuance and cash-out assumptions rather than arbitrary price intuition.
+4. Optionally register the deployed instance in the address registry.
+
+**Failure Modes**
+- a second pool is attempted for the same project-token and terminal-token pair
+- the terminal token is invalid
+- third-party initialization occurs at a price outside the expected band
+
+**Postconditions**
+- the first bounded UniV4 LP position exists or deployment is blocked before an invalid pool is created
 
 ## Journey 3: Operate The Position After Deployment
 
-**Starting state:** the position exists and the project now needs ongoing liquidity management.
+**Actor:** operator.
 
-**Success:** the hook can collect fees, rebalance, and keep the LP position aligned with the intended economics.
+**Intent:** keep the LP position aligned with the intended economics.
 
-**Flow**
-1. Collect accrued LP fees through the hook's management surface.
+**Preconditions**
+- the position already exists
+- fee-project and token-ID assumptions are still valid
+
+**Main Flow**
+1. Collect accrued LP fees.
 2. Rebalance when price or issuance conditions make the old range stale.
-3. Keep fee routing and fee-project assumptions aligned so management actions do not distort the intended treasury behavior.
+3. Keep fee routing and fee-project assumptions aligned with the intended model.
 
-**Failure cases that matter:** stale token IDs, inverted tick bounds, reinitialization after ownership renounce, and fee-project validation mistakes that make the hook behave differently from its economic model.
+**Failure Modes**
+- stale token IDs or inverted tick bounds
+- reinitialization is attempted after ownership is no longer available
+- fee-project validation drift changes actual behavior
+
+**Postconditions**
+- the LP position remains aligned with the project's intended liquidity strategy
 
 ## Journey 4: Track And Claim Fee Value Generated By LP Operations
 
-**Starting state:** pool deployment, fee collection, or rebalancing has generated fee value that should be accounted for explicitly.
+**Actor:** operator or fee beneficiary.
 
-**Success:** operators understand which fees are routed immediately and which remain tracked as claimable fee tokens or fee credits.
+**Intent:** separate tracked fee value from incidental LP state and release it deliberately.
 
-**Flow**
-1. Rebalance or otherwise operate the position through the hook's approved management path.
-2. Watch both `claimableFeeTokens(...)` and `claimableFeeCredits(...)` after those actions.
-3. Use `claimFeeTokensFor(...)` when that tracked fee value should be released to a beneficiary instead of treating it as incidental LP dust.
+**Preconditions**
+- operations have generated tracked fee tokens or credits
+
+**Main Flow**
+1. Observe `claimableFeeTokens(...)` and `claimableFeeCredits(...)`.
+2. Use `claimFeeTokensFor(...)` when tracked fee value should move to a beneficiary.
+3. Treat this state as protocol-relevant accounting, not LP dust.
+
+**Failure Modes**
+- operators ignore tracked fee balances and misstate treasury outcomes
+- integrations assume all fee value is immediately distributed on rebalance
+
+**Postconditions**
+- tracked fee value is observable and can be deliberately claimed to a beneficiary
+
+## Trust Boundaries
+
+- this repo trusts core reserved-token issuance and fee-project assumptions
+- this repo trusts the UniV4 oracle and pool stack for market-side behavior
+- once deployed, the chosen pool path becomes part of the hook's economic identity
 
 ## Hand-Offs
 

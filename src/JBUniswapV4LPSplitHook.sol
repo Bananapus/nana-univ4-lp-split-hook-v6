@@ -143,11 +143,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     address public immutable TOKENS;
 
     /// @notice Project ID to receive LP fees
-    // forge-lint: disable-next-line(mixed-case-variable)
     uint256 public FEE_PROJECT_ID;
 
     /// @notice Percentage of LP fees to route to fee project (in basis points, e.g., 3800 = 38%)
-    // forge-lint: disable-next-line(mixed-case-variable)
     uint256 public FEE_PERCENT;
 
     //*********************************************************************//
@@ -1417,9 +1415,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             return 0;
         }
 
-        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 diffPriceInit_A = uint256(sqrtPriceInit) - uint256(sqrtPriceA);
-        // forge-lint: disable-next-line(mixed-case-variable)
         uint256 diffB_PriceInit = uint256(sqrtPriceB) - uint256(sqrtPriceInit);
 
         if (terminalIsToken0) {

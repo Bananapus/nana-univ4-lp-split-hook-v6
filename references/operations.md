@@ -4,7 +4,7 @@
 
 - [`src/JBUniswapV4LPSplitHookDeployer.sol`](../src/JBUniswapV4LPSplitHookDeployer.sol) is the first stop for clone deployment, salts, and registry provenance.
 - [`script/Deploy.s.sol`](../script/Deploy.s.sol) is the deployment entry point when current environment wiring matters.
-- [`src/interfaces/`](../src/interfaces/) and [`test/TestBaseV4.sol`](../test/TestBaseV4.sol) are useful when the issue is integration or harness setup.
+- `src/interfaces/` and [`test/TestBaseV4.sol`](../test/TestBaseV4.sol) are useful when the issue is integration or harness setup.
 
 ## Change Checklist
 
