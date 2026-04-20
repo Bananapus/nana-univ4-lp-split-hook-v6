@@ -14,14 +14,12 @@ Audit instructions: [AUDIT_INSTRUCTIONS.md](./AUDIT_INSTRUCTIONS.md)
 
 The hook has a two-stage lifecycle:
 
-- before pool deployment, it accumulates reserved project tokens over time
+- before pool deployment, it accumulates reserved project tokens
 - after deployment, it manages the LP position, fee collection, and rebalancing
 
-The LP range is derived from the project's economics rather than from an arbitrary market price target, which makes it a natural fit for protocol-native liquidity.
+The LP range is derived from project economics rather than from an arbitrary price target.
 
-Use this repo when reserved-token issuance should become managed concentrated liquidity. Do not use it when a project just needs a buyback hook or ordinary reserved-token splits.
-
-If the issue is "which route wins between Juicebox and the market?" start in the buyback or UniV4 router repo first. This package starts mattering after issuance, when reserved tokens are being deployed into liquidity.
+Use this repo when reserved-token issuance should become managed concentrated liquidity. Do not use it when a project only needs a buyback hook or normal reserved-token splits.
 
 ## Key Contracts
 
@@ -50,9 +48,9 @@ It does not own the project's issuance logic itself.
 ## Integration Traps
 
 - this hook governs post-issuance liquidity, so it should not be used to infer how project tokens were originally priced or minted
-- first-pool deployment assumptions are economically sensitive because external actors can initialize the pool first
-- LP management behavior depends on both live market state and live Juicebox economics, not on either in isolation
-- teams often miss that newly received reserved tokens are intentionally burned after deployment instead of added to the LP
+- first-pool deployment assumptions are economically sensitive because outside actors can initialize the pool first
+- LP management depends on both live market state and live Juicebox economics
+- newly received reserved tokens are intentionally burned after deployment instead of added pro rata to the LP
 
 ## Where State Lives
 
@@ -81,7 +79,7 @@ Useful scripts:
 
 ## Deployment Notes
 
-This repo composes with the UniV4 router package, the address registry, core protocol contracts, and Permit2. Teams should usually deploy one hook instance per project and terminal-token pair they want to manage, especially because fee-token accounting becomes more complex when clones are shared.
+This repo composes with the UniV4 router package, the address registry, core protocol contracts, and Permit2. Teams should usually deploy one hook instance per project and terminal-token pair they want to manage.
 
 ## Repository Layout
 
@@ -99,10 +97,10 @@ script/
 ## Risks And Notes
 
 - once a pool path is chosen for a deployed project-token pair, that choice becomes part of the hook's operational identity
-- first-pool deployment is publicly observable; if a third party initializes the V4 pool first, the contract automatically reverts when the existing price is outside the expected floor-to-ceiling band and accepts it when inside
+- first-pool deployment is publicly observable and can be front-run by outside initialization
 - LP deployment and rebalancing depend on current project economics and live market structure
-- after deployment, newly received reserved tokens are intentionally burned instead of added pro rata to avoid LP dilution
-- TWAP and oracle assumptions come from the UniV4 router and should be evaluated as part of the same liquidity design
+- after deployment, newly received reserved tokens are intentionally burned to avoid LP dilution
+- TWAP and oracle assumptions come from the UniV4 router and should be evaluated together with this hook
 
 ## For AI Agents
 
