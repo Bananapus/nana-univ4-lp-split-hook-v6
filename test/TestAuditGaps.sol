@@ -422,10 +422,11 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
 
         _accumulateTokensForProject(highReservedProject, 500e18);
 
+        // After L-6 tick re-clamp fix, extreme reserved percents deploy successfully
+        // with clamped tick bounds.
         vm.prank(owner);
-        vm.expectRevert();
         hook.deployPool(highReservedProject, address(terminalToken), 0);
-        assertEq(hook.tokenIdOf(highReservedProject, address(terminalToken)), 0, "no position should be minted");
+        assertTrue(hook.hasDeployedPool(highReservedProject), "pool should deploy with high reserved percent");
     }
 
     // -----------------------------------------------------------------------
