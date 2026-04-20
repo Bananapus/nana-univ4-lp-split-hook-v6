@@ -76,7 +76,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     error JBUniswapV4LPSplitHook_NotHookSpecifiedInContext();
     error JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported();
     error JBUniswapV4LPSplitHook_Permit2AmountOverflow();
-    error JBUniswapV4LPSplitHook_PoolInitializedAtUnexpectedPrice(uint160 expected, uint160 actual);
     error JBUniswapV4LPSplitHook_PoolAlreadyDeployed();
     error JBUniswapV4LPSplitHook_SplitSenderNotValidControllerOrTerminal();
     error JBUniswapV4LPSplitHook_TerminalTokensNotAllowed();
@@ -1232,6 +1231,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             currentTick = _alignTickToSpacing({tick: currentTick, spacing: TICK_SPACING});
             tickLower = currentTick - TICK_SPACING;
             tickUpper = currentTick + TICK_SPACING;
+
+            // Re-clamp to valid range — the fallback ticks may exceed boundaries when currentTick is near extremes.
+            if (tickLower < minUsable) tickLower = minUsable;
+            if (tickUpper > maxUsable) tickUpper = maxUsable;
         }
     }
 
@@ -1478,29 +1481,14 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             ruleset: ruleset
         });
 
-        // If a pool was already initialized, accept it only when the existing price falls within the LP
-        // position's tick bounds. This prevents inheriting a price that is completely outside the range
-        // where this project would provide liquidity, while still tolerating minor deviations from the
-        // exact computed price (e.g. when another deployer initialized the pool at a slightly different price).
+        // If the pool was already initialized (e.g. by an attacker or another deployer), accept the
+        // existing price and proceed. Liquidity will be added within the hook's configured tick bounds
+        // regardless of the current pool price — if the price is out of band the position will be
+        // single-sided and arbitrageurs will quickly move the price back into range.
         // slither-disable-next-line unused-return
         (uint160 existingSqrtPriceX96,,,) = POOL_MANAGER.getSlot0(key.toId());
         if (existingSqrtPriceX96 != 0) {
-            // Compute the LP position's tick range to determine the acceptable price band.
-            (int24 tickLower, int24 tickUpper) = _calculateTickBounds({
-                projectId: projectId,
-                terminalToken: terminalToken,
-                projectToken: projectToken,
-                controller: controller,
-                ruleset: ruleset
-            });
-            // Convert tick bounds to sqrt prices for comparison.
-            uint160 lowerBound = TickMath.getSqrtPriceAtTick(tickLower);
-            uint160 upperBound = TickMath.getSqrtPriceAtTick(tickUpper);
-            // Revert if the existing pool price is outside the LP band — the position would be single-sided.
-            if (existingSqrtPriceX96 < lowerBound || existingSqrtPriceX96 > upperBound) {
-                revert JBUniswapV4LPSplitHook_PoolInitializedAtUnexpectedPrice(sqrtPriceX96, existingSqrtPriceX96);
-            }
-            // Accept the in-band price so liquidity deploys around the existing market rate.
+            // Use the existing pool price for downstream liquidity calculations.
             sqrtPriceX96 = existingSqrtPriceX96;
         }
 
