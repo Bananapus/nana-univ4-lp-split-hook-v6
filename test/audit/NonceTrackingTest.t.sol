@@ -17,7 +17,7 @@ import {IJBUniswapV4LPSplitHook} from "../../src/interfaces/IJBUniswapV4LPSplitH
 
 import {MockJBDirectory, MockJBPermissions} from "../mock/MockJBContracts.sol";
 
-/// @notice Regression test for M-31: Verify nonce tracking stays in sync across mixed
+/// @notice Regression test for deployer nonce tracking: Verify nonce tracking stays in sync across mixed
 /// CREATE2/CREATE deployments.
 /// @dev Both CREATE and CREATE2 opcodes increment the sender's EVM nonce, so the deployer's
 /// `_nonce` must increment for both paths to stay in sync for address registry registration.
