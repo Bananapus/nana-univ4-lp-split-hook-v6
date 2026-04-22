@@ -84,6 +84,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     error JBUniswapV4LPSplitHook_UnauthorizedCaller();
     error JBUniswapV4LPSplitHook_ZeroAddressNotAllowed();
     error JBUniswapV4LPSplitHook_ZeroLiquidity();
+    error JBUniswapV4LPSplitHook_PoolPriceOutOfRange();
 
     //*********************************************************************//
     // ------------------------- public constants ------------------------ //
@@ -1481,13 +1482,24 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             ruleset: ruleset
         });
 
-        // If the pool was already initialized (e.g. by an attacker or another deployer), accept the
-        // existing price and proceed. Liquidity will be added within the hook's configured tick bounds
-        // regardless of the current pool price — if the price is out of band the position will be
-        // single-sided and arbitrageurs will quickly move the price back into range.
+        // If the pool was already initialized (e.g. by an attacker or another deployer), validate that
+        // the existing price falls within the hook's economic tick bounds. A pre-initialized pool with an
+        // extreme price could trap all liquidity on one side, preventing meaningful trading.
         // slither-disable-next-line unused-return
         (uint160 existingSqrtPriceX96,,,) = POOL_MANAGER.getSlot0(key.toId());
         if (existingSqrtPriceX96 != 0) {
+            // Validate the existing price falls within the hook's economic tick bounds.
+            (int24 boundLower, int24 boundUpper) = _calculateTickBounds({
+                projectId: projectId,
+                terminalToken: terminalToken,
+                projectToken: projectToken,
+                controller: controller,
+                ruleset: ruleset
+            });
+            int24 existingTick = TickMath.getTickAtSqrtPrice(existingSqrtPriceX96);
+            if (existingTick < boundLower || existingTick > boundUpper) {
+                revert JBUniswapV4LPSplitHook_PoolPriceOutOfRange();
+            }
             // Use the existing pool price for downstream liquidity calculations.
             sqrtPriceX96 = existingSqrtPriceX96;
         }

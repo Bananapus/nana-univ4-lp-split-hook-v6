@@ -177,10 +177,9 @@ contract AuditFixM4Test is LPSplitHookV4TestBase {
     // 3. Out-of-range liquidity is added correctly when price is outside tick bounds
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice When the pool is pre-initialized at a price outside the LP tick bounds,
-    ///         the hook adds single-sided (out-of-range) liquidity. The LP position is created
-    ///         and the PositionManager mint is called exactly once.
-    function test_M4_OutOfRangeLiquidity_AddedCorrectly() public {
+    /// @notice M-38 fix: When the pool is pre-initialized at a price outside the LP tick bounds,
+    ///         the hook now reverts instead of adding single-sided (out-of-range) liquidity.
+    function test_M4_OutOfRangeLiquidity_Reverts() public {
         uint256 totalProjectTokens = 100e18;
         _accumulateTokens(PROJECT_ID, totalProjectTokens);
 
@@ -200,26 +199,14 @@ contract AuditFixM4Test is LPSplitHookV4TestBase {
         });
 
         // Pre-initialize at an extreme price (far below expected LP range).
-        // This simulates an attacker setting a very low price — the liquidity will be
-        // single-sided (all in one token).
         int24 extremeTick = int24(-50_000);
         uint160 extremeSqrtPrice = TickMath.getSqrtPriceAtTick(extremeTick);
         positionManager.initializePool(key, extremeSqrtPrice);
 
-        uint256 mintCountBefore = positionManager.mintCallCount();
-
-        // deployPool should succeed with out-of-range liquidity.
+        // M-38 fix: deployPool should revert when the existing price is out of the tick bounds.
         vm.prank(owner);
+        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PoolPriceOutOfRange.selector);
         hook.deployPool(PROJECT_ID, address(terminalToken), 0);
-
-        // The position should still be minted.
-        assertEq(
-            positionManager.mintCallCount(),
-            mintCountBefore + 1,
-            "PositionManager mint should be called once for out-of-range position"
-        );
-        assertTrue(hook.hasDeployedPool(PROJECT_ID), "project should have a deployed pool");
-        assertGt(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "LP position NFT should exist");
     }
 }
 

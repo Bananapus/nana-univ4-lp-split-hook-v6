@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
+import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 
 /// @notice Audit gap tests: MEV/sandwich simulation on rebalance and extreme price scenarios.
 /// @dev These tests verify that the rebalance operation is resistant to sandwich-like
@@ -280,9 +281,9 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
     // 9b. Deploy with moderately low weight (nonzero issuance)
     // -----------------------------------------------------------------------
 
-    /// @notice Even a low but nonzero issuance rate should be blocked when it would
-    ///         reuse a pool initialized at a materially different price.
-    function test_ExtremePrice_LowButViableWeight() public {
+    /// @notice A low but nonzero issuance rate should be blocked when it would
+    ///         reuse a pool initialized at a materially different price (M-38 fix).
+    function test_ExtremePrice_LowButViableWeight_Reverts() public {
         uint256 lowWeightProject = 40;
         _setupProject(lowWeightProject);
 
@@ -293,10 +294,11 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
 
         _accumulateTokensForProject(lowWeightProject, 1000e18);
 
-        // After L-6 tick re-clamp fix, low weights deploy with clamped tick bounds.
+        // M-38 fix: the shared pool was initialized by PROJECT_ID at a different price.
+        // This project's weight produces tick bounds incompatible with the existing price.
         vm.prank(owner);
+        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PoolPriceOutOfRange.selector);
         hook.deployPool(lowWeightProject, address(terminalToken), 0);
-        assertTrue(hook.hasDeployedPool(lowWeightProject), "low weight project should deploy with clamped ticks");
     }
 
     // -----------------------------------------------------------------------
@@ -411,9 +413,9 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
     // 13b. Deploy with high (but not max) reserved percent
     // -----------------------------------------------------------------------
 
-    /// @notice With 99% reserved, deployment should still reject reuse of a mismatched
-    ///         preinitialized pool.
-    function test_ExtremePrice_HighReservedPercent_Deploys() public {
+    /// @notice With 99% reserved, deployment should reject reuse of a mismatched
+    ///         preinitialized pool (M-38 fix).
+    function test_ExtremePrice_HighReservedPercent_Reverts() public {
         uint256 highReservedProject = 80;
         _setupProject(highReservedProject);
 
@@ -422,11 +424,11 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
 
         _accumulateTokensForProject(highReservedProject, 500e18);
 
-        // After L-6 tick re-clamp fix, extreme reserved percents deploy successfully
-        // with clamped tick bounds.
+        // M-38 fix: the shared pool was initialized by PROJECT_ID at a price outside
+        // project 80's narrow tick bounds (99% reserved). Deployment correctly reverts.
         vm.prank(owner);
+        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PoolPriceOutOfRange.selector);
         hook.deployPool(highReservedProject, address(terminalToken), 0);
-        assertTrue(hook.hasDeployedPool(highReservedProject), "pool should deploy with high reserved percent");
     }
 
     // -----------------------------------------------------------------------

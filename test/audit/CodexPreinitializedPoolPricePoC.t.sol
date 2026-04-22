@@ -113,9 +113,8 @@ contract CodexPreinitializedPoolPricePoC is LPSplitHookV4TestBase {
         mathHook.initialize(FEE_PROJECT_ID, FEE_PERCENT);
     }
 
-    /// @notice After M-4 fix: pre-initialized pool at unexpected price no longer reverts.
-    ///         The hook accepts the existing price and adds liquidity (possibly out-of-range).
-    function test_preinitializedPoolAtUnexpectedPrice_DeploySucceeds() public {
+    /// @notice M-38 fix: pre-initialized pool at an out-of-range price now reverts.
+    function test_preinitializedPoolAtUnexpectedPrice_Reverts() public {
         uint256 totalProjectTokens = 100e18;
         _accumulateTokens(PROJECT_ID, totalProjectTokens);
 
@@ -141,12 +140,10 @@ contract CodexPreinitializedPoolPricePoC is LPSplitHookV4TestBase {
 
         positionManager.initializePool(key, attackerSqrtPrice);
 
-        // M-4 fix: deployment succeeds instead of reverting.
+        // M-38 fix: deployment reverts when pre-initialized price is out of the hook's tick bounds.
         vm.prank(owner);
+        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PoolPriceOutOfRange.selector);
         hook.deployPool(PROJECT_ID, address(terminalToken), 0);
-
-        assertTrue(hook.hasDeployedPool(PROJECT_ID), "project should deploy successfully with attacker price");
-        assertGt(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "LP position should be created");
     }
 
     function test_preinitializedPoolWithinBandAcceptedByDeployment() public {
