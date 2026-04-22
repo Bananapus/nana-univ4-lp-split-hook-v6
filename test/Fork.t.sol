@@ -438,9 +438,9 @@ contract LPSplitHookForkTest is Test {
     // ───────────────────────── Existing Pool (pre-initialized)
     // ─────────────
 
-    /// @notice M-38 fix: When the pool was already initialized by another party at a price outside
-    ///         the LP band, deployPool should revert instead of inheriting the external price.
-    function test_fork_deployPool_existingPoolOutsideBand_reverts() public {
+    /// @notice When the pool was already initialized by another party at a price outside the LP band,
+    ///         deployPool should revert instead of inheriting the external price.
+    function test_fork_deployPool_existingPoolOutsideBand_succeeds() public {
         // Build the same pool key the hook will use.
         address projToken = address(projectToken);
         Currency termCurrency = Currency.wrap(address(0)); // native ETH
@@ -466,10 +466,13 @@ contract LPSplitHookForkTest is Test {
         (uint160 sqrtPriceBefore,,,) = V4_POOL_MANAGER.getSlot0(poolId);
         assertEq(sqrtPriceBefore, externalSqrtPrice, "pool should be at external price");
 
-        // M-38 fix: the hook now rejects pre-initialized pools with out-of-range prices.
+        // M-4 fix: the hook now accepts pre-initialized pools and adds liquidity
+        // (possibly out-of-range) for later arbitrage correction.
         vm.prank(multisig);
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PoolPriceOutOfRange.selector);
         hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
+
+        assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should be deployed");
+        assertGt(hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN), 0, "position NFT should be minted");
     }
 
     /// @notice When the pool was already initialized within the expected LP band,
