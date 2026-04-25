@@ -516,8 +516,8 @@ contract PriceMathTest is LPSplitHookV4TestBase {
             PROJECT_ID, address(terminalToken), address(projectToken), 200e18, sqrtPriceInit, tickLower, tickUpper
         );
 
-        // Should be exactly 2x (linear scaling)
-        assertEq(cashOut200, cashOut100 * 2, "Cash-out should scale linearly with total tokens");
+        // Should be ~2x (linear scaling); allow 1 wei tolerance for mulDiv rounding.
+        assertApproxEqAbs(cashOut200, cashOut100 * 2, 1, "Cash-out should scale linearly with total tokens");
     }
 
     // ─────────────────────────────────────────────────────────────────────

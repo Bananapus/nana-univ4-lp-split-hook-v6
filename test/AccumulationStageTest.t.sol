@@ -249,7 +249,10 @@ contract AccumulationStageTest is LPSplitHookV4TestBase {
         // Build context with token = address(0) — simulating a project that only has credits
         JBSplitHookContext memory context = _buildContext(PROJECT_ID, address(0), amount, 1);
 
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidProjectId.selector);
+        // With M-44 fix, the hook uses the canonical token (from TOKENS.tokenOf), not context.token.
+        // Since the project has a real ERC-20, the canonical token is non-zero, but no actual tokens
+        // were transferred, so the balance check catches the mismatch.
+        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientBalance.selector);
         vm.prank(address(controller));
         hook.processSplitWith(context);
     }

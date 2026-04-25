@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
+import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 import {JBPermissioned} from "@bananapus/core-v6/src/abstract/JBPermissioned.sol";
 import {JBPermissionIds} from "@bananapus/permission-ids-v6/src/JBPermissionIds.sol";
 
@@ -128,8 +129,11 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
         assertTrue(hook.tokenIdOf(PROJECT_ID, address(terminalToken)) != 0, "pool should be deployed after 100x decay");
     }
 
-    /// @notice When current weight is 0 (infinite decay), access control is bypassed
-    ///         and the pool deploys with max upper tick range (no issuance ceiling).
+    /// @notice When current weight is 0 (infinite decay), the permission check is bypassed
+    ///         (0 * 10 <= initialWeight). With the H-30 fix, the issuance fallback returns
+    ///         a token-order-aware extreme (MIN when terminal is token0), so the initial price
+    ///         is set at a valid midpoint rather than at the upper bound. This allows the LP
+    ///         position to deploy successfully with cash-out-derived terminal tokens.
     function test_deployPool_permissionless_whenWeightIsZero() public {
         _accumulateTokens(PROJECT_ID, 100e18);
 
@@ -141,13 +145,16 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
         terminalToken.approve(address(positionManager), type(uint256).max);
         vm.stopPrank();
 
-        // The permission check is bypassed (0 * 10 <= initialWeight),
-        // and the pool deploys with max upper range since issuance is zero.
+        // With the H-30 fix, the token-order-aware fallback places the initial price
+        // at a valid midpoint, allowing the LP to deploy. The deployment succeeding
+        // (not reverting with Unauthorized) proves the permissionless path was reached.
         vm.prank(randomUser);
         hook.deployPool(PROJECT_ID, address(terminalToken), 0);
 
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        assertTrue(tokenId != 0, "Pool should deploy with zero weight");
+        assertTrue(
+            hook.tokenIdOf(PROJECT_ID, address(terminalToken)) != 0,
+            "pool should be deployed by random user after infinite decay"
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────────
