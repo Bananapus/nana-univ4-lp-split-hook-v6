@@ -616,51 +616,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         return uint160(result);
     }
 
-    /// @notice For given projectToken amount, compute equivalent terminalToken amount at current JuiceboxV4 price.
-    /// @param projectId The ID of the project.
-    /// @param terminalToken The terminal token address.
-    /// @param projectTokenInAmount The amount of project tokens to convert.
-    /// @param controller The project's controller address (pre-fetched to avoid redundant lookups).
-    /// @param ruleset The project's current ruleset (pre-fetched to avoid redundant lookups).
-    /// @return terminalTokenOutAmount The equivalent terminal token amount at the current issuance weight.
-    // slither-disable-next-line unused-return
-    function _getTerminalTokensOutForProjectTokensIn(
-        uint256 projectId,
-        address terminalToken,
-        uint256 projectTokenInAmount,
-        address controller,
-        JBRuleset memory ruleset
-    )
-        internal
-        view
-        returns (uint256 terminalTokenOutAmount)
-    {
-        // Look up the project's primary terminal for this token.
-        address terminal =
-            address(IJBDirectory(DIRECTORY).primaryTerminalOf({projectId: projectId, token: terminalToken}));
-        // Fetch the terminal's accounting context (decimals, currency) for this project/token pair.
-        JBAccountingContext memory context =
-            IJBMultiTerminal(terminal).accountingContextForTokenOf({projectId: projectId, token: terminalToken});
-
-        // Read the base currency from the ruleset (e.g. ETH=1, USD=2).
-        uint32 baseCurrency = ruleset.baseCurrency();
-
-        // Compute the weight ratio: if the terminal currency matches the base currency, use 10^decimals
-        // directly; otherwise, convert via the price oracle.
-        uint256 weightRatio = context.currency == baseCurrency
-            ? 10 ** context.decimals
-            : IJBController(controller).PRICES()
-                .pricePerUnitOf({
-                    projectId: projectId,
-                    pricingCurrency: context.currency,
-                    unitCurrency: baseCurrency,
-                    decimals: context.decimals
-                });
-
-        // Invert the issuance formula: project tokens × weightRatio ÷ weight = terminal tokens.
-        terminalTokenOutAmount = mulDiv({x: projectTokenInAmount, y: weightRatio, denominator: ruleset.weight});
-    }
-
     /// @notice Get token decimals, defaulting to 18 if unavailable.
     /// @param token The token address to query decimals for.
     /// @return decimals The token's decimal count (defaults to 18 for native ETH or non-compliant tokens).
