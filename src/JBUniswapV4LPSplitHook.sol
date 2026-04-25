@@ -84,6 +84,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     error JBUniswapV4LPSplitHook_UnauthorizedCaller();
     error JBUniswapV4LPSplitHook_ZeroAddressNotAllowed();
     error JBUniswapV4LPSplitHook_ZeroLiquidity();
+    error JBUniswapV4LPSplitHook_InvalidTickBounds();
 
     //*********************************************************************//
     // ------------------------- public constants ------------------------ //
@@ -406,8 +407,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             projectId: projectId, terminalToken: terminalToken, controller: controller, ruleset: ruleset
         });
 
-        // If the cash out rate is 0 (no surplus or negligible surplus), return the minimum price.
-        if (terminalTokensPerProjectToken == 0) return TickMath.MIN_SQRT_PRICE;
+        // If the cash out rate is 0 (no surplus or negligible surplus), return an extreme price.
+        // The correct extreme depends on token ordering since sqrtPriceX96 = sqrt(token1/token0):
+        // - terminalToken is token0: token1(PT)/token0(TT) → ∞ as PT becomes worthless → MAX
+        // - projectToken is token0: token1(TT)/token0(PT) → 0 as PT becomes worthless → MIN
+        if (terminalTokensPerProjectToken == 0) {
+            return token0 == terminalToken ? TickMath.MAX_SQRT_PRICE - 1 : TickMath.MIN_SQRT_PRICE;
+        }
 
         // Use 1 WAD of token0 as the reference amount for price computation.
         uint256 token0Amount = _WAD;
@@ -493,25 +499,29 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             projectId: projectId, terminalToken: terminalToken, controller: controller, ruleset: ruleset
         });
 
-        // If the issuance rate is 0 (e.g. 100% reserved rate or zero weight), return the maximum price.
-        // This pushes the LP's upper tick to maxUsable, giving it the widest possible upper range.
-        if (projectTokensPerTerminalToken == 0) return TickMath.MAX_SQRT_PRICE - 1;
-
-        // Use 1 WAD of token0 as the reference amount for price computation.
-        uint256 token0Amount = _WAD;
-        uint256 token1Amount;
-
-        // Map the issuance rate to token0/token1 amounts depending on which side is the terminal token.
-        if (token0 == terminalToken) {
-            // terminal is token0: the issuance rate directly gives token1 per token0.
-            token1Amount = projectTokensPerTerminalToken;
-        } else {
-            // terminal is token1: invert the rate to get terminalTokens per projectToken.
-            token1Amount = mulDiv({x: token0Amount, y: _WAD, denominator: projectTokensPerTerminalToken});
+        // If the issuance rate is 0 (e.g. 100% reserved rate or zero weight), return an extreme price.
+        // The correct extreme depends on token ordering since sqrtPriceX96 = sqrt(token1/token0):
+        // - terminalToken is token0: token1(PT)/token0(TT) → 0 as PT becomes unmintable → MIN
+        // - projectToken is token0: token1(TT)/token0(PT) → ∞ as PT becomes unmintable → MAX
+        if (projectTokensPerTerminalToken == 0) {
+            return token0 == terminalToken ? TickMath.MIN_SQRT_PRICE : TickMath.MAX_SQRT_PRICE - 1;
         }
 
-        // Encode as sqrtPriceX96: sqrt(token1/token0) × 2^96.
-        return uint160(mulDiv({x: sqrt(token1Amount), y: _Q96, denominator: sqrt(token0Amount)}));
+        // Compute sqrtPriceX96 directly from the rate to avoid intermediate division
+        // that rounds to 0 when projectTokensPerTerminalToken > 1e36.
+        uint256 result;
+        if (token0 == terminalToken) {
+            // terminal is token0: sqrtPrice = sqrt(PT/TT) × 2^96 = sqrt(rate) × 2^96 / sqrt(WAD).
+            result = mulDiv({x: sqrt(projectTokensPerTerminalToken), y: _Q96, denominator: sqrt(_WAD)});
+        } else {
+            // project is token0: sqrtPrice = sqrt(TT/PT) × 2^96 = sqrt(WAD) × 2^96 / sqrt(rate).
+            result = mulDiv({x: sqrt(_WAD), y: _Q96, denominator: sqrt(projectTokensPerTerminalToken)});
+        }
+
+        // Clamp to valid Uniswap V4 sqrt price range.
+        if (result < uint256(TickMath.MIN_SQRT_PRICE)) return TickMath.MIN_SQRT_PRICE;
+        if (result > uint256(TickMath.MAX_SQRT_PRICE - 1)) return TickMath.MAX_SQRT_PRICE - 1;
+        return uint160(result);
     }
 
     /// @notice For given terminalToken amount, compute equivalent projectToken amount at current JuiceboxV4 price.
@@ -580,78 +590,30 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // Sort tokens to determine which is token0 (lower address) for the Uniswap pair.
         (address token0,) = _sortTokens({tokenA: terminalToken, tokenB: projectToken});
 
-        // Use 1 WAD of token0 as the reference amount for price computation.
-        uint256 token0Amount = _WAD;
-        uint256 token1Amount;
+        // Use the net issuance rate (after reserved% deduction) so the fallback price
+        // reflects the tokens a payer actually receives, not the gross weight.
+        uint256 issuanceRate = _getIssuanceRate({
+            projectId: projectId, terminalToken: terminalToken, controller: controller, ruleset: ruleset
+        });
 
-        // Convert 1 WAD of token0 to token1 at the current Juicebox price.
-        if (token0 == terminalToken) {
-            // terminal is token0: compute how many project tokens 1 WAD of terminal tokens would mint.
-            token1Amount = _getProjectTokensOutForTerminalTokensIn({
-                projectId: projectId,
-                terminalToken: terminalToken,
-                terminalTokenInAmount: token0Amount,
-                controller: controller,
-                ruleset: ruleset
-            });
-        } else {
-            // project is token0: compute how many terminal tokens 1 WAD of project tokens would redeem.
-            token1Amount = _getTerminalTokensOutForProjectTokensIn({
-                projectId: projectId,
-                terminalToken: terminalToken,
-                projectTokenInAmount: token0Amount,
-                controller: controller,
-                ruleset: ruleset
-            });
+        // Guard against zero issuance (e.g. 100% reserved or weight=0) — return an extreme price
+        // matching the token ordering convention used by _getIssuanceRateSqrtPriceX96.
+        if (issuanceRate == 0) {
+            return token0 == terminalToken ? TickMath.MIN_SQRT_PRICE : TickMath.MAX_SQRT_PRICE - 1;
         }
 
-        // Encode as sqrtPriceX96: sqrt(token1/token0) × 2^96.
-        return uint160(mulDiv({x: sqrt(token1Amount), y: _Q96, denominator: sqrt(token0Amount)}));
-    }
+        // Compute sqrtPriceX96 directly from the rate, matching the M-50 pattern.
+        uint256 result;
+        if (token0 == terminalToken) {
+            result = mulDiv({x: sqrt(issuanceRate), y: _Q96, denominator: sqrt(_WAD)});
+        } else {
+            result = mulDiv({x: sqrt(_WAD), y: _Q96, denominator: sqrt(issuanceRate)});
+        }
 
-    /// @notice For given projectToken amount, compute equivalent terminalToken amount at current JuiceboxV4 price.
-    /// @param projectId The ID of the project.
-    /// @param terminalToken The terminal token address.
-    /// @param projectTokenInAmount The amount of project tokens to convert.
-    /// @param controller The project's controller address (pre-fetched to avoid redundant lookups).
-    /// @param ruleset The project's current ruleset (pre-fetched to avoid redundant lookups).
-    /// @return terminalTokenOutAmount The equivalent terminal token amount at the current issuance weight.
-    // slither-disable-next-line unused-return
-    function _getTerminalTokensOutForProjectTokensIn(
-        uint256 projectId,
-        address terminalToken,
-        uint256 projectTokenInAmount,
-        address controller,
-        JBRuleset memory ruleset
-    )
-        internal
-        view
-        returns (uint256 terminalTokenOutAmount)
-    {
-        // Look up the project's primary terminal for this token.
-        address terminal =
-            address(IJBDirectory(DIRECTORY).primaryTerminalOf({projectId: projectId, token: terminalToken}));
-        // Fetch the terminal's accounting context (decimals, currency) for this project/token pair.
-        JBAccountingContext memory context =
-            IJBMultiTerminal(terminal).accountingContextForTokenOf({projectId: projectId, token: terminalToken});
-
-        // Read the base currency from the ruleset (e.g. ETH=1, USD=2).
-        uint32 baseCurrency = ruleset.baseCurrency();
-
-        // Compute the weight ratio: if the terminal currency matches the base currency, use 10^decimals
-        // directly; otherwise, convert via the price oracle.
-        uint256 weightRatio = context.currency == baseCurrency
-            ? 10 ** context.decimals
-            : IJBController(controller).PRICES()
-                .pricePerUnitOf({
-                    projectId: projectId,
-                    pricingCurrency: context.currency,
-                    unitCurrency: baseCurrency,
-                    decimals: context.decimals
-                });
-
-        // Invert the issuance formula: project tokens × weightRatio ÷ weight = terminal tokens.
-        terminalTokenOutAmount = mulDiv({x: projectTokenInAmount, y: weightRatio, denominator: ruleset.weight});
+        // Clamp to valid Uniswap V4 sqrt price range.
+        if (result < uint256(TickMath.MIN_SQRT_PRICE)) return TickMath.MIN_SQRT_PRICE;
+        if (result > uint256(TickMath.MAX_SQRT_PRICE - 1)) return TickMath.MAX_SQRT_PRICE - 1;
+        return uint160(result);
     }
 
     /// @notice Get token decimals, defaulting to 18 if unavailable.
@@ -821,7 +783,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         if (context.groupId != 1) revert JBUniswapV4LPSplitHook_TerminalTokensNotAllowed();
 
-        address projectToken = context.token;
+        address projectToken = address(IJBTokens(TOKENS).tokenOf(context.projectId));
 
         if (!hasDeployedPool[context.projectId]) {
             // Record the initial weight on first accumulation.
@@ -879,9 +841,16 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             projectId: projectId, projectToken: projectToken, terminalToken: terminalToken, tokenId: tokenId, key: key
         });
 
+        // Snapshot balances before burn to isolate per-project recovered amounts (H-32).
+        uint256 projBalBefore = IERC20(projectToken).balanceOf(address(this));
+        uint256 termBalBefore = _getTerminalTokenBalance(terminalToken);
+
         _burnExistingPosition({
             tokenId: tokenId, key: key, decreaseAmount0Min: decreaseAmount0Min, decreaseAmount1Min: decreaseAmount1Min
         });
+
+        uint256 recoveredProjectTokens = IERC20(projectToken).balanceOf(address(this)) - projBalBefore;
+        uint256 recoveredTerminalTokens = _getTerminalTokenBalance(terminalToken) - termBalBefore;
 
         // Cache controller and ruleset once for _mintRebalancedPosition and its callees.
         address controller = address(IJBDirectory(DIRECTORY).controllerOf(projectId));
@@ -894,7 +863,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             terminalToken: terminalToken,
             key: key,
             controller: controller,
-            ruleset: ruleset
+            ruleset: ruleset,
+            projectTokenBalance: recoveredProjectTokens,
+            terminalTokenBalance: recoveredTerminalTokens
         });
     }
 
@@ -1006,8 +977,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 });
         }
 
-        // Get balances after cash out, excluding tokens reserved for outstanding fee claims
-        uint256 projectTokenAmount = IERC20(projectToken).balanceOf(address(this)) - _reservedTokenBalance(projectToken);
+        // Use per-project accounting instead of global balanceOf to isolate cross-project tokens (H-32).
+        uint256 projectTokenAmount = projectTokenBalance - cashOutAmount;
         uint256 terminalTokenAmount = _getTerminalTokenBalance(terminalToken) - terminalTokenBalanceBefore;
 
         // Sort amounts by currency order
@@ -1032,11 +1003,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // slither-disable-next-line incorrect-equality
         if (liquidity == 0) revert JBUniswapV4LPSplitHook_ZeroLiquidity();
 
-        // Record tokenId before minting. tokenIdOf is set after the external _mintPosition call
-        // because nextTokenId() must be captured before the mint increments it. This ordering is safe:
-        // the caller (deployPool) checks tokenIdOf == 0 as a guard before entering this function,
-        // so reentering deployPool would revert with PoolAlreadyDeployed once tokenIdOf is nonzero.
-        uint256 tokenId = POSITION_MANAGER.nextTokenId();
+        // Snapshot balances before minting to isolate per-project leftovers (H-32).
+        uint256 projBalBeforeMint = IERC20(projectToken).balanceOf(address(this));
+        uint256 termBalBeforeMint = _getTerminalTokenBalance(terminalToken);
 
         _mintPosition({
             key: key,
@@ -1047,12 +1016,37 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             amount1: amount1
         });
 
-        tokenIdOf[projectId][terminalToken] = tokenId;
+        // Read the token ID after minting — nextTokenId was incremented by the MINT_POSITION action
+        // inside modifyLiquidities, so (nextTokenId - 1) is the ID that was just minted.
+        tokenIdOf[projectId][terminalToken] = POSITION_MANAGER.nextTokenId() - 1;
 
-        // Handle leftover tokens
-        _handleLeftoverTokens({projectId: projectId, projectToken: projectToken, terminalToken: terminalToken});
+        // Per-project leftover handling via snapshot-delta (H-32).
+        // Safe subtraction: V4 SWEEP may return dust beyond what was settled.
+        uint256 postProjBal = IERC20(projectToken).balanceOf(address(this));
+        uint256 postTermBal = _getTerminalTokenBalance(terminalToken);
+        uint256 projConsumed = projBalBeforeMint > postProjBal ? projBalBeforeMint - postProjBal : 0;
+        uint256 termConsumed = termBalBeforeMint > postTermBal ? termBalBeforeMint - postTermBal : 0;
+        uint256 projLeftover = projectTokenAmount > projConsumed ? projectTokenAmount - projConsumed : 0;
+        uint256 termLeftover = terminalTokenAmount > termConsumed ? terminalTokenAmount - termConsumed : 0;
 
-        // Clear accumulated balances after successful LP creation
+        if (projLeftover > 0) {
+            _burnProjectTokens({
+                projectId: projectId,
+                projectToken: projectToken,
+                amount: projLeftover,
+                memo: "Burning leftover project tokens"
+            });
+        }
+        if (termLeftover > 0) {
+            _addToProjectBalance({
+                projectId: projectId,
+                token: terminalToken,
+                amount: termLeftover,
+                isNative: _isNativeToken(terminalToken)
+            });
+        }
+
+        // Clear accumulated balances after successful LP creation.
         accumulatedProjectTokens[projectId] = 0;
     }
 
@@ -1182,6 +1176,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             issuanceTick = _alignTickToSpacing({tick: issuanceTick, spacing: TICK_SPACING});
             tickLower = issuanceTick - TICK_SPACING;
             tickUpper = issuanceTick + TICK_SPACING;
+
+            // Clamp to valid V4 tick range (M-46).
+            int24 minUsable = _alignTickToSpacing({tick: TickMath.MIN_TICK, spacing: TICK_SPACING}) + TICK_SPACING;
+            int24 maxUsable = _alignTickToSpacing({tick: TickMath.MAX_TICK, spacing: TICK_SPACING}) - TICK_SPACING;
+            if (tickLower < minUsable) tickLower = minUsable;
+            if (tickUpper > maxUsable) tickUpper = maxUsable;
+            if (tickLower >= tickUpper) tickUpper = tickLower + TICK_SPACING;
             return (tickLower, tickUpper);
         }
 
@@ -1235,6 +1236,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             // Re-clamp to valid range — the fallback ticks may exceed boundaries when currentTick is near extremes.
             if (tickLower < minUsable) tickLower = minUsable;
             if (tickUpper > maxUsable) tickUpper = maxUsable;
+
+            // Final validation: if clamping collapsed the range, revert rather than create an invalid position.
+            if (tickLower >= tickUpper) revert JBUniswapV4LPSplitHook_InvalidTickBounds();
         }
     }
 
@@ -1422,11 +1426,16 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint256 diffB_PriceInit = uint256(sqrtPriceB) - uint256(sqrtPriceInit);
 
         if (terminalIsToken0) {
-            numerator = uint256(sqrtPriceInit);
-            denominator = mulDiv({x: diffPriceInit_A, y: uint256(sqrtPriceB), denominator: diffB_PriceInit});
+            // Correct ratio: amount0/amount1 = Q96² × (√Pb − √P) / (√P × √Pb × (√P − √Pa))
+            // Computed step-by-step to avoid overflow.
+            uint256 step1 = mulDiv({x: _Q96, y: diffB_PriceInit, denominator: uint256(sqrtPriceInit)});
+            numerator = mulDiv({x: step1, y: _Q96, denominator: uint256(sqrtPriceB)});
+            denominator = diffPriceInit_A;
         } else {
-            numerator = mulDiv({x: uint256(sqrtPriceInit), y: diffPriceInit_A, denominator: diffB_PriceInit});
-            denominator = 1;
+            // Correct ratio: amount1/amount0 = √P × √Pb × (√P − √Pa) / (Q96² × (√Pb − √P))
+            uint256 step1 = mulDiv({x: uint256(sqrtPriceInit), y: uint256(sqrtPriceB), denominator: _Q96});
+            numerator = mulDiv({x: step1, y: diffPriceInit_A, denominator: _Q96});
+            denominator = diffB_PriceInit;
         }
 
         uint256 ratioE18 = mulDiv({x: numerator, y: _WAD, denominator: denominator});
@@ -1437,9 +1446,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         if (denom == 0) return 0;
 
         cashOutAmount = mulDiv({x: totalProjectTokens, y: ratioE18, denominator: denom});
-
-        uint256 maxCashOut = totalProjectTokens / 2;
-        if (cashOutAmount > maxCashOut) cashOutAmount = maxCashOut;
     }
 
     /// @notice Create and initialize Uniswap V4 pool.
@@ -1556,38 +1562,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         return IERC20(terminalToken).balanceOf(address(this));
     }
 
-    /// @notice Handle leftover tokens after V4 mint operation.
-    /// @dev Both sweeps subtract `_totalOutstandingFeeTokenClaims` for their respective token address. This is
-    /// necessary because any token address may have outstanding fee claims — a project could use the fee project's
-    /// ERC-20 as its terminal token, making the terminal token and the fee token the same address.
-    /// @param projectId The ID of the project whose leftover tokens to handle.
-    /// @param projectToken The project's ERC-20 token address.
-    /// @param terminalToken The terminal token address (ETH/USDC/etc).
-    function _handleLeftoverTokens(uint256 projectId, address projectToken, address terminalToken) internal {
-        // Burn any remaining project tokens, excluding tokens reserved for outstanding fee claims.
-        uint256 projectTokenLeftover =
-            IERC20(projectToken).balanceOf(address(this)) - _reservedTokenBalance(projectToken);
-        if (projectTokenLeftover > 0) {
-            _burnProjectTokens({
-                projectId: projectId,
-                projectToken: projectToken,
-                amount: projectTokenLeftover,
-                memo: "Burning leftover project tokens"
-            });
-        }
-
-        // Add any remaining terminal tokens to project balance, excluding outstanding fee claims.
-        uint256 terminalTokenLeftover = _getTerminalTokenBalance(terminalToken) - _reservedTokenBalance(terminalToken);
-        if (terminalTokenLeftover > 0) {
-            _addToProjectBalance({
-                projectId: projectId,
-                token: terminalToken,
-                amount: terminalTokenLeftover,
-                isNative: _isNativeToken(terminalToken)
-            });
-        }
-    }
-
     /// @notice Check if terminal token is native ETH
     function _isNativeToken(address terminalToken) internal pure returns (bool isNative) {
         return terminalToken == JBConstants.NATIVE_TOKEN;
@@ -1665,7 +1639,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// this contract's current token balances and the pool's live `sqrtPriceX96`. Reverts with
     /// `JBUniswapV4LPSplitHook_InsufficientLiquidity` if the resulting liquidity is zero (e.g. price moved entirely
     /// outside the new tick range), preventing `tokenIdOf` from being left stale. Any leftover tokens after minting
-    /// are routed back to the project via `_handleLeftoverTokens`.
+    /// are routed back to the project via per-project snapshot-delta leftover handling.
     /// @param projectId The ID of the Juicebox project being rebalanced.
     /// @param projectToken The project's ERC-20 token address.
     /// @param terminalToken The terminal token paired with the project token.
@@ -1679,15 +1653,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         address terminalToken,
         PoolKey memory key,
         address controller,
-        JBRuleset memory ruleset
+        JBRuleset memory ruleset,
+        uint256 projectTokenBalance,
+        uint256 terminalTokenBalance
     )
         internal
     {
-        // Exclude tokens reserved for outstanding fee claims to avoid consuming fee tokens during rebalance.
-        uint256 projectTokenBalance =
-            IERC20(projectToken).balanceOf(address(this)) - _reservedTokenBalance(projectToken);
-        uint256 terminalTokenBalance = _getTerminalTokenBalance(terminalToken) - _reservedTokenBalance(terminalToken);
-
         (int24 tickLower, int24 tickUpper) = _calculateTickBounds({
             projectId: projectId,
             terminalToken: terminalToken,
@@ -1720,7 +1691,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         });
 
         if (liquidity > 0) {
-            uint256 newTokenId = POSITION_MANAGER.nextTokenId();
+            // Snapshot balances before minting to isolate per-project leftovers (H-32).
+            uint256 projBalBeforeMint = IERC20(projectToken).balanceOf(address(this));
+            uint256 termBalBeforeMint = _getTerminalTokenBalance(terminalToken);
 
             _mintPosition({
                 key: key,
@@ -1731,7 +1704,35 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 amount1: amount1
             });
 
-            tokenIdOf[projectId][terminalToken] = newTokenId;
+            // Read the token ID after minting — nextTokenId was incremented by the MINT_POSITION action
+            // inside modifyLiquidities, so (nextTokenId - 1) is the ID that was just minted.
+            tokenIdOf[projectId][terminalToken] = POSITION_MANAGER.nextTokenId() - 1;
+
+            // Per-project leftover handling via snapshot-delta (H-32).
+            // Safe subtraction: V4 SWEEP may return dust beyond what was settled.
+            uint256 postProjBal = IERC20(projectToken).balanceOf(address(this));
+            uint256 postTermBal = _getTerminalTokenBalance(terminalToken);
+            uint256 projConsumed = projBalBeforeMint > postProjBal ? projBalBeforeMint - postProjBal : 0;
+            uint256 termConsumed = termBalBeforeMint > postTermBal ? termBalBeforeMint - postTermBal : 0;
+            uint256 projLeftover = projectTokenBalance > projConsumed ? projectTokenBalance - projConsumed : 0;
+            uint256 termLeftover = terminalTokenBalance > termConsumed ? terminalTokenBalance - termConsumed : 0;
+
+            if (projLeftover > 0) {
+                _burnProjectTokens({
+                    projectId: projectId,
+                    projectToken: projectToken,
+                    amount: projLeftover,
+                    memo: "Burning leftover project tokens"
+                });
+            }
+            if (termLeftover > 0) {
+                _addToProjectBalance({
+                    projectId: projectId,
+                    token: terminalToken,
+                    amount: termLeftover,
+                    isNative: _isNativeToken(terminalToken)
+                });
+            }
         } else {
             // Zero liquidity means the position cannot be re-created (e.g., price moved
             // outside tick range making the position single-sided with zero on one side).
@@ -1740,9 +1741,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             // that tokenIdOf is always nonzero for deployed projects.
             revert JBUniswapV4LPSplitHook_InsufficientLiquidity();
         }
-
-        // Return any dust left over after minting (due to rounding or single-sided excess) to the project.
-        _handleLeftoverTokens({projectId: projectId, projectToken: projectToken, terminalToken: terminalToken});
     }
 
     /// @notice Approve an ERC20 token via Permit2 so PositionManager can pull it during SETTLE.
@@ -1810,7 +1808,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 // Look up the fee project's ERC-20 BEFORE the pay() call so we can pre-increment
                 // _totalOutstandingFeeTokenClaims. This prevents a reentrancy through terminal.pay()
                 // → pay hooks → collectAndRouteLPFees() from seeing stale claims and double-counting
-                // fee tokens in _burnReceivedTokens or _handleLeftoverTokens.
+                // fee tokens in _burnReceivedTokens or leftover handling.
                 address feeProjectToken = address(IJBTokens(TOKENS).tokenOf(FEE_PROJECT_ID));
 
                 // If this project already has unclaimed ERC-20 fee tokens, keep using that snapshotted token address.

@@ -43,6 +43,11 @@ contract CodexNemesisFreshRound is LPSplitHookV4TestBase {
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         positionManager.setCollectableFees(tokenId, 100e18, 100e18);
 
+        // Fund the mock PM with terminal tokens to cover the collectable fees.
+        // In production, swap revenue accumulates in the PoolManager; in the mock,
+        // we mint the fee amount so TAKE_PAIR has enough balance to transfer.
+        terminalToken.mint(address(positionManager), 100e18);
+
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
 
         uint256 expectedTerminalFees = 100e18;
@@ -64,6 +69,8 @@ contract CodexNemesisFreshRound is LPSplitHookV4TestBase {
 
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         positionManager.setCollectableFees(tokenId, 100e18, 100e18);
+        // Fund mock with terminal tokens to cover fees (simulates swap revenue).
+        terminalToken.mint(address(positionManager), 100e18);
 
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
 
