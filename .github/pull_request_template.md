@@ -13,7 +13,7 @@ What new trust boundary, failure mode, operational dependency, or integration ca
 - [ ] Updated `/v6/evm/RISKS.md` because ecosystem behavior changed
 - [ ] If no `RISKS.md` update was needed, I explained why in this PR
 
-Reference: [`/v6/evm/docs/RISKS_MAINTENANCE.md`](../docs/RISKS_MAINTENANCE.md)
+Reference: [`/v6/evm/RISKS_MAINTENANCE.md`](../../RISKS_MAINTENANCE.md)
 
 ## Checklist
 
