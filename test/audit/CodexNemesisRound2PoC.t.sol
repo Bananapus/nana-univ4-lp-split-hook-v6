@@ -27,9 +27,7 @@ contract CodexNemesisRound2HookPoC is LPSplitHookV4TestBase {
         terminal.addAccountingContext(
             PROJECT_ID,
             JBAccountingContext({
-                token: address(altTerminalToken),
-                decimals: 18,
-                currency: uint32(uint160(address(altTerminalToken)))
+                token: address(altTerminalToken), decimals: 18, currency: uint32(uint160(address(altTerminalToken)))
             })
         );
 

@@ -111,7 +111,7 @@ contract CodexNemesisPreinitializedRangePoC is LPSplitHookV4TestBase {
             PROJECT_ID, JBAccountingContext({token: JBConstants.NATIVE_TOKEN, decimals: 18, currency: 1})
         );
 
-        vm.deal(address(terminal), 1_000 ether);
+        vm.deal(address(terminal), 1000 ether);
     }
 
     function test_PreinitializedBelowRange_DeploysWithHalfCashOutInsteadOfAllTerminalSide() public {
@@ -171,7 +171,11 @@ contract CodexNemesisPreinitializedRangePoC is LPSplitHookV4TestBase {
             amount1: 0
         });
 
-        assertGt(liquidityWithFullTerminalSide, liquidityWithActualCashOut, "the correct all-terminal deployment mints more liquidity");
+        assertGt(
+            liquidityWithFullTerminalSide,
+            liquidityWithActualCashOut,
+            "the correct all-terminal deployment mints more liquidity"
+        );
         assertEq(
             liquidityWithFullTerminalSide,
             liquidityWithActualCashOut * 2,

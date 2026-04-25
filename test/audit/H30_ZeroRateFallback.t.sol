@@ -142,9 +142,8 @@ contract H30_ZeroRateFallback is LPSplitHookV4TestBase {
     function test_cashOutFallback_terminalIsToken0_returnsMax() public {
         store.setSurplus(PROJECT_ID, 0);
 
-        uint160 result = harness.exposed_getCashOutRateSqrtPriceX96(
-            PROJECT_ID, address(terminalToken), highProjectToken
-        );
+        uint160 result =
+            harness.exposed_getCashOutRateSqrtPriceX96(PROJECT_ID, address(terminalToken), highProjectToken);
 
         assertEq(result, TickMath.MAX_SQRT_PRICE - 1, "terminal=token0: cashOut fallback should be MAX");
     }
@@ -158,9 +157,7 @@ contract H30_ZeroRateFallback is LPSplitHookV4TestBase {
     function test_cashOutFallback_terminalIsToken1_returnsMin() public {
         store.setSurplus(PROJECT_ID, 0);
 
-        uint160 result = harness.exposed_getCashOutRateSqrtPriceX96(
-            PROJECT_ID, address(terminalToken), lowProjectToken
-        );
+        uint160 result = harness.exposed_getCashOutRateSqrtPriceX96(PROJECT_ID, address(terminalToken), lowProjectToken);
 
         assertEq(result, TickMath.MIN_SQRT_PRICE, "terminal=token1: cashOut fallback should be MIN");
     }
@@ -174,9 +171,8 @@ contract H30_ZeroRateFallback is LPSplitHookV4TestBase {
     function test_issuanceFallback_terminalIsToken0_returnsMin() public {
         controller.setReservedPercent(PROJECT_ID, 10_000); // 100% reserved → issuanceRate = 0
 
-        uint160 result = harness.exposed_getIssuanceRateSqrtPriceX96(
-            PROJECT_ID, address(terminalToken), highProjectToken
-        );
+        uint160 result =
+            harness.exposed_getIssuanceRateSqrtPriceX96(PROJECT_ID, address(terminalToken), highProjectToken);
 
         assertEq(result, TickMath.MIN_SQRT_PRICE, "terminal=token0: issuance fallback should be MIN");
     }
@@ -190,9 +186,8 @@ contract H30_ZeroRateFallback is LPSplitHookV4TestBase {
     function test_issuanceFallback_terminalIsToken1_returnsMax() public {
         controller.setReservedPercent(PROJECT_ID, 10_000);
 
-        uint160 result = harness.exposed_getIssuanceRateSqrtPriceX96(
-            PROJECT_ID, address(terminalToken), lowProjectToken
-        );
+        uint160 result =
+            harness.exposed_getIssuanceRateSqrtPriceX96(PROJECT_ID, address(terminalToken), lowProjectToken);
 
         assertEq(result, TickMath.MAX_SQRT_PRICE - 1, "terminal=token1: issuance fallback should be MAX");
     }
@@ -207,19 +202,16 @@ contract H30_ZeroRateFallback is LPSplitHookV4TestBase {
         // ── Ordering A: terminalToken is token0 ──
         // As cashOutRate decreases, token1Amount = WAD²/rate increases → sqrtPrice increases → MAX
         store.setSurplus(PROJECT_ID, 0.5e18); // normal surplus
-        uint160 price_normal_A = harness.exposed_getCashOutRateSqrtPriceX96(
-            PROJECT_ID, address(terminalToken), highProjectToken
-        );
+        uint160 price_normal_A =
+            harness.exposed_getCashOutRateSqrtPriceX96(PROJECT_ID, address(terminalToken), highProjectToken);
 
         store.setSurplus(PROJECT_ID, 0.001e18); // tiny surplus
-        uint160 price_tiny_A = harness.exposed_getCashOutRateSqrtPriceX96(
-            PROJECT_ID, address(terminalToken), highProjectToken
-        );
+        uint160 price_tiny_A =
+            harness.exposed_getCashOutRateSqrtPriceX96(PROJECT_ID, address(terminalToken), highProjectToken);
 
         store.setSurplus(PROJECT_ID, 0); // zero → fallback
-        uint160 fallback_A = harness.exposed_getCashOutRateSqrtPriceX96(
-            PROJECT_ID, address(terminalToken), highProjectToken
-        );
+        uint160 fallback_A =
+            harness.exposed_getCashOutRateSqrtPriceX96(PROJECT_ID, address(terminalToken), highProjectToken);
 
         // Monotonicity: price increases toward MAX as rate decreases
         assertGt(price_tiny_A, price_normal_A, "A: smaller surplus -> higher sqrtPrice");
@@ -229,19 +221,16 @@ contract H30_ZeroRateFallback is LPSplitHookV4TestBase {
         // ── Ordering B: terminalToken is token1 ──
         // As cashOutRate decreases, token1Amount = rate decreases → sqrtPrice decreases → MIN
         store.setSurplus(PROJECT_ID, 0.5e18);
-        uint160 price_normal_B = harness.exposed_getCashOutRateSqrtPriceX96(
-            PROJECT_ID, address(terminalToken), lowProjectToken
-        );
+        uint160 price_normal_B =
+            harness.exposed_getCashOutRateSqrtPriceX96(PROJECT_ID, address(terminalToken), lowProjectToken);
 
         store.setSurplus(PROJECT_ID, 0.001e18);
-        uint160 price_tiny_B = harness.exposed_getCashOutRateSqrtPriceX96(
-            PROJECT_ID, address(terminalToken), lowProjectToken
-        );
+        uint160 price_tiny_B =
+            harness.exposed_getCashOutRateSqrtPriceX96(PROJECT_ID, address(terminalToken), lowProjectToken);
 
         store.setSurplus(PROJECT_ID, 0);
-        uint160 fallback_B = harness.exposed_getCashOutRateSqrtPriceX96(
-            PROJECT_ID, address(terminalToken), lowProjectToken
-        );
+        uint160 fallback_B =
+            harness.exposed_getCashOutRateSqrtPriceX96(PROJECT_ID, address(terminalToken), lowProjectToken);
 
         // Monotonicity: price decreases toward MIN as rate decreases
         assertLt(price_tiny_B, price_normal_B, "B: smaller surplus -> lower sqrtPrice");
@@ -259,19 +248,16 @@ contract H30_ZeroRateFallback is LPSplitHookV4TestBase {
         // ── Ordering A: terminalToken is token0 ──
         // As issuanceRate decreases, token1Amount = rate decreases → sqrtPrice decreases → MIN
         controller.setReservedPercent(PROJECT_ID, 1000); // 10% reserved (default)
-        uint160 price_normal_A = harness.exposed_getIssuanceRateSqrtPriceX96(
-            PROJECT_ID, address(terminalToken), highProjectToken
-        );
+        uint160 price_normal_A =
+            harness.exposed_getIssuanceRateSqrtPriceX96(PROJECT_ID, address(terminalToken), highProjectToken);
 
         controller.setReservedPercent(PROJECT_ID, 9900); // 99% reserved → near-zero issuance
-        uint160 price_tiny_A = harness.exposed_getIssuanceRateSqrtPriceX96(
-            PROJECT_ID, address(terminalToken), highProjectToken
-        );
+        uint160 price_tiny_A =
+            harness.exposed_getIssuanceRateSqrtPriceX96(PROJECT_ID, address(terminalToken), highProjectToken);
 
         controller.setReservedPercent(PROJECT_ID, 10_000); // 100% → zero issuance
-        uint160 fallback_A = harness.exposed_getIssuanceRateSqrtPriceX96(
-            PROJECT_ID, address(terminalToken), highProjectToken
-        );
+        uint160 fallback_A =
+            harness.exposed_getIssuanceRateSqrtPriceX96(PROJECT_ID, address(terminalToken), highProjectToken);
 
         // Monotonicity: sqrtPrice decreases toward MIN as issuance decreases
         assertLt(price_tiny_A, price_normal_A, "A: less issuance -> lower sqrtPrice");
@@ -281,19 +267,16 @@ contract H30_ZeroRateFallback is LPSplitHookV4TestBase {
         // ── Ordering B: terminalToken is token1 ──
         // As issuanceRate decreases, token1Amount = WAD²/rate increases → sqrtPrice increases → MAX
         controller.setReservedPercent(PROJECT_ID, 1000);
-        uint160 price_normal_B = harness.exposed_getIssuanceRateSqrtPriceX96(
-            PROJECT_ID, address(terminalToken), lowProjectToken
-        );
+        uint160 price_normal_B =
+            harness.exposed_getIssuanceRateSqrtPriceX96(PROJECT_ID, address(terminalToken), lowProjectToken);
 
         controller.setReservedPercent(PROJECT_ID, 9900);
-        uint160 price_tiny_B = harness.exposed_getIssuanceRateSqrtPriceX96(
-            PROJECT_ID, address(terminalToken), lowProjectToken
-        );
+        uint160 price_tiny_B =
+            harness.exposed_getIssuanceRateSqrtPriceX96(PROJECT_ID, address(terminalToken), lowProjectToken);
 
         controller.setReservedPercent(PROJECT_ID, 10_000);
-        uint160 fallback_B = harness.exposed_getIssuanceRateSqrtPriceX96(
-            PROJECT_ID, address(terminalToken), lowProjectToken
-        );
+        uint160 fallback_B =
+            harness.exposed_getIssuanceRateSqrtPriceX96(PROJECT_ID, address(terminalToken), lowProjectToken);
 
         // Monotonicity: sqrtPrice increases toward MAX as issuance decreases
         assertGt(price_tiny_B, price_normal_B, "B: less issuance -> higher sqrtPrice");
@@ -311,9 +294,8 @@ contract H30_ZeroRateFallback is LPSplitHookV4TestBase {
         store.setSurplus(PROJECT_ID, 0);
 
         // ── Ordering A: terminalToken is token0 ──
-        (int24 tickLower_A, int24 tickUpper_A) = harness.exposed_calculateTickBounds(
-            PROJECT_ID, address(terminalToken), highProjectToken
-        );
+        (int24 tickLower_A, int24 tickUpper_A) =
+            harness.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), highProjectToken);
         assertLt(tickLower_A, tickUpper_A, "A: tickLower < tickUpper");
         assertGe(tickLower_A, TickMath.MIN_TICK, "A: tickLower >= MIN_TICK");
         assertLe(tickUpper_A, TickMath.MAX_TICK, "A: tickUpper <= MAX_TICK");
@@ -321,9 +303,8 @@ contract H30_ZeroRateFallback is LPSplitHookV4TestBase {
         assertGe(tickUpper_A - tickLower_A, 2 * int24(200), "A: range >= 2 * TICK_SPACING");
 
         // ── Ordering B: terminalToken is token1 ──
-        (int24 tickLower_B, int24 tickUpper_B) = harness.exposed_calculateTickBounds(
-            PROJECT_ID, address(terminalToken), lowProjectToken
-        );
+        (int24 tickLower_B, int24 tickUpper_B) =
+            harness.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), lowProjectToken);
         assertLt(tickLower_B, tickUpper_B, "B: tickLower < tickUpper");
         assertGe(tickLower_B, TickMath.MIN_TICK, "B: tickLower >= MIN_TICK");
         assertLe(tickUpper_B, TickMath.MAX_TICK, "B: tickUpper <= MAX_TICK");
@@ -340,28 +321,24 @@ contract H30_ZeroRateFallback is LPSplitHookV4TestBase {
         store.setSurplus(PROJECT_ID, 0);
 
         // ── Ordering A: terminalToken is token0 ──
-        uint160 initPrice_A = harness.exposed_computeInitialSqrtPrice(
-            PROJECT_ID, address(terminalToken), highProjectToken
-        );
+        uint160 initPrice_A =
+            harness.exposed_computeInitialSqrtPrice(PROJECT_ID, address(terminalToken), highProjectToken);
         assertGt(initPrice_A, TickMath.MIN_SQRT_PRICE, "A: initial price > MIN");
         assertLt(initPrice_A, TickMath.MAX_SQRT_PRICE, "A: initial price < MAX");
 
         // Should equal the issuance rate sqrtPrice (fallback behavior).
-        uint160 issuance_A = harness.exposed_getIssuanceRateSqrtPriceX96(
-            PROJECT_ID, address(terminalToken), highProjectToken
-        );
+        uint160 issuance_A =
+            harness.exposed_getIssuanceRateSqrtPriceX96(PROJECT_ID, address(terminalToken), highProjectToken);
         assertEq(initPrice_A, issuance_A, "A: initial price == issuance sqrtPrice");
 
         // ── Ordering B: terminalToken is token1 ──
-        uint160 initPrice_B = harness.exposed_computeInitialSqrtPrice(
-            PROJECT_ID, address(terminalToken), lowProjectToken
-        );
+        uint160 initPrice_B =
+            harness.exposed_computeInitialSqrtPrice(PROJECT_ID, address(terminalToken), lowProjectToken);
         assertGt(initPrice_B, TickMath.MIN_SQRT_PRICE, "B: initial price > MIN");
         assertLt(initPrice_B, TickMath.MAX_SQRT_PRICE, "B: initial price < MAX");
 
-        uint160 issuance_B = harness.exposed_getIssuanceRateSqrtPriceX96(
-            PROJECT_ID, address(terminalToken), lowProjectToken
-        );
+        uint160 issuance_B =
+            harness.exposed_getIssuanceRateSqrtPriceX96(PROJECT_ID, address(terminalToken), lowProjectToken);
         assertEq(initPrice_B, issuance_B, "B: initial price == issuance sqrtPrice");
     }
 }

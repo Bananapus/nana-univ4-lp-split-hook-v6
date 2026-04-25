@@ -75,21 +75,14 @@ contract H31_TOCTOU_NextTokenId is LPSplitHookV4TestBase {
 
         // Old pattern: read before, store that value
         uint256 oldPatternStored = initialNextId; // Read before anything happened
-        assertTrue(
-            oldPatternStored != ourPositionId,
-            "BUG: old pattern stores 1, but our position is 2"
-        );
+        assertTrue(oldPatternStored != ourPositionId, "BUG: old pattern stores 1, but our position is 2");
         assertEq(
-            oldPatternStored, frontRunnerPositionId,
-            "BUG: old pattern accidentally points to front-runner's position"
+            oldPatternStored, frontRunnerPositionId, "BUG: old pattern accidentally points to front-runner's position"
         );
 
         // New pattern: read after, subtract 1
         uint256 newPatternStored = nextIdAfterOurMint - 1;
-        assertEq(
-            newPatternStored, ourPositionId,
-            "FIX: new pattern correctly stores our position ID"
-        );
+        assertEq(newPatternStored, ourPositionId, "FIX: new pattern correctly stores our position ID");
     }
 
     // ─── Test: Multiple front-runs — old pattern off by N ───
@@ -180,9 +173,7 @@ contract H31_TOCTOU_NextTokenId is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, address(terminalToken), 0);
         assertEq(
-            hook.tokenIdOf(PROJECT_ID, address(terminalToken)),
-            positionManager.lastMintTokenId(),
-            "invariant: deploy"
+            hook.tokenIdOf(PROJECT_ID, address(terminalToken)), positionManager.lastMintTokenId(), "invariant: deploy"
         );
 
         // Rebalance 1

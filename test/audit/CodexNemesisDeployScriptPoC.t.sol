@@ -7,7 +7,11 @@ import {DeployScript} from "../../script/Deploy.s.sol";
 import {JBUniswapV4LPSplitHookDeployer} from "../../src/JBUniswapV4LPSplitHookDeployer.sol";
 
 contract CodexNemesisDeployScriptHarness is DeployScript {
-    function exposed_isDeployed(bytes32 salt, bytes memory creationCode, bytes memory arguments)
+    function exposed_isDeployed(
+        bytes32 salt,
+        bytes memory creationCode,
+        bytes memory arguments
+    )
         external
         view
         returns (bool)

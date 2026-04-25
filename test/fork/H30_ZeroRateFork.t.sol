@@ -146,10 +146,7 @@ contract H30_ZeroRateFork is Test {
         _accumulateTokens(pid, address(pToken), 100_000e18);
 
         // Confirm precondition: ETH is token0.
-        assertTrue(
-            uint160(JBConstants.NATIVE_TOKEN) < uint160(address(pToken)),
-            "ETH must be token0 (lower address)"
-        );
+        assertTrue(uint160(JBConstants.NATIVE_TOKEN) < uint160(address(pToken)), "ETH must be token0 (lower address)");
 
         // Deploy pool -- exercises the H-30 fixed fallback.
         vm.prank(multisig);
@@ -243,10 +240,7 @@ contract H30_ZeroRateFork is Test {
         _accumulateTokens(pid, address(pToken), 100_000e18);
 
         // Confirm precondition: ETH is token0.
-        assertTrue(
-            uint160(JBConstants.NATIVE_TOKEN) < uint160(address(pToken)),
-            "ETH must be token0 (lower address)"
-        );
+        assertTrue(uint160(JBConstants.NATIVE_TOKEN) < uint160(address(pToken)), "ETH must be token0 (lower address)");
 
         // Deploy pool -- both rates are 0. With the H-30 fix, the initial price is at
         // MIN_SQRT_PRICE (correct for token0-terminal). The position needs ETH (token0)
@@ -307,7 +301,11 @@ contract H30_ZeroRateFork is Test {
         vm.deal(address(this), 10_000 ether);
     }
 
-    function _launchProject(uint16 reservedPercent, uint16 cashOutTaxRate, uint112 weight)
+    function _launchProject(
+        uint16 reservedPercent,
+        uint16 cashOutTaxRate,
+        uint112 weight
+    )
         internal
         returns (uint256 id)
     {

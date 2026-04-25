@@ -179,7 +179,11 @@ contract M44_UntrustedTokenFork is Test {
         vm.deal(address(this), 10_000 ether);
     }
 
-    function _launchProject(uint16 reservedPercent, uint16 cashOutTaxRate, uint112 weight)
+    function _launchProject(
+        uint16 reservedPercent,
+        uint16 cashOutTaxRate,
+        uint112 weight
+    )
         internal
         returns (uint256 id)
     {

@@ -1084,7 +1084,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
         if (termLeftover > 0) {
             _addToProjectBalance({
-                projectId: projectId, token: terminalToken, amount: termLeftover, isNative: _isNativeToken(terminalToken)
+                projectId: projectId,
+                token: terminalToken,
+                amount: termLeftover,
+                isNative: _isNativeToken(terminalToken)
             });
         }
 

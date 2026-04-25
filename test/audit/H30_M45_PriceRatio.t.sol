@@ -57,7 +57,15 @@ contract M45Harness is JBUniswapV4LPSplitHook {
     {
         (address controller, JBRuleset memory ruleset) = _fetchControllerAndRuleset(projectId);
         return _computeOptimalCashOutAmount(
-            projectId, terminalToken, projectToken, totalProjectTokens, sqrtPriceInit, tickLower, tickUpper, controller, ruleset
+            projectId,
+            terminalToken,
+            projectToken,
+            totalProjectTokens,
+            sqrtPriceInit,
+            tickLower,
+            tickUpper,
+            controller,
+            ruleset
         );
     }
 
@@ -147,7 +155,13 @@ contract H30_M45_PriceRatio is LPSplitHookV4TestBase {
 
         // Compute optimal cash-out using the fixed formula.
         uint256 cashOut = harness.exposed_computeOptimalCashOutAmount(
-            PROJECT_ID, address(terminalToken), address(projectToken), totalProjectTokens, sqrtPriceInit, tickLower, tickUpper
+            PROJECT_ID,
+            address(terminalToken),
+            address(projectToken),
+            totalProjectTokens,
+            sqrtPriceInit,
+            tickLower,
+            tickUpper
         );
 
         uint256 cashOutRate = harness.exposed_getCashOutRate(PROJECT_ID, address(terminalToken));
@@ -215,7 +229,13 @@ contract H30_M45_PriceRatio is LPSplitHookV4TestBase {
 
         // --- Reproduce the FIXED formula ---
         uint256 fixedCashOut = harness.exposed_computeOptimalCashOutAmount(
-            PROJECT_ID, address(terminalToken), address(projectToken), totalProjectTokens, sqrtPriceInit, tickLower, tickUpper
+            PROJECT_ID,
+            address(terminalToken),
+            address(projectToken),
+            totalProjectTokens,
+            sqrtPriceInit,
+            tickLower,
+            tickUpper
         );
 
         // The two formulas should produce different results.
@@ -251,7 +271,13 @@ contract H30_M45_PriceRatio is LPSplitHookV4TestBase {
         require(cashOutRate > 0);
 
         uint256 optimalCashOut = harness.exposed_computeOptimalCashOutAmount(
-            PROJECT_ID, address(terminalToken), address(projectToken), totalProjectTokens, sqrtPriceInit, tickLower, tickUpper
+            PROJECT_ID,
+            address(terminalToken),
+            address(projectToken),
+            totalProjectTokens,
+            sqrtPriceInit,
+            tickLower,
+            tickUpper
         );
 
         bool terminalIsToken0 = address(terminalToken) < address(projectToken);
@@ -268,9 +294,7 @@ contract H30_M45_PriceRatio is LPSplitHookV4TestBase {
                 trialCashOut, cashOutRate, totalProjectTokens, sqrtPriceInit, sqrtPriceA, sqrtPriceB, terminalIsToken0
             );
             assertGe(
-                optimalLiquidity,
-                trialLiquidity,
-                string.concat("optimal should beat ", vm.toString(pct), "% split")
+                optimalLiquidity, trialLiquidity, string.concat("optimal should beat ", vm.toString(pct), "% split")
             );
         }
     }

@@ -258,7 +258,7 @@ contract M45_PriceRatioFork is Test {
         IERC20(address(pToken)).approve(address(swapHelper), type(uint256).max);
 
         uint256 ethBefore = address(this).balance;
-        swapHelper.swap(key, projIsToken0, -int256(5_000e18));
+        swapHelper.swap(key, projIsToken0, -int256(5000e18));
         uint256 ethReceived = address(this).balance - ethBefore;
         assertTrue(ethReceived > 0, "Should receive ETH when selling project tokens");
         emit log_named_uint("  ETH received from selling 5k project tokens", ethReceived);
@@ -305,14 +305,16 @@ contract M45_PriceRatioFork is Test {
 
         // Sell project tokens.
         uint256 ethBefore = address(this).balance;
-        swapHelper.swap(key, projIsToken0, -int256(5_000e18));
+        swapHelper.swap(key, projIsToken0, -int256(5000e18));
         assertTrue(address(this).balance > ethBefore, "Should receive ETH (90% tax rate)");
 
         // Buy project tokens.
         uint256 projBefore = IERC20(address(pToken)).balanceOf(address(this));
         vm.deal(address(this), 1000 ether);
         swapHelper.swap{value: projIsToken0 ? 0 : 1 ether}(key, !projIsToken0, -int256(1 ether));
-        assertTrue(IERC20(address(pToken)).balanceOf(address(this)) > projBefore, "Should receive tokens (90% tax rate)");
+        assertTrue(
+            IERC20(address(pToken)).balanceOf(address(this)) > projBefore, "Should receive tokens (90% tax rate)"
+        );
     }
 
     /// @notice Deploy pool with low cashOutTaxRate (10%) and verify balanced LP.
@@ -348,14 +350,16 @@ contract M45_PriceRatioFork is Test {
 
         // Sell project tokens.
         uint256 ethBefore = address(this).balance;
-        swapHelper.swap(key, projIsToken0, -int256(5_000e18));
+        swapHelper.swap(key, projIsToken0, -int256(5000e18));
         assertTrue(address(this).balance > ethBefore, "Should receive ETH (10% tax rate)");
 
         // Buy project tokens.
         uint256 projBefore = IERC20(address(pToken)).balanceOf(address(this));
         vm.deal(address(this), 1000 ether);
         swapHelper.swap{value: projIsToken0 ? 0 : 1 ether}(key, !projIsToken0, -int256(1 ether));
-        assertTrue(IERC20(address(pToken)).balanceOf(address(this)) > projBefore, "Should receive tokens (10% tax rate)");
+        assertTrue(
+            IERC20(address(pToken)).balanceOf(address(this)) > projBefore, "Should receive tokens (10% tax rate)"
+        );
     }
 
     // ═══════════════════════════════════════════════════════════════════════

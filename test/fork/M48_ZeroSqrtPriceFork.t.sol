@@ -138,8 +138,16 @@ contract M48_ZeroSqrtPriceFork is Test {
         jbFeelessAddresses = new JBFeelessAddresses(multisig);
 
         jbController = new JBController(
-            jbDirectory, jbFundAccessLimits, jbPermissions, jbPrices, jbProjects,
-            jbRulesets, jbSplits, jbTokens, address(0), trustedForwarder
+            jbDirectory,
+            jbFundAccessLimits,
+            jbPermissions,
+            jbPrices,
+            jbProjects,
+            jbRulesets,
+            jbSplits,
+            jbTokens,
+            address(0),
+            trustedForwarder
         );
 
         vm.prank(multisig);
@@ -148,25 +156,47 @@ contract M48_ZeroSqrtPriceFork is Test {
         jbTerminalStore = new JBTerminalStore(jbDirectory, jbPrices, jbRulesets);
 
         jbMultiTerminal = new JBMultiTerminal(
-            jbFeelessAddresses, jbPermissions, jbProjects, jbSplits,
-            jbTerminalStore, jbTokens, PERMIT2, trustedForwarder
+            jbFeelessAddresses,
+            jbPermissions,
+            jbProjects,
+            jbSplits,
+            jbTerminalStore,
+            jbTokens,
+            PERMIT2,
+            trustedForwarder
         );
 
         vm.deal(address(this), 10_000 ether);
     }
 
-    function _launchProject(uint16 reservedPercent, uint16 cashOutTaxRate, uint112 weight)
+    function _launchProject(
+        uint16 reservedPercent,
+        uint16 cashOutTaxRate,
+        uint112 weight
+    )
         internal
         returns (uint256 id)
     {
         JBRulesetMetadata memory metadata = JBRulesetMetadata({
-            reservedPercent: reservedPercent, cashOutTaxRate: cashOutTaxRate,
+            reservedPercent: reservedPercent,
+            cashOutTaxRate: cashOutTaxRate,
             baseCurrency: uint32(uint160(JBConstants.NATIVE_TOKEN)),
-            pausePay: false, pauseCreditTransfers: false, allowOwnerMinting: true,
-            allowSetCustomToken: true, allowTerminalMigration: false, allowSetTerminals: false,
-            allowSetController: false, allowAddAccountingContext: false, allowAddPriceFeed: false,
-            ownerMustSendPayouts: false, holdFees: false, useTotalSurplusForCashOuts: false,
-            useDataHookForPay: false, useDataHookForCashOut: false, dataHook: address(0), metadata: 0
+            pausePay: false,
+            pauseCreditTransfers: false,
+            allowOwnerMinting: true,
+            allowSetCustomToken: true,
+            allowTerminalMigration: false,
+            allowSetTerminals: false,
+            allowSetController: false,
+            allowAddAccountingContext: false,
+            allowAddPriceFeed: false,
+            ownerMustSendPayouts: false,
+            holdFees: false,
+            useTotalSurplusForCashOuts: false,
+            useDataHookForPay: false,
+            useDataHookForCashOut: false,
+            dataHook: address(0),
+            metadata: 0
         });
 
         JBRulesetConfig[] memory rulesetConfigs = new JBRulesetConfig[](1);
@@ -188,8 +218,11 @@ contract M48_ZeroSqrtPriceFork is Test {
         terminalConfigs[0] = JBTerminalConfig({terminal: jbMultiTerminal, accountingContextsToAccept: tokensToAccept});
 
         id = jbController.launchProjectFor({
-            owner: multisig, projectUri: "", rulesetConfigurations: rulesetConfigs,
-            terminalConfigurations: terminalConfigs, memo: ""
+            owner: multisig,
+            projectUri: "",
+            rulesetConfigurations: rulesetConfigs,
+            terminalConfigurations: terminalConfigs,
+            memo: ""
         });
     }
 
@@ -200,10 +233,18 @@ contract M48_ZeroSqrtPriceFork is Test {
         });
 
         JBSplitHookContext memory context = JBSplitHookContext({
-            token: tokenAddr, amount: amount, decimals: 18, projectId: pid, groupId: 1,
+            token: tokenAddr,
+            amount: amount,
+            decimals: 18,
+            projectId: pid,
+            groupId: 1,
             split: JBSplit({
-                percent: 1_000_000, projectId: 0, beneficiary: payable(address(0)),
-                preferAddToBalance: false, lockedUntil: 0, hook: IJBSplitHook(address(hook))
+                percent: 1_000_000,
+                projectId: 0,
+                beneficiary: payable(address(0)),
+                preferAddToBalance: false,
+                lockedUntil: 0,
+                hook: IJBSplitHook(address(hook))
             })
         });
 
@@ -213,8 +254,13 @@ contract M48_ZeroSqrtPriceFork is Test {
 
     function _payProject(uint256 pid, uint256 amount) internal {
         jbMultiTerminal.pay{value: amount}({
-            projectId: pid, token: JBConstants.NATIVE_TOKEN, amount: amount,
-            beneficiary: multisig, minReturnedTokens: 0, memo: "", metadata: ""
+            projectId: pid,
+            token: JBConstants.NATIVE_TOKEN,
+            amount: amount,
+            beneficiary: multisig,
+            minReturnedTokens: 0,
+            memo: "",
+            metadata: ""
         });
     }
 }
