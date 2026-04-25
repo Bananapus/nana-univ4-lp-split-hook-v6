@@ -24,3 +24,5 @@
 - [`test/FeeRoutingTest.t.sol`](../test/FeeRoutingTest.t.sol) for fee behavior.
 - [`test/RebalanceTest.t.sol`](../test/RebalanceTest.t.sol) for position updates.
 - [`test/Fork.t.sol`](../test/Fork.t.sol), [`test/SecurityTest.t.sol`](../test/SecurityTest.t.sol), [`test/ReentrancyTest.t.sol`](../test/ReentrancyTest.t.sol), and [`test/SplitHookRegressions.t.sol`](../test/SplitHookRegressions.t.sol) for broader safety.
+- [`test/audit/`](../test/audit/) for audit fix unit tests (zero-rate fallback, tokenId resolution, price/tick/bounds edge cases).
+- [`test/fork/`](../test/fork/) for audit fix fork tests and integration fork tests verifying cross-fix interactions.
