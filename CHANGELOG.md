@@ -17,7 +17,7 @@ This repo was not part of the deployed v5 ecosystem that the top-level changelog
 - The current repo includes dedicated deployment, fork, invariant, and regression coverage around concentrated-liquidity behavior, fee routing, rebalance logic, and lifecycle staging.
 - The implementation baseline matches the rest of the v6 tree around Solidity `0.8.28`.
 - Pool deployment tolerates outsider pre-initialization regardless of price to prevent deployment-blocking griefing.
-- All audit findings resolved with 290 total tests (257 unit/invariant + 33 fork).
+
 
 ## Migration notes
 
