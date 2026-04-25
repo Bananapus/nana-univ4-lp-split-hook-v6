@@ -74,6 +74,12 @@ It also owns claim segregation for routed LP fees. Outstanding fee-token claims 
   `test/audit/FeeTokenTerminalAccountingPoC.t.sol`
 - split-hook staging and accounting invariants:
   `test/invariant/LPSplitHookInvariant.t.sol`
+- edge-case unit tests (zero-rate fallback, tokenId resolution, price/tick/bounds edge cases):
+  `test/audit/`
+- fork tests (full JB core deployment per scenario):
+  `test/fork/`
+- integration fork tests (cross-scenario interaction chains):
+  `test/fork/Integration_MultiProjectDeploy.t.sol`, `test/fork/Integration_HighReservedZeroTax.t.sol`, `test/fork/Integration_BurnPathCrossProject.t.sol`, `test/fork/Integration_RebalanceChangedRuleset.t.sol`
 
 ## Source Map
 
