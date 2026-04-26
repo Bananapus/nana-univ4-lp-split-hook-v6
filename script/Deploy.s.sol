@@ -71,30 +71,7 @@ contract DeployScript is Script, Sphinx {
         poolManager = _getPoolManager();
 
         // Uniswap V4 PositionManager — per-chain addresses
-        if (block.chainid == 1) {
-            // Ethereum Mainnet
-            positionManager = IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e);
-        } else if (block.chainid == 11_155_111) {
-            // Ethereum Sepolia
-            positionManager = IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e);
-        } else if (block.chainid == 10) {
-            // Optimism Mainnet
-            positionManager = IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e);
-        } else if (block.chainid == 8453) {
-            // Base Mainnet
-            positionManager = IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e);
-        } else if (block.chainid == 84_532) {
-            // Base Sepolia
-            positionManager = IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e);
-        } else if (block.chainid == 42_161) {
-            // Arbitrum Mainnet
-            positionManager = IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e);
-        } else if (block.chainid == 421_614) {
-            // Arbitrum Sepolia
-            positionManager = IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e);
-        } else {
-            revert("Invalid RPC / no juice contracts deployed on this network");
-        }
+        positionManager = _getPositionManager();
 
         // Perform the deployment transactions.
         deploy();
@@ -141,6 +118,21 @@ contract DeployScript is Script, Sphinx {
             )) {
             new JBUniswapV4LPSplitHookDeployer{salt: deployerSalt}(hookImpl, registry.registry);
         }
+    }
+
+    /// @dev Returns the Uniswap V4 PositionManager address for the current chain.
+    function _getPositionManager() internal view returns (IPositionManager) {
+        // Mainnet, Sepolia, Base Sepolia, Arb Sepolia share the same address.
+        if (block.chainid == 1) return IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e); // Mainnet
+        if (block.chainid == 10) return IPositionManager(0x3C3Ea4B57a46241e54610e5f022E5c45859A1017); // Optimism
+        if (block.chainid == 8453) return IPositionManager(0x7C5f5A4bBd8fD63184577525326123B519429bDc); // Base
+        if (block.chainid == 42_161) return IPositionManager(0xd88F38F930b7952f2DB2432Cb002E7abbF3dD869); // Arbitrum
+        if (block.chainid == 11_155_111) return IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e); // Sepolia
+        if (block.chainid == 84_532) return IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e); // Base
+        // Sepolia
+        if (block.chainid == 421_614) return IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e); // Arb
+        // Sepolia
+        revert("Unsupported chain");
     }
 
     /// @dev Returns the Uniswap V4 PoolManager address for the current chain.
