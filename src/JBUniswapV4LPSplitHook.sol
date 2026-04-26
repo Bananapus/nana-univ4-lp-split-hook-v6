@@ -85,7 +85,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     error JBUniswapV4LPSplitHook_ZeroAddressNotAllowed();
     error JBUniswapV4LPSplitHook_ZeroLiquidity();
     error JBUniswapV4LPSplitHook_InvalidTickBounds();
-    error JBUniswapV4LPSplitHook_TerminalNotFound(uint256 projectId, address token);
 
     //*********************************************************************//
     // ------------------------- public constants ------------------------ //
@@ -885,7 +884,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         if (amount == 0) return;
 
         address terminal = address(IJBDirectory(DIRECTORY).primaryTerminalOf({projectId: projectId, token: token}));
-        if (terminal == address(0)) revert JBUniswapV4LPSplitHook_TerminalNotFound(projectId, token);
+        // If the project has no terminal, leave the tokens on the hook rather than reverting.
+        // They can be routed once a terminal is (re-)added.
+        if (terminal == address(0)) return;
 
         if (!isNative) {
             IERC20(token).forceApprove({spender: terminal, value: amount});
