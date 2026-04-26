@@ -85,6 +85,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     error JBUniswapV4LPSplitHook_ZeroAddressNotAllowed();
     error JBUniswapV4LPSplitHook_ZeroLiquidity();
     error JBUniswapV4LPSplitHook_InvalidTickBounds();
+    error JBUniswapV4LPSplitHook_TerminalNotFound(uint256 projectId, address token);
 
     //*********************************************************************//
     // ------------------------- public constants ------------------------ //
@@ -884,7 +885,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         if (amount == 0) return;
 
         address terminal = address(IJBDirectory(DIRECTORY).primaryTerminalOf({projectId: projectId, token: token}));
-        if (terminal == address(0)) return;
+        if (terminal == address(0)) revert JBUniswapV4LPSplitHook_TerminalNotFound(projectId, token);
 
         if (!isNative) {
             IERC20(token).forceApprove({spender: terminal, value: amount});
@@ -945,11 +946,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             ruleset: ruleset
         });
 
-        // Cash out the computed fraction to get terminal tokens for pairing
+        // Cash out the computed fraction to get terminal tokens for pairing.
+        // Use the explicit return value instead of balance-delta to prevent cross-project token capture.
         address terminal =
             address(IJBDirectory(DIRECTORY).primaryTerminalOf({projectId: projectId, token: terminalToken}));
 
-        uint256 terminalTokenBalanceBefore = _getTerminalTokenBalance(terminalToken);
+        uint256 terminalTokenAmount;
 
         if (terminal != address(0) && cashOutAmount > 0) {
             uint256 effectiveMinReturn = minCashOutReturn;
@@ -965,7 +967,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 }
             }
 
-            IJBMultiTerminal(terminal)
+            terminalTokenAmount = IJBMultiTerminal(terminal)
                 .cashOutTokensOf({
                     holder: address(this),
                     projectId: projectId,
@@ -977,9 +979,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 });
         }
 
-        // Use per-project accounting instead of global balanceOf to isolate cross-project tokens (H-32).
         uint256 projectTokenAmount = projectTokenBalance - cashOutAmount;
-        uint256 terminalTokenAmount = _getTerminalTokenBalance(terminalToken) - terminalTokenBalanceBefore;
 
         // Sort amounts by currency order
         Currency terminalCurrency = _toCurrency(terminalToken);
