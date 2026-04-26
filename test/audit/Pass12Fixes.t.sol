@@ -48,7 +48,15 @@ contract M40Harness is JBUniswapV4LPSplitHook {
         address controller = address(IJBDirectory(DIRECTORY).controllerOf(projectId));
         (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
         return _computeOptimalCashOutAmount(
-            projectId, terminalToken, _projectToken, totalProjectTokens, sqrtPriceInit, tickLower, tickUpper, controller, ruleset
+            projectId,
+            terminalToken,
+            _projectToken,
+            totalProjectTokens,
+            sqrtPriceInit,
+            tickLower,
+            tickUpper,
+            controller,
+            ruleset
         );
     }
 }
@@ -195,9 +203,7 @@ contract Pass12Fixes is LPSplitHookV4TestBase {
 
         // Accumulator should still be zero (revert happened before _accumulateTokens).
         assertEq(
-            hook.accumulatedProjectTokens(NO_TOKEN_PROJECT_ID),
-            0,
-            "M-41: accumulator must remain zero after revert"
+            hook.accumulatedProjectTokens(NO_TOKEN_PROJECT_ID), 0, "M-41: accumulator must remain zero after revert"
         );
     }
 }
