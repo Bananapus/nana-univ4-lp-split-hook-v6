@@ -114,7 +114,9 @@ contract CodexNemesisPreinitializedRangePoC is LPSplitHookV4TestBase {
         vm.deal(address(terminal), 1000 ether);
     }
 
-    function test_PreinitializedBelowRange_DeploysWithHalfCashOutInsteadOfAllTerminalSide() public {
+    /// @notice Verify the fix: below-range positions now cash out ALL project tokens
+    ///         (terminal is token0, so only token0 is needed for one-sided liquidity).
+    function test_PreinitializedBelowRange_DeploysWithFullTerminalSideCashOut() public {
         uint256 totalProjectTokens = 100e18;
 
         _accumulateTokens(PROJECT_ID, totalProjectTokens);
@@ -142,44 +144,31 @@ contract CodexNemesisPreinitializedRangePoC is LPSplitHookV4TestBase {
             tickUpper
         );
 
+        // Post-fix: below-range with terminalIsToken0 returns totalProjectTokens (not half).
+        assertEq(actualCashOut, totalProjectTokens, "below-range branch now cashes out all project tokens");
+
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, JBConstants.NATIVE_TOKEN, 0);
 
-        uint256 expectedTerminalOnlyCashOut = totalProjectTokens;
-        assertEq(actualCashOut, totalProjectTokens / 2, "below-range branch hard-codes a 50% cash out");
-        assertEq(terminal.lastCashOutAmount(), actualCashOut, "deployPool used the same under-cash-out amount");
+        assertEq(terminal.lastCashOutAmount(), actualCashOut, "deployPool used the full cash-out amount");
 
+        // With the full cash-out, all project tokens become terminal tokens (token0).
+        // Below-range liquidity only uses token0, so this is the optimal deployment.
         uint256 cashOutRate = mathHook.exposed_getCashOutRate(PROJECT_ID, JBConstants.NATIVE_TOKEN);
-        uint256 terminalFromActual = (actualCashOut * cashOutRate) / 1e18;
-        uint256 terminalFromFull = (expectedTerminalOnlyCashOut * cashOutRate) / 1e18;
+        uint256 terminalFromCashOut = (actualCashOut * cashOutRate) / 1e18;
 
         uint160 sqrtPriceA = TickMath.getSqrtPriceAtTick(tickLower);
         uint160 sqrtPriceB = TickMath.getSqrtPriceAtTick(tickUpper);
 
-        uint128 liquidityWithActualCashOut = LiquidityAmounts.getLiquidityForAmounts({
+        // Since all tokens are cashed out, amount1 (project tokens) = 0.
+        uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts({
             sqrtPriceX96: sqrtPriceBelowRange,
             sqrtPriceAX96: sqrtPriceA,
             sqrtPriceBX96: sqrtPriceB,
-            amount0: terminalFromActual,
-            amount1: totalProjectTokens - actualCashOut
-        });
-        uint128 liquidityWithFullTerminalSide = LiquidityAmounts.getLiquidityForAmounts({
-            sqrtPriceX96: sqrtPriceBelowRange,
-            sqrtPriceAX96: sqrtPriceA,
-            sqrtPriceBX96: sqrtPriceB,
-            amount0: terminalFromFull,
+            amount0: terminalFromCashOut,
             amount1: 0
         });
 
-        assertGt(
-            liquidityWithFullTerminalSide,
-            liquidityWithActualCashOut,
-            "the correct all-terminal deployment mints more liquidity"
-        );
-        assertEq(
-            liquidityWithFullTerminalSide,
-            liquidityWithActualCashOut * 2,
-            "with the price below range, liquidity scales linearly with token0 and the hook leaves half on the table"
-        );
+        assertGt(liquidity, 0, "full terminal-side deployment mints non-zero liquidity");
     }
 }

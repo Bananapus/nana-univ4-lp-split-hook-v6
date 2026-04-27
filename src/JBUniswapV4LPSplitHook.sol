@@ -787,15 +787,16 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         address projectToken = address(IJBTokens(TOKENS).tokenOf(context.projectId));
 
         if (!hasDeployedPool[context.projectId]) {
+            // This hook requires an ERC-20 project token — credits cannot be paired as LP.
+            // Check BEFORE accumulating to keep internal accounting clean on revert.
+            if (projectToken == address(0)) revert JBUniswapV4LPSplitHook_InvalidProjectId();
+
             // Record the initial weight on first accumulation.
             if (initialWeightOf[context.projectId] == 0) {
                 (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(context.projectId);
                 initialWeightOf[context.projectId] = ruleset.weight;
             }
             _accumulateTokens({projectId: context.projectId, amount: context.amount});
-
-            // This hook requires an ERC-20 project token — credits cannot be paired as LP.
-            if (projectToken == address(0)) revert JBUniswapV4LPSplitHook_InvalidProjectId();
 
             // Defense-in-depth: verify actual ERC-20 balance (minus outstanding fee token claims)
             // covers accumulated total. The standard controller transfers tokens before calling
@@ -1416,10 +1417,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint256 denominator;
 
         if (uint160(sqrtPriceInit) <= sqrtPriceA) {
-            return totalProjectTokens / 2;
+            return terminalIsToken0 ? totalProjectTokens : 0;
         }
         if (uint160(sqrtPriceInit) >= sqrtPriceB) {
-            return 0;
+            return terminalIsToken0 ? 0 : totalProjectTokens;
         }
 
         uint256 diffPriceInit_A = uint256(sqrtPriceInit) - uint256(sqrtPriceA);
