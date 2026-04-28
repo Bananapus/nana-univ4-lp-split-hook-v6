@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
+import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
 
 /// @notice Audit gap tests: MEV/sandwich simulation on rebalance and extreme price scenarios.
@@ -250,7 +251,7 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
         _accumulateTokensForProject(highWeightProject, 1000e18);
 
         vm.prank(owner);
-        hook.deployPool(highWeightProject, address(terminalToken), 0);
+        hook.deployPool(highWeightProject, 0);
         assertTrue(hook.hasDeployedPool(highWeightProject), "high weight project should deploy successfully");
     }
 
@@ -272,7 +273,7 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
         _accumulateTokensForProject(lowWeightProject, 1000e18);
 
         vm.prank(owner);
-        hook.deployPool(lowWeightProject, address(terminalToken), 0);
+        hook.deployPool(lowWeightProject, 0);
         assertTrue(hook.hasDeployedPool(lowWeightProject), "low weight project should deploy successfully");
     }
 
@@ -295,7 +296,7 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
 
         // After L-6 tick re-clamp fix, low weights deploy with clamped tick bounds.
         vm.prank(owner);
-        hook.deployPool(lowWeightProject, address(terminalToken), 0);
+        hook.deployPool(lowWeightProject, 0);
         assertTrue(hook.hasDeployedPool(lowWeightProject), "low weight project should deploy with clamped ticks");
     }
 
@@ -317,7 +318,7 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectRevert();
-        hook.deployPool(zeroSurplusProject, address(terminalToken), 0);
+        hook.deployPool(zeroSurplusProject, 0);
         assertEq(hook.tokenIdOf(zeroSurplusProject, address(terminalToken)), 0, "no position should be minted");
     }
 
@@ -341,7 +342,7 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectRevert();
-        hook.deployPool(fullRangeProject, address(terminalToken), 0);
+        hook.deployPool(fullRangeProject, 0);
         assertEq(hook.tokenIdOf(fullRangeProject, address(terminalToken)), 0, "no position should be minted");
     }
 
@@ -363,7 +364,7 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
         // High surplus produces an extreme price, but deployment should still succeed
         // since no pre-initialized pool exists and the computed price is valid.
         vm.prank(owner);
-        hook.deployPool(highSurplusProject, address(terminalToken), 0);
+        hook.deployPool(highSurplusProject, 0);
         assertTrue(hook.hasDeployedPool(highSurplusProject), "high surplus project should deploy successfully");
     }
 
@@ -383,7 +384,7 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
         _accumulateTokensForProject(minWeightProject, 500e18);
 
         vm.prank(owner);
-        hook.deployPool(minWeightProject, address(terminalToken), 0);
+        hook.deployPool(minWeightProject, 0);
         assertTrue(hook.hasDeployedPool(minWeightProject), "min weight project should deploy successfully");
     }
 
@@ -403,7 +404,7 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
         _accumulateTokensForProject(maxReservedProject, 500e18);
 
         vm.prank(owner);
-        hook.deployPool(maxReservedProject, address(terminalToken), 0);
+        hook.deployPool(maxReservedProject, 0);
         assertTrue(hook.hasDeployedPool(maxReservedProject), "max reserved project should deploy successfully");
     }
 
@@ -425,7 +426,7 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
         // After L-6 tick re-clamp fix, extreme reserved percents deploy successfully
         // with clamped tick bounds.
         vm.prank(owner);
-        hook.deployPool(highReservedProject, address(terminalToken), 0);
+        hook.deployPool(highReservedProject, 0);
         assertTrue(hook.hasDeployedPool(highReservedProject), "pool should deploy with high reserved percent");
     }
 
@@ -467,7 +468,7 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
         _accumulateTokensForProject(dustProject, 1);
 
         // This might revert due to zero liquidity, but should not panic
-        try hook.deployPool(dustProject, address(terminalToken), 0) {
+        try hook.deployPool(dustProject, 0) {
             // If it succeeds, verify state is consistent
             uint256 tokenId = hook.tokenIdOf(dustProject, address(terminalToken));
             assertTrue(tokenId != 0, "Token ID should be nonzero if deploy succeeded");
@@ -492,7 +493,7 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
         _accumulateTokensForProject(largeProject, largeAmount);
 
         vm.prank(owner);
-        hook.deployPool(largeProject, address(terminalToken), 0);
+        hook.deployPool(largeProject, 0);
 
         uint256 tokenId = hook.tokenIdOf(largeProject, address(terminalToken));
         assertTrue(tokenId != 0, "Pool should deploy with large token amount");
@@ -539,7 +540,14 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
         jbTokens.setToken(projectId, address(projectToken));
         terminal.setProjectToken(projectId, address(projectToken));
         terminal.setAccountingContext(projectId, address(terminalToken), uint32(uint160(address(terminalToken))), 18);
+        terminal.addAccountingContext(
+            projectId,
+            JBAccountingContext({
+                token: address(terminalToken), decimals: 18, currency: uint32(uint160(address(terminalToken)))
+            })
+        );
         store.setSurplus(projectId, 0.5e18);
+        store.setBalance(address(terminal), projectId, address(terminalToken), 10e18);
     }
 
     /// @notice Accumulate tokens for a specific project via processSplitWith.

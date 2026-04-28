@@ -150,7 +150,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
 
     function test_fork_deployPool_createsRealV4Pool() public {
         vm.prank(multisig);
-        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
+        hook.deployPool(projectId, 0);
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "project should be deployed");
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should be deployed");
         uint256 tokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
@@ -166,7 +166,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
 
     function test_fork_burnAfterDeploy() public {
         vm.prank(multisig);
-        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
+        hook.deployPool(projectId, 0);
         vm.prank(multisig);
         jbController.mintTokensOf({
             projectId: projectId, tokenCount: 50_000e18, beneficiary: address(hook), memo: "", useReservedPercent: false
@@ -207,7 +207,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
             "hook should have no allowance to Permit2 before deploy"
         );
         vm.prank(multisig);
-        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
+        hook.deployPool(projectId, 0);
         assertEq(
             IERC20(token).allowance(address(hook), address(V4_POSITION_MANAGER)),
             0,
@@ -283,7 +283,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         (uint160 sqrtPriceBefore,,,) = V4_POOL_MANAGER.getSlot0(poolId);
         assertEq(sqrtPriceBefore, externalSqrtPrice, "pool should be at external price");
         vm.prank(multisig);
-        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
+        hook.deployPool(projectId, 0);
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should be deployed");
         assertGt(hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN), 0, "position NFT should be minted");
     }
@@ -316,7 +316,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         (uint160 sqrtPriceBefore,,,) = V4_POOL_MANAGER.getSlot0(poolId);
         assertEq(sqrtPriceBefore, externalSqrtPrice, "pool should be at external price");
         vm.prank(multisig);
-        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
+        hook.deployPool(projectId, 0);
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should deploy successfully");
         assertGt(hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN), 0, "position NFT should be minted");
         assertEq(hook.accumulatedProjectTokens(projectId), 0, "accumulated tokens should be consumed");
@@ -364,7 +364,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         assertTrue(currentRuleset.weight * 10 <= initialWeight, "weight should have decayed >= 10x");
         address randomUser = makeAddr("randomDeployer");
         vm.prank(randomUser);
-        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
+        hook.deployPool(projectId, 0);
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should be deployed by random user");
         uint256 tokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         assertTrue(tokenId != 0, "should hold a position NFT");
@@ -374,6 +374,6 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         address randomUser = makeAddr("randomDeployer");
         vm.prank(randomUser);
         vm.expectRevert();
-        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
+        hook.deployPool(projectId, 0);
     }
 }

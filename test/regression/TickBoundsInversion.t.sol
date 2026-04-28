@@ -162,6 +162,9 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
 
         // Set surplus so cash-out rate is nonzero (0.5e18 per project token).
         store.setSurplus(TEST_PROJECT_ID, 0.5e18);
+
+        // Set balance so auto-select picks lowTerminalToken for this project.
+        store.setBalance(address(terminal), TEST_PROJECT_ID, address(lowTerminalToken), 10e18);
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -302,7 +305,7 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
 
         // Deploy the pool as owner.
         vm.prank(owner);
-        hook.deployPool(TEST_PROJECT_ID, address(lowTerminalToken), 0);
+        hook.deployPool(TEST_PROJECT_ID, 0);
 
         // Verify pool was deployed successfully.
         uint256 tokenId = hook.tokenIdOf(TEST_PROJECT_ID, address(lowTerminalToken));

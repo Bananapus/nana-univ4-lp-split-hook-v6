@@ -43,7 +43,7 @@ contract CodexNemesisRound2HookPoC is LPSplitHookV4TestBase {
         // Outsider tries to deploy with the low-value altTerminalToken, but the fix
         // auto-selects terminalToken (highest value) instead.
         vm.prank(user);
-        hook.deployPool(PROJECT_ID, address(altTerminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
 
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "outsider should be able to trigger deployment");
         assertGt(

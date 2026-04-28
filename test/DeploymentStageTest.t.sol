@@ -25,7 +25,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 100e18);
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
 
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertTrue(tokenId != 0, "tokenIdOf should be nonzero after deployPool");
@@ -41,7 +41,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 100e18);
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
 
         assertEq(terminal.cashOutCallCount(), 1, "cashOutTokensOf should be called once");
         // Optimal fraction is less than or equal to 50% of accumulated
@@ -59,7 +59,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 100e18);
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
 
         assertEq(positionManager.mintCallCount(), 1, "PositionManager mint should be called once");
     }
@@ -73,7 +73,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 100e18);
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
 
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertTrue(tokenId != 0, "tokenIdOf should be nonzero after deployPool");
@@ -88,7 +88,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 100e18);
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
 
         assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "accumulatedProjectTokens should be 0 after deployment");
     }
@@ -107,7 +107,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         emit IJBUniswapV4LPSplitHook.ProjectDeployed(PROJECT_ID, address(terminalToken), bytes32(0));
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -118,7 +118,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
     function test_DeployPool_RevertsIf_NoTokens() public {
         vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoTokensAccumulated.selector);
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -136,10 +136,11 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
 
         vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PoolAlreadyDeployed.selector);
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
     }
 
-    /// @notice Once any pool is deployed for a project, a second terminal-token pool is rejected.
+    /// @notice Once any pool is deployed for a project, a second deploy attempt is rejected.
+    ///         Auto-select picks the same terminal token (highest balance), hitting PoolAlreadyDeployed.
     function test_DeployPool_RevertsIf_SecondTerminalTokenRequested() public {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
 
@@ -148,26 +149,26 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
 
         _accumulateTokens(PROJECT_ID, 50e18);
 
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported.selector);
+        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PoolAlreadyDeployed.selector);
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, secondTerminalToken, 0);
+        hook.deployPool(PROJECT_ID, 0);
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 9. deployPool — reverts if terminal token is invalid
+    // 9. deployPool — reverts if no terminal token has a balance
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice deployPool reverts with InvalidTerminalToken when using a token that has
-    ///         no primary terminal configured in the directory.
-    function test_DeployPool_RevertsIf_InvalidTerminal() public {
+    /// @notice deployPool reverts with NoTerminalTokenFound when no terminal token
+    ///         has a non-zero balance in the store.
+    function test_DeployPool_RevertsIf_NoTerminalTokenBalance() public {
         _accumulateTokens(PROJECT_ID, 100e18);
 
-        // Use an address with no terminal configured
-        address invalidToken = makeAddr("invalidToken");
+        // Clear the balance that was set in the base setUp
+        store.setBalance(address(terminal), PROJECT_ID, address(terminalToken), 0);
 
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidTerminalToken.selector);
+        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoTerminalTokenFound.selector);
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, invalidToken, 0);
+        hook.deployPool(PROJECT_ID, 0);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -272,7 +273,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 100e18);
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
 
         // The hook should have called burnTokensOf for leftover project tokens
         assertTrue(controller.burnCallCount() > 0, "controller.burnTokensOf should be called for leftover tokens");
@@ -341,7 +342,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
             )
         );
         vm.prank(randomUser);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -359,7 +360,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         permissions.setPermission(operator, owner, PROJECT_ID, JBPermissionIds.SET_BUYBACK_POOL, true);
 
         vm.prank(operator);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
 
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertTrue(tokenId != 0, "tokenIdOf should be nonzero after deployPool by permitted operator");

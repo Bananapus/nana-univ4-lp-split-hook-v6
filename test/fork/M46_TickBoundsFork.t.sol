@@ -65,7 +65,7 @@ contract M46_TickBoundsFork is ForkDeployHelper {
         IJBToken pToken = jbController.deployERC20For(pid, "Extreme Tick Token", "ETT", bytes32(0));
         _accumulateTokens(pid, address(pToken), 100_000e18);
         vm.prank(multisig);
-        try hook.deployPool(pid, JBConstants.NATIVE_TOKEN, 0) {
+        try hook.deployPool(pid, 0) {
             assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "Pool should deploy");
             PoolKey memory key = hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN);
             (uint160 sqrtPriceX96,,,) = V4_POOL_MANAGER.getSlot0(key.toId());
@@ -73,10 +73,11 @@ contract M46_TickBoundsFork is ForkDeployHelper {
             assertTrue(sqrtPriceX96 <= TickMath.MAX_SQRT_PRICE, "sqrtPrice <= MAX");
             emit log_named_uint("  sqrtPriceX96", sqrtPriceX96);
         } catch (bytes memory reason) {
-            assertEq(
-                bytes4(reason),
-                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ZeroLiquidity.selector,
-                "Should only revert with ZeroLiquidity"
+            bytes4 err = bytes4(reason);
+            assertTrue(
+                err == JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ZeroLiquidity.selector
+                    || err == JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoTerminalTokenFound.selector,
+                "Should revert with ZeroLiquidity or NoTerminalTokenFound"
             );
         }
     }
@@ -88,7 +89,7 @@ contract M46_TickBoundsFork is ForkDeployHelper {
         _payProject(pid, 50 ether);
         _accumulateTokens(pid, address(pToken), 100_000e18);
         vm.prank(multisig);
-        hook.deployPool(pid, JBConstants.NATIVE_TOKEN, 0);
+        hook.deployPool(pid, 0);
         assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "Pool should deploy with low weight");
         uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
         uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);

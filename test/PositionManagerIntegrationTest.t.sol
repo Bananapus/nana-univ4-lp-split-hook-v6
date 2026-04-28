@@ -20,7 +20,7 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         uint256 pmProjectBefore = projectToken.balanceOf(address(positionManager));
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
 
         uint256 hookProjectAfter = projectToken.balanceOf(address(hook));
         uint256 pmProjectAfter = projectToken.balanceOf(address(positionManager));
@@ -41,7 +41,7 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         uint256 pmTermBefore = terminalToken.balanceOf(address(positionManager));
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
 
         uint256 pmTermAfter = terminalToken.balanceOf(address(positionManager));
 
@@ -117,7 +117,7 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
             + terminalToken.balanceOf(address(positionManager)) + terminalToken.balanceOf(address(terminal));
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
 
         uint256 totalProjectAfter = projectToken.balanceOf(address(hook))
             + projectToken.balanceOf(address(positionManager)) + projectToken.balanceOf(address(terminal));
@@ -178,7 +178,7 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 100e18);
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
 
         // Position should still be created successfully.
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));

@@ -122,6 +122,20 @@ contract FeeTokenTerminalAccountingPoC is LPSplitHookV4TestBase {
         _setDirectoryTerminal(FEE_PROJECT_ID, address(feeProjectToken), address(pullingTerminal));
         terminal.setProjectToken(PROJECT_ID, address(projectToken));
         terminal.setProjectToken(FEE_PROJECT_ID, address(feeProjectToken));
+
+        // Wire feeProjectToken for auto-select: add accounting context and set balance higher
+        // than terminalToken so auto-select picks feeProjectToken as the terminal token.
+        terminal.addAccountingContext(
+            PROJECT_ID,
+            JBAccountingContext({
+                token: address(feeProjectToken),
+                decimals: 18,
+                currency: uint32(uint160(address(feeProjectToken)))
+            })
+        );
+        store.setBalance(address(terminal), PROJECT_ID, address(feeProjectToken), 100e18);
+        // Clear terminalToken balance so auto-select doesn't pick it
+        store.setBalance(address(terminal), PROJECT_ID, address(terminalToken), 0);
     }
 
     function test_FeeClaimsAreTrackedWhenTerminalTokenEqualsFeeProjectToken() public {
@@ -131,7 +145,7 @@ contract FeeTokenTerminalAccountingPoC is LPSplitHookV4TestBase {
         hook.processSplitWith(_buildContext(PROJECT_ID, address(projectToken), 100e18, 1));
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(feeProjectToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
 
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(feeProjectToken));
         bool terminalIsToken0 = address(feeProjectToken) < address(projectToken);

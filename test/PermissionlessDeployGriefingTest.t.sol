@@ -68,7 +68,7 @@ contract PermissionlessDeployGriefingTest is LPSplitHookV4TestBase {
 
         // Attacker tries to deploy with low-liquidity token — hook ignores it and auto-selects terminalToken
         vm.prank(attacker);
-        hook.deployPool(PROJECT_ID, address(lowLiquidityToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
 
         // Pool was deployed with the HIGH-liquidity token, not the attacker's choice
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "pool should be deployed");
@@ -103,7 +103,7 @@ contract PermissionlessDeployGriefingTest is LPSplitHookV4TestBase {
 
         // Pass the correct token — auto-select still picks terminalToken
         vm.prank(attacker);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
 
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "pool should be deployed");
         assertTrue(hook.tokenIdOf(PROJECT_ID, address(terminalToken)) != 0, "pool should exist for highest-value token");
@@ -127,7 +127,7 @@ contract PermissionlessDeployGriefingTest is LPSplitHookV4TestBase {
 
         // Owner can deploy with the low-liquidity token via permission path
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(lowLiquidityToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
 
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "owner should deploy with any token");
     }
@@ -177,7 +177,7 @@ contract PermissionlessDeployGriefingTest is LPSplitHookV4TestBase {
 
         // Permissionless deploy auto-selects the only available token
         vm.prank(attacker);
-        hook.deployPool(freshProjectId, address(0), 0);
+        hook.deployPool(freshProjectId, 0);
 
         assertTrue(hook.hasDeployedPool(freshProjectId), "pool should deploy with single token");
     }

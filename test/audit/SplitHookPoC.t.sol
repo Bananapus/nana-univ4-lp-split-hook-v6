@@ -236,13 +236,17 @@ contract CodexNemesisPoC is LPSplitHookV4TestBase {
             })
         );
 
+        // Wire FEE_PROJECT_ID for auto-select: add terminal to terminalsOf and set balance.
+        _addDirectoryTerminal(FEE_PROJECT_ID, address(terminal));
+        store.setBalance(address(terminal), FEE_PROJECT_ID, address(terminalToken), 10e18);
+
         _accumulateWith(address(burning), PROJECT_ID, projectToken, 1000e18);
         _accumulateWith(address(burning), FEE_PROJECT_ID, feeProjectToken, 1000e18);
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
         vm.prank(owner);
-        hook.deployPool(FEE_PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(FEE_PROJECT_ID, 0);
 
         // Set up a re-entering fee terminal that mints fee tokens then re-enters collectAndRouteLPFees.
         MintThenReenterFeeTerminal feeTerminal =

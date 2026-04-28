@@ -66,7 +66,7 @@ contract M47_CashOutCapFork is ForkDeployHelper {
         _payProject(pid, 100 ether);
         _accumulateTokens(pid, address(pToken), 50_000e18);
         vm.prank(multisig);
-        hook.deployPool(pid, JBConstants.NATIVE_TOKEN, 0);
+        hook.deployPool(pid, 0);
         assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "Pool should deploy");
         uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
         uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);

@@ -192,6 +192,19 @@ contract FeeProjectSelfBurnPoC is LPSplitHookV4TestBase {
 
         drainingTerminal = new DrainingAddToBalanceTerminal();
         drainingTerminal.setStore(address(store));
+
+        // Wire FEE_PROJECT_ID for auto-select: add terminal to terminalsOf, set accounting context and balance.
+        _addDirectoryTerminal(FEE_PROJECT_ID, address(terminal));
+        terminal.setAccountingContext(
+            FEE_PROJECT_ID, address(terminalToken), uint32(uint160(address(terminalToken))), 18
+        );
+        terminal.addAccountingContext(
+            FEE_PROJECT_ID,
+            JBAccountingContext({
+                token: address(terminalToken), decimals: 18, currency: uint32(uint160(address(terminalToken)))
+            })
+        );
+        store.setBalance(address(terminal), FEE_PROJECT_ID, address(terminalToken), 10e18);
     }
 
     function _accumulateTokensFor(uint256 projectId, MockERC20 token, uint256 amount) internal {
@@ -234,7 +247,7 @@ contract FeeProjectSelfBurnPoC is LPSplitHookV4TestBase {
         _accumulateTokensFor(FEE_PROJECT_ID, feeProjectToken, feeProjectAccumulation);
 
         vm.prank(owner);
-        hook.deployPool(FEE_PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(FEE_PROJECT_ID, 0);
 
         // _totalOutstandingFeeTokenClaims prevents the fee project deployment from touching
         // project 1's reserved fee tokens. The position manager should receive at most what
@@ -316,13 +329,20 @@ contract FeeProjectSelfBurnPoC is LPSplitHookV4TestBase {
         jbProjects.setOwner(PROJECT_B, owner);
         jbTokens.setToken(PROJECT_B, address(projectToken));
         terminal.setProjectToken(PROJECT_B, address(projectToken));
+        terminal.addAccountingContext(
+            PROJECT_B,
+            JBAccountingContext({
+                token: address(terminalToken), decimals: 18, currency: uint32(uint160(address(terminalToken)))
+            })
+        );
         store.setSurplus(PROJECT_B, 0.5e18);
+        store.setBalance(address(terminal), PROJECT_B, address(terminalToken), 10e18);
 
         // Deploy pools for both projects.
         _accumulateAndDeploy(PROJECT_ID, 100e18);
         _accumulateTokens(PROJECT_B, 100e18);
         vm.prank(owner);
-        hook.deployPool(PROJECT_B, address(terminalToken), 0);
+        hook.deployPool(PROJECT_B, 0);
 
         bool terminalIsToken0 = address(terminalToken) < address(projectToken);
 
@@ -408,18 +428,28 @@ contract FeeProjectSelfBurnPoC is LPSplitHookV4TestBase {
         burningController.setToken(PROJECT_B, address(projectToken));
         _setDirectoryController(PROJECT_B, address(burningController));
         _setDirectoryTerminal(PROJECT_B, address(feeProjectToken), address(drainingTerminal));
+        _addDirectoryTerminal(PROJECT_B, address(terminal));
         jbProjects.setOwner(PROJECT_B, owner);
         jbTokens.setToken(PROJECT_B, address(projectToken));
         drainingTerminal.setProjectToken(PROJECT_B, address(projectToken));
         drainingTerminal.setAccountingContext(
             PROJECT_B, address(feeProjectToken), uint32(uint160(address(feeProjectToken))), 18
         );
+        terminal.addAccountingContext(
+            PROJECT_B,
+            JBAccountingContext({
+                token: address(feeProjectToken),
+                decimals: 18,
+                currency: uint32(uint160(address(feeProjectToken)))
+            })
+        );
         store.setSurplus(PROJECT_B, 0.5e18);
+        store.setBalance(address(terminal), PROJECT_B, address(feeProjectToken), 10e18);
 
         _accumulateTokensFor(PROJECT_B, projectToken, 100e18);
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_B, address(feeProjectToken), 0);
+        hook.deployPool(PROJECT_B, 0);
 
         // Hook must still fully back project A's claimable fee tokens.
         assertGe(

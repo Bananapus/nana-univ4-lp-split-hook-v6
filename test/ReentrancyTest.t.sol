@@ -289,7 +289,7 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
         malicious.enableReentry();
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
 
         // 6. Verify re-entry was attempted and succeeded (via burn path)
         assertTrue(malicious.reentrancyAttempted(), "Re-entry should have been attempted during cashOutTokensOf");

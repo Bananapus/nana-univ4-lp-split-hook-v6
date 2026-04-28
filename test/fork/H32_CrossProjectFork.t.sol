@@ -74,7 +74,7 @@ contract H32_CrossProjectFork is ForkDeployHelper {
         uint256 bTokenBalanceBefore = IERC20(address(pTokenB)).balanceOf(address(hook));
         assertEq(bAccumulatedBefore, 80_000e18, "B accumulated before");
         vm.prank(multisig);
-        hook.deployPool(pidA, JBConstants.NATIVE_TOKEN, 0);
+        hook.deployPool(pidA, 0);
         assertTrue(hook.isPoolDeployed(pidA, JBConstants.NATIVE_TOKEN), "A pool should deploy");
         uint256 bAccumulatedAfter = hook.accumulatedProjectTokens(pidB);
         uint256 bTokenBalanceAfter = IERC20(address(pTokenB)).balanceOf(address(hook));

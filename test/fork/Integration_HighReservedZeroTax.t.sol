@@ -66,7 +66,7 @@ contract Integration_HighReservedZeroTax is ForkDeployHelper {
         _payProject(pid, 50 ether);
         _accumulateTokens(pid, address(pToken), 1e23);
         vm.prank(multisig);
-        try hook.deployPool(pid, JBConstants.NATIVE_TOKEN, 0) {
+        try hook.deployPool(pid, 0) {
             assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "Pool deployed");
             PoolKey memory key = hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN);
             (uint160 sqrtPriceX96,,,) = V4_POOL_MANAGER.getSlot0(key.toId());

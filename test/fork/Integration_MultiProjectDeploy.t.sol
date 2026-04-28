@@ -74,7 +74,7 @@ contract Integration_MultiProjectDeploy is ForkDeployHelper {
         uint256 bBalBefore = IERC20(address(pTokenB)).balanceOf(address(hook));
         assertEq(bAccBefore, 80_000e18, "B accumulated before A deploy");
         vm.prank(multisig);
-        hook.deployPool(pidA, JBConstants.NATIVE_TOKEN, 0);
+        hook.deployPool(pidA, 0);
         assertTrue(hook.isPoolDeployed(pidA, JBConstants.NATIVE_TOKEN), "A pool deployed");
         assertEq(hook.accumulatedProjectTokens(pidA), 0, "A accumulated cleared");
         assertEq(hook.accumulatedProjectTokens(pidB), bAccBefore, "B accumulated unchanged after A deploy");
@@ -82,7 +82,7 @@ contract Integration_MultiProjectDeploy is ForkDeployHelper {
         uint256 aTokenId = hook.tokenIdOf(pidA, JBConstants.NATIVE_TOKEN);
         uint128 aLiqBefore = V4_POSITION_MANAGER.getPositionLiquidity(aTokenId);
         vm.prank(multisig);
-        hook.deployPool(pidB, JBConstants.NATIVE_TOKEN, 0);
+        hook.deployPool(pidB, 0);
         assertTrue(hook.isPoolDeployed(pidB, JBConstants.NATIVE_TOKEN), "B pool deployed");
         assertEq(hook.accumulatedProjectTokens(pidB), 0, "B accumulated cleared");
         uint128 aLiqAfter = V4_POSITION_MANAGER.getPositionLiquidity(aTokenId);

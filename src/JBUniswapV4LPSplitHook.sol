@@ -731,29 +731,23 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Deploy a Uniswap V4 pool for a project using accumulated tokens
     // slither-disable-next-line reentrancy-benign,reentrancy-events,unused-return
-    function deployPool(uint256 projectId, address terminalToken, uint256 minCashOutReturn) external {
+    function deployPool(uint256 projectId, uint256 minCashOutReturn) external {
         // Allow anyone to deploy if the current ruleset's weight has decayed 10x from the initial weight.
         // Otherwise, require SET_BUYBACK_POOL permission from the project owner.
         address controller = address(IJBDirectory(DIRECTORY).controllerOf(projectId));
         (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
         uint256 initialWeight = initialWeightOf[projectId];
 
-        // Check whether this is a permissionless deployment (weight decayed 10x+).
-        bool isPermissionless = initialWeight != 0 && ruleset.weight * 10 <= initialWeight;
-
-        if (!isPermissionless) {
+        if (initialWeight == 0 || ruleset.weight * 10 > initialWeight) {
             _requirePermissionFrom({
                 account: IJBDirectory(DIRECTORY).PROJECTS().ownerOf(projectId),
                 projectId: projectId,
                 permissionId: JBPermissionIds.SET_BUYBACK_POOL
             });
-        } else {
-            // For permissionless deployments, auto-select the terminal token with the highest
-            // ETH-denominated value. This prevents griefing where an attacker deploys with a
-            // low-liquidity token, permanently locking out the project's intended high-liquidity
-            // token via the hasDeployedPool flag.
-            terminalToken = _findHighestValueTerminalToken({projectId: projectId, controller: controller});
         }
+
+        // Auto-select the terminal token with the highest ETH-denominated value.
+        address terminalToken = _findHighestValueTerminalToken({projectId: projectId, controller: controller});
 
         if (tokenIdOf[projectId][terminalToken] != 0) revert JBUniswapV4LPSplitHook_PoolAlreadyDeployed();
         if (hasDeployedPool[projectId]) revert JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported();
@@ -930,13 +924,18 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 } else {
                     // pricePerUnit = how many of `context.currency` per 1 ETH, at `context.decimals` precision.
                     // ethValue (18-decimal) = balance * 10^18 / pricePerUnit.
-                    uint256 pricePerUnit = IJBController(controller).PRICES().pricePerUnitOf({
+                    // If no price feed exists, skip this token (treat as 0 value).
+                    try IJBController(controller).PRICES().pricePerUnitOf({
                         projectId: projectId,
                         pricingCurrency: context.currency,
                         unitCurrency: ethCurrency,
                         decimals: context.decimals
-                    });
-                    ethValue = mulDiv(balance, 10 ** 18, pricePerUnit);
+                    }) returns (uint256 pricePerUnit) {
+                        ethValue = mulDiv(balance, 10 ** 18, pricePerUnit);
+                    } catch {
+                        // No price feed available — count raw balance as fallback.
+                        ethValue = balance;
+                    }
                 }
 
                 if (ethValue > highestValue) {

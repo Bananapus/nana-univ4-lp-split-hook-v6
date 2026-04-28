@@ -6,6 +6,7 @@ pragma solidity 0.8.28;
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
 import {MockJBController} from "../mock/MockJBContracts.sol";
+import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
@@ -187,7 +188,7 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
         // Deploy the pool — this internally calls _getCashOutRate which branches
         // on `ruleset.useTotalSurplusForCashOuts()`.
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
 
         // The pool should now exist (tokenIdOf != 0).
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
@@ -204,7 +205,7 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
         // Already false by default. Accumulate and deploy.
         _accumulateViaController(PROJECT_ID, 100e18);
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
         uint256 tokenIdLocal = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertGt(tokenIdLocal, 0, "local surplus path should deploy successfully");
 
@@ -225,7 +226,15 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
         jbProjects.setOwner(projectB, owner);
         jbTokens.setToken(projectB, address(projectToken));
         terminal.setProjectToken(projectB, address(projectToken));
+        terminal.setAccountingContext(projectB, address(terminalToken), uint32(uint160(address(terminalToken))), 18);
+        terminal.addAccountingContext(
+            projectB,
+            JBAccountingContext({
+                token: address(terminalToken), decimals: 18, currency: uint32(uint160(address(terminalToken)))
+            })
+        );
         store.setSurplus(projectB, 0.5e18);
+        store.setBalance(address(terminal), projectB, address(terminalToken), 10e18);
 
         // Accumulate and deploy.
         projectToken.mint(address(hook), 100e18);
@@ -234,7 +243,7 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
         hook.processSplitWith(ctxB);
 
         vm.prank(owner);
-        hook.deployPool(projectB, address(terminalToken), 0);
+        hook.deployPool(projectB, 0);
         uint256 tokenIdTotal = hook.tokenIdOf(projectB, address(terminalToken));
         assertGt(tokenIdTotal, 0, "total surplus path should deploy successfully");
     }
@@ -289,7 +298,7 @@ contract FeeTokensExcludedFromRebalanceTest is LPSplitHookV4TestBase {
         // Step 1: accumulate and deploy a pool.
         _accumulateForProject(PROJECT_ID, 100e18);
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
 
         // Step 2: generate LP fees and collect them.
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
@@ -382,7 +391,7 @@ contract FeeTokensExcludedFromSplitBalanceCheckTest is LPSplitHookV4TestBase {
         hook.processSplitWith(ctx1);
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
 
         // Generate LP fees for project 1 so that claimableFeeTokens > 0.
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));

@@ -254,7 +254,8 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         );
     }
 
-    /// @notice Once any pool is deployed, the hook rejects a second terminal-token pool for the project.
+    /// @notice Once any pool is deployed, the hook rejects a second deploy for the project.
+    ///         Auto-select picks the original terminal token (highest balance), hitting PoolAlreadyDeployed.
     function test_M2_multiTerminalToken_secondDeployReverts() public {
         // PROJECT_ID already has a pool for terminalToken
         assertTrue(
@@ -288,8 +289,8 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         );
 
         projectToken.mint(address(hook), 10e18);
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported.selector);
+        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PoolAlreadyDeployed.selector);
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(secondTerminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
     }
 }

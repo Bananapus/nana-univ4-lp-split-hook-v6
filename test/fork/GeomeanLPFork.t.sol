@@ -183,7 +183,7 @@ contract GeomeanLPForkTest is ForkDeployHelper {
                 string.concat("accumulated mismatch at index ", vm.toString(i))
             );
             vm.prank(multisig);
-            hook.deployPool(pid, JBConstants.NATIVE_TOKEN, 0);
+            hook.deployPool(pid, 0);
             assertTrue(
                 hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN),
                 string.concat("pool not deployed at index ", vm.toString(i))
@@ -219,7 +219,7 @@ contract GeomeanLPForkTest is ForkDeployHelper {
             _payProject(pid, ethAmounts[i]);
             _accumulateTokens(pid, address(pToken), 50_000e18);
             vm.prank(multisig);
-            hook.deployPool(pid, JBConstants.NATIVE_TOKEN, 0);
+            hook.deployPool(pid, 0);
             assertTrue(
                 hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN),
                 string.concat("pool not deployed for ETH amount ", vm.toString(ethAmounts[i]))
@@ -240,7 +240,7 @@ contract GeomeanLPForkTest is ForkDeployHelper {
     function test_fork_ethPool_rebalanceAfterPriceMovement() public {
         _accumulateTokens(projectId, address(projectToken), 100_000e18);
         vm.prank(multisig);
-        hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
+        hook.deployPool(projectId, 0);
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should be deployed");
         uint256 originalTokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         uint128 originalLiq = V4_POSITION_MANAGER.getPositionLiquidity(originalTokenId);
@@ -286,7 +286,7 @@ contract GeomeanLPForkTest is ForkDeployHelper {
             _payProjectUSDC(pid, usdc, usdcAmounts[i]);
             _accumulateTokens(pid, address(pToken), 50_000e18);
             vm.prank(multisig);
-            hook.deployPool(pid, address(usdc), 0);
+            hook.deployPool(pid, 0);
             assertTrue(
                 hook.isPoolDeployed(pid, address(usdc)),
                 string.concat("USDC pool not deployed at index ", vm.toString(i))
@@ -320,7 +320,7 @@ contract GeomeanLPForkTest is ForkDeployHelper {
             uint256 tokenAmount = (usdcAmounts[i] * 5000e18) / 1000e6;
             _accumulateTokens(pid, address(pToken), tokenAmount);
             vm.prank(multisig);
-            hook.deployPool(pid, address(usdc), 0);
+            hook.deployPool(pid, 0);
             uint256 tokenId = hook.tokenIdOf(pid, address(usdc));
             assertTrue(tokenId != 0, "position should exist");
             liquidities[i] = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
@@ -349,7 +349,7 @@ contract GeomeanLPForkTest is ForkDeployHelper {
             _payProject(pid, 10 ether);
             _accumulateTokens(pid, address(pToken), 100_000e18);
             vm.prank(multisig);
-            hook.deployPool(pid, JBConstants.NATIVE_TOKEN, 0);
+            hook.deployPool(pid, 0);
             assertTrue(
                 hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN),
                 string.concat("pool not deployed at config ", vm.toString(i))

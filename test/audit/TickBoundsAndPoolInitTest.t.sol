@@ -116,7 +116,7 @@ contract AuditFixM4Test is LPSplitHookV4TestBase {
 
         // deployPool should succeed (M-4 fix: no revert on pre-initialized pools).
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
 
         // Verify deployment succeeded.
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "project should have a deployed pool");
@@ -167,7 +167,7 @@ contract AuditFixM4Test is LPSplitHookV4TestBase {
 
         // deployPool should still succeed.
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
 
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "project should have a deployed pool");
         assertGt(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "LP position should be created");
@@ -210,7 +210,7 @@ contract AuditFixM4Test is LPSplitHookV4TestBase {
 
         // deployPool should succeed with out-of-range liquidity.
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
 
         // The position should still be minted.
         assertEq(
