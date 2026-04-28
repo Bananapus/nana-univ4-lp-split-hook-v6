@@ -45,6 +45,19 @@ contract Integration_TerminalMigration is ForkDeployHelper {
     function setUp() public {
         vm.createSelectFork("ethereum", 21_700_000);
         _deployJBCore();
+
+        // Deploy a second terminal for migration tests.
+        jbMultiTerminal2 = new JBMultiTerminal(
+            jbFeelessAddresses,
+            jbPermissions,
+            jbProjects,
+            jbSplits,
+            jbTerminalStore,
+            jbTokens,
+            IPermit2(address(PERMIT2)),
+            trustedForwarder
+        );
+
         feeProjectId = _launchFeeProject();
         vm.prank(multisig);
         jbController.deployERC20For(feeProjectId, "Fee Token", "FEE", bytes32(0));
