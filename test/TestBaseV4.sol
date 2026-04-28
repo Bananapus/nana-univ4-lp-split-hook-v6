@@ -149,6 +149,9 @@ contract LPSplitHookV4TestBase is Test {
         // Set surplus for cash out rate
         store.setSurplus(PROJECT_ID, 0.5e18);
 
+        // Set a default terminal balance (needed for permissionless auto-select)
+        store.setBalance(address(terminal), PROJECT_ID, address(terminalToken), 10e18);
+
         // Add terminal to directory's terminal list
         _addDirectoryTerminal(PROJECT_ID, address(terminal));
 

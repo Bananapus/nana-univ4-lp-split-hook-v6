@@ -7,13 +7,12 @@ import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingCo
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
 import {MockERC20} from "./mock/MockERC20.sol";
 
-/// @notice Tests for the permissionless deployPool griefing attack and its fix.
-/// @dev The attack: after weight decays 10x, anyone can call deployPool with any valid
-///      terminal token. Since hasDeployedPool is permanently set, the attacker can lock
-///      the project into a low-liquidity token, preventing the owner from deploying with
-///      the intended high-liquidity token.
-/// @dev The fix: in the permissionless path, require the chosen terminal token to have
-///      the highest balance among all terminal tokens for the project.
+/// @notice Tests for permissionless deployPool auto-selecting the highest-value terminal token.
+/// @dev The attack scenario: after weight decays 10x, anyone can call deployPool. Without protection,
+///      an attacker could deploy with a low-liquidity token, permanently locking out the project's
+///      intended high-liquidity token via the hasDeployedPool flag.
+/// @dev The fix: in the permissionless path, the caller's terminalToken argument is ignored. The hook
+///      auto-selects the token with the highest ETH-denominated value across all terminals.
 contract PermissionlessDeployGriefingTest is LPSplitHookV4TestBase {
     address attacker;
     MockERC20 lowLiquidityToken;
@@ -50,54 +49,46 @@ contract PermissionlessDeployGriefingTest is LPSplitHookV4TestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // Test: Griefing attack is prevented by the fix
+    // Test: Auto-selection overrides attacker's token choice
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice Attacker cannot deploy with the low-liquidity token when another token has more balance.
-    function test_permissionlessDeployReverts_whenTokenDoesNotHaveMostLiquidity() public {
+    /// @notice Attacker specifies a low-liquidity token, but the hook auto-selects the highest-value one.
+    function test_permissionlessDeploy_autoSelectsHighestValueToken() public {
         // Accumulate tokens (this records initialWeight)
         _accumulateTokens(PROJECT_ID, 100e18);
 
         // Decay weight 10x so deployment becomes permissionless
         controller.setWeight(PROJECT_ID, DEFAULT_WEIGHT / 10);
 
-        // Attacker tries to deploy with low-liquidity token — should revert
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_TokenDoesNotHaveMostLiquidity.selector);
+        // Approve tokens for position manager
+        vm.startPrank(address(hook));
+        projectToken.approve(address(positionManager), type(uint256).max);
+        terminalToken.approve(address(positionManager), type(uint256).max);
+        vm.stopPrank();
+
+        // Attacker tries to deploy with low-liquidity token — hook ignores it and auto-selects terminalToken
         vm.prank(attacker);
         hook.deployPool(PROJECT_ID, address(lowLiquidityToken), 0);
 
-        // Verify the pool was NOT deployed and the flag was NOT set
-        assertFalse(hook.hasDeployedPool(PROJECT_ID), "hasDeployedPool should not be set after failed attack");
-        assertEq(hook.tokenIdOf(PROJECT_ID, address(lowLiquidityToken)), 0, "no pool should exist for low-liq token");
-    }
-
-    /// @notice After attack is blocked, owner can still deploy with the correct token.
-    function test_ownerCanDeployAfterAttackBlocked() public {
-        // Accumulate tokens
-        _accumulateTokens(PROJECT_ID, 100e18);
-
-        // Decay weight 10x
-        controller.setWeight(PROJECT_ID, DEFAULT_WEIGHT / 10);
-
-        // Attacker's attempt fails
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_TokenDoesNotHaveMostLiquidity.selector);
-        vm.prank(attacker);
-        hook.deployPool(PROJECT_ID, address(lowLiquidityToken), 0);
-
-        // Owner can still deploy with the correct (highest-liquidity) token
-        vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
-
-        assertTrue(hook.hasDeployedPool(PROJECT_ID), "pool should be deployed by owner");
-        assertTrue(hook.tokenIdOf(PROJECT_ID, address(terminalToken)) != 0, "pool should exist for high-liq token");
+        // Pool was deployed with the HIGH-liquidity token, not the attacker's choice
+        assertTrue(hook.hasDeployedPool(PROJECT_ID), "pool should be deployed");
+        assertTrue(
+            hook.tokenIdOf(PROJECT_ID, address(terminalToken)) != 0,
+            "pool should exist for highest-value token (terminalToken)"
+        );
+        assertEq(
+            hook.tokenIdOf(PROJECT_ID, address(lowLiquidityToken)),
+            0,
+            "no pool should exist for low-value token"
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // Test: Permissionless deploy succeeds with highest-liquidity token
+    // Test: Permissionless deploy succeeds with any argument (auto-selects)
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice Anyone can permissionlessly deploy with the token that has the most liquidity.
-    function test_permissionlessDeploySucceeds_withHighestLiquidityToken() public {
+    /// @notice Anyone can permissionlessly deploy — the terminalToken argument is irrelevant.
+    function test_permissionlessDeploySucceeds_anyArgument() public {
         // Accumulate tokens
         _accumulateTokens(PROJECT_ID, 100e18);
 
@@ -110,54 +101,25 @@ contract PermissionlessDeployGriefingTest is LPSplitHookV4TestBase {
         terminalToken.approve(address(positionManager), type(uint256).max);
         vm.stopPrank();
 
-        // Attacker (or anyone) can deploy with the highest-liquidity token
+        // Pass the correct token — auto-select still picks terminalToken
         vm.prank(attacker);
         hook.deployPool(PROJECT_ID, address(terminalToken), 0);
 
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "pool should be deployed");
-        assertTrue(hook.tokenIdOf(PROJECT_ID, address(terminalToken)) != 0, "pool should exist for highest-liq token");
+        assertTrue(hook.tokenIdOf(PROJECT_ID, address(terminalToken)) != 0, "pool should exist for highest-value token");
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // Test: Tied balances are allowed (no griefing when equal)
+    // Test: Owner bypass — owner can deploy any token regardless of value
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice When two tokens have equal balance, either can be chosen permissionlessly.
-    function test_permissionlessDeploySucceeds_whenBalancesAreTied() public {
-        // Set both tokens to equal balance
-        store.setBalance(address(terminal), PROJECT_ID, address(terminalToken), 5e18);
-        store.setBalance(address(terminal), PROJECT_ID, address(lowLiquidityToken), 5e18);
-
-        // Accumulate tokens
-        _accumulateTokens(PROJECT_ID, 100e18);
-
-        // Decay weight 10x
-        controller.setWeight(PROJECT_ID, DEFAULT_WEIGHT / 10);
-
-        // Approve tokens for position manager
-        vm.startPrank(address(hook));
-        projectToken.approve(address(positionManager), type(uint256).max);
-        terminalToken.approve(address(positionManager), type(uint256).max);
-        vm.stopPrank();
-
-        // Either token should be deployable when tied
-        vm.prank(attacker);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
-
-        assertTrue(hook.hasDeployedPool(PROJECT_ID), "pool should deploy with tied balance");
-    }
-
-    // ─────────────────────────────────────────────────────────────────────
-    // Test: Owner bypass — owner can deploy any token regardless of liquidity
-    // ─────────────────────────────────────────────────────────────────────
-
-    /// @notice Owner can deploy with any valid terminal token, even if it doesn't have the most liquidity.
-    ///         The liquidity check only applies to the permissionless path.
+    /// @notice Owner can deploy with any valid terminal token, even if it doesn't have the most value.
+    ///         The auto-selection only applies to the permissionless path.
     function test_ownerCanDeployLowLiquidityToken() public {
         // Accumulate tokens
         _accumulateTokens(PROJECT_ID, 100e18);
 
-        // Weight has NOT decayed — owner uses permission path (no liquidity check)
+        // Weight has NOT decayed — owner uses permission path (no auto-selection)
         vm.startPrank(address(hook));
         projectToken.approve(address(positionManager), type(uint256).max);
         lowLiquidityToken.approve(address(positionManager), type(uint256).max);
@@ -171,15 +133,11 @@ contract PermissionlessDeployGriefingTest is LPSplitHookV4TestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // Test: Single token (no other tokens) — permissionless deploy works
+    // Test: Single token — permissionless deploy auto-selects the only token
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice When only one terminal token exists, permissionless deploy works fine.
+    /// @notice When only one terminal token exists, permissionless deploy auto-selects it.
     function test_permissionlessDeploySucceeds_withSingleToken() public {
-        // Remove the low-liquidity token's accounting context by deploying fresh
-        // We re-deploy the terminal mock to have only one accounting context
-        // Actually, we can just set it up so only terminalToken has a context.
-        // The base setUp already added terminalToken context. Let's use a fresh project.
         uint256 freshProjectId = 42;
         _setDirectoryController(freshProjectId, address(controller));
         controller.setWeight(freshProjectId, DEFAULT_WEIGHT);
@@ -193,8 +151,6 @@ contract PermissionlessDeployGriefingTest is LPSplitHookV4TestBase {
         terminal.setAccountingContext(
             freshProjectId, address(terminalToken), uint32(uint160(address(terminalToken))), 18
         );
-        // Note: we intentionally do NOT add a second accounting context for this project.
-        // But we need to add at least the terminalToken context to the contexts list.
         terminal.addAccountingContext(
             freshProjectId,
             JBAccountingContext({
@@ -219,9 +175,9 @@ contract PermissionlessDeployGriefingTest is LPSplitHookV4TestBase {
         terminalToken.approve(address(positionManager), type(uint256).max);
         vm.stopPrank();
 
-        // Permissionless deploy should succeed with the only token
+        // Permissionless deploy auto-selects the only available token
         vm.prank(attacker);
-        hook.deployPool(freshProjectId, address(terminalToken), 0);
+        hook.deployPool(freshProjectId, address(0), 0);
 
         assertTrue(hook.hasDeployedPool(freshProjectId), "pool should deploy with single token");
     }

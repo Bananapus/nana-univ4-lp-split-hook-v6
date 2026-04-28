@@ -86,7 +86,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     error JBUniswapV4LPSplitHook_ZeroLiquidity();
     error JBUniswapV4LPSplitHook_InvalidTickBounds();
     error JBUniswapV4LPSplitHook_TerminalNotFound(uint256 projectId, address token);
-    error JBUniswapV4LPSplitHook_TokenDoesNotHaveMostLiquidity();
+    error JBUniswapV4LPSplitHook_NoTerminalTokenFound();
 
     //*********************************************************************//
     // ------------------------- public constants ------------------------ //
@@ -738,7 +738,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
         uint256 initialWeight = initialWeightOf[projectId];
 
-        // Track whether this is a permissionless deployment for the liquidity check below.
+        // Check whether this is a permissionless deployment (weight decayed 10x+).
         bool isPermissionless = initialWeight != 0 && ruleset.weight * 10 <= initialWeight;
 
         if (!isPermissionless) {
@@ -747,6 +747,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 projectId: projectId,
                 permissionId: JBPermissionIds.SET_BUYBACK_POOL
             });
+        } else {
+            // For permissionless deployments, auto-select the terminal token with the highest
+            // ETH-denominated value. This prevents griefing where an attacker deploys with a
+            // low-liquidity token, permanently locking out the project's intended high-liquidity
+            // token via the hasDeployedPool flag.
+            terminalToken = _findHighestValueTerminalToken({projectId: projectId, controller: controller});
         }
 
         if (tokenIdOf[projectId][terminalToken] != 0) revert JBUniswapV4LPSplitHook_PoolAlreadyDeployed();
@@ -760,14 +766,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         address terminal =
             address(IJBDirectory(DIRECTORY).primaryTerminalOf({projectId: projectId, token: terminalToken}));
         if (terminal == address(0)) revert JBUniswapV4LPSplitHook_InvalidTerminalToken();
-
-        // For permissionless deployments, require the chosen terminal token to have the highest
-        // balance among all tokens across all of the project's terminals. This prevents griefing
-        // where an attacker deploys with a low-liquidity token, permanently locking out the
-        // project's intended high-liquidity token via the hasDeployedPool flag.
-        if (isPermissionless) {
-            _requireHighestLiquidityToken({projectId: projectId, terminalToken: terminalToken});
-        }
 
         // Flip the project into post-deploy burn mode before any external calls so reentrancy cannot
         // observe the project as still being in accumulation mode.
@@ -892,21 +890,23 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         accumulatedProjectTokens[projectId] += amount;
     }
 
-    /// @notice Require that `terminalToken` has the highest (or tied-highest) balance among all tokens
-    ///         across all of the project's terminals. Used to prevent permissionless deployment griefing.
+    /// @notice Find the terminal token with the highest ETH-denominated value across all of the project's terminals.
+    /// @dev Converts each token's balance to 18-decimal ETH using price feeds. For native ETH, no conversion needed.
     /// @param projectId The ID of the project.
-    /// @param terminalToken The terminal token being proposed for pool deployment.
-    function _requireHighestLiquidityToken(uint256 projectId, address terminalToken) internal view {
+    /// @param controller The project's controller address.
+    /// @return highestToken The token address with the highest ETH-denominated balance.
+    function _findHighestValueTerminalToken(
+        uint256 projectId,
+        address controller
+    )
+        internal
+        view
+        returns (address highestToken)
+    {
         IJBTerminal[] memory terminals = IJBDirectory(DIRECTORY).terminalsOf(projectId);
+        uint256 highestValue;
+        uint32 ethCurrency = uint32(uint160(JBConstants.NATIVE_TOKEN));
 
-        // Look up the chosen token's balance in its terminal.
-        address chosenTerminal =
-            address(IJBDirectory(DIRECTORY).primaryTerminalOf({projectId: projectId, token: terminalToken}));
-        IJBTerminalStore chosenStore = IJBMultiTerminal(chosenTerminal).STORE();
-        uint256 chosenBalance =
-            chosenStore.balanceOf({terminal: chosenTerminal, projectId: projectId, token: terminalToken});
-
-        // Compare against every other token across all terminals.
         uint256 terminalCount = terminals.length;
         for (uint256 i; i < terminalCount; i++) {
             IJBMultiTerminal term = IJBMultiTerminal(address(terminals[i]));
@@ -915,19 +915,38 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             uint256 contextCount = contexts.length;
 
             for (uint256 j; j < contextCount; j++) {
-                address otherToken = contexts[j].token;
-                // Skip the chosen token — we already have its balance.
-                if (otherToken == terminalToken) continue;
+                JBAccountingContext memory context = contexts[j];
 
-                uint256 otherBalance =
-                    termStore.balanceOf({terminal: address(term), projectId: projectId, token: otherToken});
+                uint256 balance =
+                    termStore.balanceOf({terminal: address(term), projectId: projectId, token: context.token});
 
-                // Revert if any other token has a strictly higher balance.
-                if (otherBalance > chosenBalance) {
-                    revert JBUniswapV4LPSplitHook_TokenDoesNotHaveMostLiquidity();
+                if (balance == 0) continue;
+
+                // Convert balance to 18-decimal ETH value for comparison.
+                uint256 ethValue;
+                if (context.currency == ethCurrency) {
+                    // Native ETH: balance is already in 18-decimal ETH.
+                    ethValue = balance;
+                } else {
+                    // pricePerUnit = how many of `context.currency` per 1 ETH, at `context.decimals` precision.
+                    // ethValue (18-decimal) = balance * 10^18 / pricePerUnit.
+                    uint256 pricePerUnit = IJBController(controller).PRICES().pricePerUnitOf({
+                        projectId: projectId,
+                        pricingCurrency: context.currency,
+                        unitCurrency: ethCurrency,
+                        decimals: context.decimals
+                    });
+                    ethValue = mulDiv(balance, 10 ** 18, pricePerUnit);
+                }
+
+                if (ethValue > highestValue) {
+                    highestValue = ethValue;
+                    highestToken = context.token;
                 }
             }
         }
+
+        if (highestToken == address(0)) revert JBUniswapV4LPSplitHook_NoTerminalTokenFound();
     }
 
     /// @notice Add tokens to project balance via terminal

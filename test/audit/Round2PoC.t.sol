@@ -33,24 +33,29 @@ contract CodexNemesisRound2HookPoC is LPSplitHookV4TestBase {
 
         _accumulateTokens(PROJECT_ID, 200e18);
 
+        // Set balances so that terminalToken has the highest value — the auto-select logic
+        // in _findHighestValueTerminalToken will pick it regardless of what the attacker passes.
+        store.setBalance(address(terminal), PROJECT_ID, address(terminalToken), 10e18);
+        store.setBalance(address(terminal), PROJECT_ID, address(altTerminalToken), 1e18);
+
         controller.setWeight(PROJECT_ID, DEFAULT_WEIGHT / 10);
 
+        // Outsider tries to deploy with the low-value altTerminalToken, but the fix
+        // auto-selects terminalToken (highest value) instead.
         vm.prank(user);
         hook.deployPool(PROJECT_ID, address(altTerminalToken), 0);
 
-        assertTrue(hook.hasDeployedPool(PROJECT_ID), "outsider should be able to flip the project into deployed mode");
+        assertTrue(hook.hasDeployedPool(PROJECT_ID), "outsider should be able to trigger deployment");
         assertGt(
-            hook.tokenIdOf(PROJECT_ID, address(altTerminalToken)), 0, "outsider should be able to lock the alt pair"
-        );
-        assertEq(
             hook.tokenIdOf(PROJECT_ID, address(terminalToken)),
             0,
-            "the intended terminal token pair should remain undeployed"
+            "auto-select should deploy the highest-value terminal token"
         );
-
-        vm.prank(owner);
-        vm.expectRevert(bytes4(keccak256("JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported()")));
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        assertEq(
+            hook.tokenIdOf(PROJECT_ID, address(altTerminalToken)),
+            0,
+            "attacker's low-value token should NOT be deployed"
+        );
     }
 }
 
