@@ -535,8 +535,19 @@ contract MockJBTerminalStore {
     // projectId => surplus per project token
     mapping(uint256 => uint256) public surplusPerToken;
 
+    // terminal => projectId => token => balance
+    mapping(address => mapping(uint256 => mapping(address => uint256))) public _balances;
+
     function setSurplus(uint256 projectId, uint256 surplus) external {
         surplusPerToken[projectId] = surplus;
+    }
+
+    function setBalance(address terminal, uint256 projectId, address token, uint256 balance) external {
+        _balances[terminal][projectId][token] = balance;
+    }
+
+    function balanceOf(address terminal, uint256 projectId, address token) external view returns (uint256) {
+        return _balances[terminal][projectId][token];
     }
 
     /// @dev Matches IJBTerminalStore.currentReclaimableSurplusOf(uint256,uint256,uint256,uint256)
