@@ -128,9 +128,7 @@ contract FeeTokenTerminalAccountingPoC is LPSplitHookV4TestBase {
         terminal.addAccountingContext(
             PROJECT_ID,
             JBAccountingContext({
-                token: address(feeProjectToken),
-                decimals: 18,
-                currency: uint32(uint160(address(feeProjectToken)))
+                token: address(feeProjectToken), decimals: 18, currency: uint32(uint160(address(feeProjectToken)))
             })
         );
         store.setBalance(address(terminal), PROJECT_ID, address(feeProjectToken), 100e18);

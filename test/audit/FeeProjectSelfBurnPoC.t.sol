@@ -438,9 +438,7 @@ contract FeeProjectSelfBurnPoC is LPSplitHookV4TestBase {
         terminal.addAccountingContext(
             PROJECT_B,
             JBAccountingContext({
-                token: address(feeProjectToken),
-                decimals: 18,
-                currency: uint32(uint160(address(feeProjectToken)))
+                token: address(feeProjectToken), decimals: 18, currency: uint32(uint160(address(feeProjectToken)))
             })
         );
         store.setSurplus(PROJECT_B, 0.5e18);

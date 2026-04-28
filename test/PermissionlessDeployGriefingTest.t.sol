@@ -76,11 +76,7 @@ contract PermissionlessDeployGriefingTest is LPSplitHookV4TestBase {
             hook.tokenIdOf(PROJECT_ID, address(terminalToken)) != 0,
             "pool should exist for highest-value token (terminalToken)"
         );
-        assertEq(
-            hook.tokenIdOf(PROJECT_ID, address(lowLiquidityToken)),
-            0,
-            "no pool should exist for low-value token"
-        );
+        assertEq(hook.tokenIdOf(PROJECT_ID, address(lowLiquidityToken)), 0, "no pool should exist for low-value token");
     }
 
     // ─────────────────────────────────────────────────────────────────────

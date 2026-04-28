@@ -925,12 +925,15 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                     // pricePerUnit = how many of `context.currency` per 1 ETH, at `context.decimals` precision.
                     // ethValue (18-decimal) = balance * 10^18 / pricePerUnit.
                     // If no price feed exists, skip this token (treat as 0 value).
-                    try IJBController(controller).PRICES().pricePerUnitOf({
+                    try IJBController(controller).PRICES()
+                        .pricePerUnitOf({
                         projectId: projectId,
                         pricingCurrency: context.currency,
                         unitCurrency: ethCurrency,
                         decimals: context.decimals
-                    }) returns (uint256 pricePerUnit) {
+                    }) returns (
+                        uint256 pricePerUnit
+                    ) {
                         ethValue = mulDiv(balance, 10 ** 18, pricePerUnit);
                     } catch {
                         // No price feed available — count raw balance as fallback.
