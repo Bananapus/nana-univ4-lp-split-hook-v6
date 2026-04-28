@@ -1,90 +1,50 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {Test} from "forge-std/Test.sol";
+import {ForkDeployHelper} from "../helpers/ForkDeployHelper.sol";
 
-import {JBPermissions} from "@bananapus/core-v6/src/JBPermissions.sol";
-import {JBProjects} from "@bananapus/core-v6/src/JBProjects.sol";
-import {JBDirectory} from "@bananapus/core-v6/src/JBDirectory.sol";
-import {JBRulesets} from "@bananapus/core-v6/src/JBRulesets.sol";
-import {JBTokens} from "@bananapus/core-v6/src/JBTokens.sol";
-import {JBERC20} from "@bananapus/core-v6/src/JBERC20.sol";
-import {JBSplits} from "@bananapus/core-v6/src/JBSplits.sol";
-import {JBPrices} from "@bananapus/core-v6/src/JBPrices.sol";
-import {JBController} from "@bananapus/core-v6/src/JBController.sol";
-import {JBFundAccessLimits} from "@bananapus/core-v6/src/JBFundAccessLimits.sol";
-import {JBFeelessAddresses} from "@bananapus/core-v6/src/JBFeelessAddresses.sol";
-import {JBTerminalStore} from "@bananapus/core-v6/src/JBTerminalStore.sol";
-import {JBMultiTerminal} from "@bananapus/core-v6/src/JBMultiTerminal.sol";
-import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
+import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
+import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
+import {IJBSplitHook} from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
+import {IJBToken} from "@bananapus/core-v6/src/interfaces/IJBToken.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
+import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
+import {JBFundAccessLimitGroup} from "@bananapus/core-v6/src/structs/JBFundAccessLimitGroup.sol";
 import {JBRulesetConfig} from "@bananapus/core-v6/src/structs/JBRulesetConfig.sol";
 import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
-import {JBTerminalConfig} from "@bananapus/core-v6/src/structs/JBTerminalConfig.sol";
 import {JBSplitGroup} from "@bananapus/core-v6/src/structs/JBSplitGroup.sol";
-import {JBFundAccessLimitGroup} from "@bananapus/core-v6/src/structs/JBFundAccessLimitGroup.sol";
-import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
-import {IJBToken} from "@bananapus/core-v6/src/interfaces/IJBToken.sol";
-import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
-import {IJBSplitHook} from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
-import {JBSplit} from "@bananapus/core-v6/src/structs/JBSplit.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
+import {JBSplit} from "@bananapus/core-v6/src/structs/JBSplit.sol";
+import {JBTerminalConfig} from "@bananapus/core-v6/src/structs/JBTerminalConfig.sol";
 
+import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import {IPermit2} from "@uniswap/permit2/src/interfaces/IPermit2.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
-import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
-import {IPermit2} from "@uniswap/permit2/src/interfaces/IPermit2.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {LibClone} from "solady/src/utils/LibClone.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
+import {LibClone} from "solady/src/utils/LibClone.sol";
 
-/// @notice Integration fork test: after project A deploys its pool, subsequent
-///         processSplitWith calls burn tokens (not accumulate). Meanwhile project B
-///         is still in accumulation phase. Verifies M-44 canonical token lookup + H-32
-///         isolation in the burn-vs-accumulate split.
-contract Integration_BurnPathCrossProject is Test {
+contract Integration_BurnPathCrossProject is ForkDeployHelper {
     using StateLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;
-
     IPoolManager constant V4_POOL_MANAGER = IPoolManager(0x000000000004444c5dc75cB358380D2e3dE08A90);
     IPositionManager constant V4_POSITION_MANAGER = IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e);
-    IPermit2 constant PERMIT2 = IPermit2(0x000000000022D473030F116dDEE9F6B43aC78BA3);
-
-    address multisig = address(0xBEEF);
-    address trustedForwarder = address(0);
-
-    JBPermissions jbPermissions;
-    JBProjects jbProjects;
-    JBDirectory jbDirectory;
-    JBRulesets jbRulesets;
-    JBTokens jbTokens;
-    JBSplits jbSplits;
-    JBPrices jbPrices;
-    JBFundAccessLimits jbFundAccessLimits;
-    JBFeelessAddresses jbFeelessAddresses;
-    JBController jbController;
-    JBTerminalStore jbTerminalStore;
-    JBMultiTerminal jbMultiTerminal;
-
     JBUniswapV4LPSplitHook hook;
     uint256 feeProjectId;
-
     receive() external payable {}
-
     function setUp() public {
         vm.createSelectFork("ethereum", 21_700_000);
         _deployJBCore();
-
         feeProjectId = _launchProject({reservedPercent: 0, cashOutTaxRate: 0, weight: 1_000_000e18});
         vm.prank(multisig);
         jbController.deployERC20For(feeProjectId, "Fee Token", "FEE", bytes32(0));
-
         JBUniswapV4LPSplitHook hookImpl = new JBUniswapV4LPSplitHook(
             address(jbDirectory),
             IJBPermissions(address(jbPermissions)),
@@ -97,39 +57,27 @@ contract Integration_BurnPathCrossProject is Test {
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize(feeProjectId, 3800);
     }
-
-    /// @notice After A deploys, sending more tokens to the hook for A burns them.
-    ///         B's accumulation is completely unaffected.
     function test_fork_integration_burnPathCrossProject() public {
-        // --- Setup both projects ---
         uint256 pidA = _launchProject({reservedPercent: 0, cashOutTaxRate: 5000, weight: 1_000_000e18});
         vm.prank(multisig);
         IJBToken pTokenA = jbController.deployERC20For(pidA, "Project A Token", "TKA", bytes32(0));
         _payProject(pidA, 50 ether);
         _accumulateTokens(pidA, address(pTokenA), 100_000e18);
-
         uint256 pidB = _launchProject({reservedPercent: 0, cashOutTaxRate: 5000, weight: 500_000e18});
         vm.prank(multisig);
         IJBToken pTokenB = jbController.deployERC20For(pidB, "Project B Token", "TKB", bytes32(0));
         _payProject(pidB, 30 ether);
         _accumulateTokens(pidB, address(pTokenB), 80_000e18);
-
-        // --- Deploy project A ---
         vm.prank(multisig);
         hook.deployPool(pidA, JBConstants.NATIVE_TOKEN, 0);
         assertTrue(hook.isPoolDeployed(pidA, JBConstants.NATIVE_TOKEN), "A deployed");
-
-        // Snapshot B state
         uint256 bAccBefore = hook.accumulatedProjectTokens(pidB);
         uint256 bBalBefore = IERC20(address(pTokenB)).balanceOf(address(hook));
-
-        // --- Send more tokens to hook for project A (should burn, not accumulate) ---
         uint256 burnAmount = 50_000e18;
         vm.prank(multisig);
         jbController.mintTokensOf({
             projectId: pidA, tokenCount: burnAmount, beneficiary: address(hook), memo: "", useReservedPercent: false
         });
-
         JBSplitHookContext memory burnCtx = JBSplitHookContext({
             token: address(pTokenA),
             amount: burnAmount,
@@ -145,78 +93,20 @@ contract Integration_BurnPathCrossProject is Test {
                 hook: IJBSplitHook(address(hook))
             })
         });
-
         vm.prank(address(jbController));
         hook.processSplitWith(burnCtx);
-
-        // A's accumulated tokens stay at 0 (burn path, not accumulate)
         assertEq(hook.accumulatedProjectTokens(pidA), 0, "A accumulated stays 0 after burn");
-
-        // B completely unchanged
         assertEq(hook.accumulatedProjectTokens(pidB), bAccBefore, "B accumulated unchanged");
         assertEq(IERC20(address(pTokenB)).balanceOf(address(hook)), bBalBefore, "B token balance unchanged");
-
-        // --- Deploy project B ---
         vm.prank(multisig);
         hook.deployPool(pidB, JBConstants.NATIVE_TOKEN, 0);
         assertTrue(hook.isPoolDeployed(pidB, JBConstants.NATIVE_TOKEN), "B deployed");
-
         uint256 bTokenId = hook.tokenIdOf(pidB, JBConstants.NATIVE_TOKEN);
         uint128 bLiq = V4_POSITION_MANAGER.getPositionLiquidity(bTokenId);
         assertTrue(bLiq > 0, "B has liquidity");
         assertEq(hook.accumulatedProjectTokens(pidB), 0, "B accumulated cleared after deploy");
-
         emit log_named_uint("  B liquidity", bLiq);
     }
-
-    // ═══════════════════════════════════════════════════════════════════════
-    //  INTERNAL HELPERS
-    // ═══════════════════════════════════════════════════════════════════════
-
-    function _deployJBCore() internal {
-        jbPermissions = new JBPermissions(trustedForwarder);
-        jbProjects = new JBProjects(multisig, address(0), trustedForwarder);
-        jbDirectory = new JBDirectory(jbPermissions, jbProjects, multisig);
-        JBERC20 jbErc20 = new JBERC20(jbPermissions, jbProjects);
-        jbTokens = new JBTokens(jbDirectory, jbErc20);
-        jbRulesets = new JBRulesets(jbDirectory);
-        jbPrices = new JBPrices(jbDirectory, jbPermissions, jbProjects, multisig, trustedForwarder);
-        jbSplits = new JBSplits(jbDirectory);
-        jbFundAccessLimits = new JBFundAccessLimits(jbDirectory);
-        jbFeelessAddresses = new JBFeelessAddresses(multisig);
-
-        jbController = new JBController(
-            jbDirectory,
-            jbFundAccessLimits,
-            jbPermissions,
-            jbPrices,
-            jbProjects,
-            jbRulesets,
-            jbSplits,
-            jbTokens,
-            address(0),
-            trustedForwarder
-        );
-
-        vm.prank(multisig);
-        jbDirectory.setIsAllowedToSetFirstController(address(jbController), true);
-
-        jbTerminalStore = new JBTerminalStore(jbDirectory, jbPrices, jbRulesets);
-
-        jbMultiTerminal = new JBMultiTerminal(
-            jbFeelessAddresses,
-            jbPermissions,
-            jbProjects,
-            jbSplits,
-            jbTerminalStore,
-            jbTokens,
-            PERMIT2,
-            trustedForwarder
-        );
-
-        vm.deal(address(this), 10_000 ether);
-    }
-
     function _launchProject(
         uint16 reservedPercent,
         uint16 cashOutTaxRate,
@@ -246,7 +136,6 @@ contract Integration_BurnPathCrossProject is Test {
             dataHook: address(0),
             metadata: 0
         });
-
         JBRulesetConfig[] memory rulesetConfigs = new JBRulesetConfig[](1);
         rulesetConfigs[0].mustStartAtOrAfter = 0;
         rulesetConfigs[0].duration = 0;
@@ -256,15 +145,12 @@ contract Integration_BurnPathCrossProject is Test {
         rulesetConfigs[0].metadata = metadata;
         rulesetConfigs[0].splitGroups = new JBSplitGroup[](0);
         rulesetConfigs[0].fundAccessLimitGroups = new JBFundAccessLimitGroup[](0);
-
         JBAccountingContext[] memory tokensToAccept = new JBAccountingContext[](1);
         tokensToAccept[0] = JBAccountingContext({
             token: JBConstants.NATIVE_TOKEN, decimals: 18, currency: uint32(uint160(JBConstants.NATIVE_TOKEN))
         });
-
         JBTerminalConfig[] memory terminalConfigs = new JBTerminalConfig[](1);
         terminalConfigs[0] = JBTerminalConfig({terminal: jbMultiTerminal, accountingContextsToAccept: tokensToAccept});
-
         id = jbController.launchProjectFor({
             owner: multisig,
             projectUri: "",
@@ -273,13 +159,11 @@ contract Integration_BurnPathCrossProject is Test {
             memo: ""
         });
     }
-
     function _accumulateTokens(uint256 pid, address tokenAddr, uint256 amount) internal {
         vm.prank(multisig);
         jbController.mintTokensOf({
             projectId: pid, tokenCount: amount, beneficiary: address(hook), memo: "", useReservedPercent: false
         });
-
         JBSplitHookContext memory context = JBSplitHookContext({
             token: tokenAddr,
             amount: amount,
@@ -295,11 +179,9 @@ contract Integration_BurnPathCrossProject is Test {
                 hook: IJBSplitHook(address(hook))
             })
         });
-
         vm.prank(address(jbController));
         hook.processSplitWith(context);
     }
-
     function _payProject(uint256 pid, uint256 amount) internal {
         jbMultiTerminal.pay{value: amount}({
             projectId: pid,
