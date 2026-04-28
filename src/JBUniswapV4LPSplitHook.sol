@@ -561,11 +561,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             ? 10 ** context.decimals
             : IJBController(controller).PRICES()
                 .pricePerUnitOf({
-                    projectId: projectId,
-                    pricingCurrency: context.currency,
-                    unitCurrency: baseCurrency,
-                    decimals: context.decimals
-                });
+                projectId: projectId,
+                pricingCurrency: context.currency,
+                unitCurrency: baseCurrency,
+                decimals: context.decimals
+            });
 
         // Apply the ruleset weight to convert terminal tokens → project tokens at the current rate.
         projectTokenOutAmount = mulDiv({x: terminalTokenInAmount, y: ruleset.weight, denominator: weightRatio});
@@ -699,8 +699,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // pending credits instead of unwinding an ERC-20 fee-token claim that already succeeded earlier in the frame.
         try IJBController(address(IJBDirectory(DIRECTORY).controllerOf(FEE_PROJECT_ID)))
             .transferCreditsFrom({
-                holder: address(this), projectId: FEE_PROJECT_ID, recipient: beneficiary, creditCount: creditAmount
-            }) {
+            holder: address(this), projectId: FEE_PROJECT_ID, recipient: beneficiary, creditCount: creditAmount
+        }) {
             // slither-disable-next-line reentrancy-events
             emit FeeTokensClaimed(projectId, beneficiary, creditAmount);
         } catch {
@@ -1020,14 +1020,14 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
             terminalTokenAmount = IJBMultiTerminal(terminal)
                 .cashOutTokensOf({
-                    holder: address(this),
-                    projectId: projectId,
-                    cashOutCount: cashOutAmount,
-                    tokenToReclaim: terminalToken,
-                    minTokensReclaimed: effectiveMinReturn,
-                    beneficiary: payable(address(this)),
-                    metadata: ""
-                });
+                holder: address(this),
+                projectId: projectId,
+                cashOutCount: cashOutAmount,
+                tokenToReclaim: terminalToken,
+                minTokensReclaimed: effectiveMinReturn,
+                beneficiary: payable(address(this)),
+                metadata: ""
+            });
         }
 
         uint256 projectTokenAmount = projectTokenBalance - cashOutAmount;
@@ -1903,14 +1903,14 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                     IERC20(terminalToken).forceApprove({spender: feeTerminal, value: feeAmount});
                     beneficiaryTokenCount = IJBMultiTerminal(feeTerminal)
                         .pay({
-                            projectId: FEE_PROJECT_ID,
-                            token: terminalToken,
-                            amount: feeAmount,
-                            beneficiary: address(this),
-                            minReturnedTokens: 0,
-                            memo: "LP Fee",
-                            metadata: ""
-                        });
+                        projectId: FEE_PROJECT_ID,
+                        token: terminalToken,
+                        amount: feeAmount,
+                        beneficiary: address(this),
+                        minReturnedTokens: 0,
+                        memo: "LP Fee",
+                        metadata: ""
+                    });
                 }
 
                 // Reconcile the pre-incremented estimate with the actual token count returned by pay().

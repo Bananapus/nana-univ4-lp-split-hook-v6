@@ -38,19 +38,23 @@ import {LibClone} from "solady/src/utils/LibClone.sol";
 contract H31SwapHelper is IUnlockCallback {
     using CurrencyLibrary for Currency;
     IPoolManager public immutable poolManager;
+
     struct SwapCallbackData {
         PoolKey key;
         bool zeroForOne;
         int256 amountSpecified;
         address sender;
     }
+
     constructor(IPoolManager _poolManager) {
         poolManager = _poolManager;
     }
     receive() external payable {}
+
     function swap(PoolKey memory key, bool zeroForOne, int256 amountSpecified) external payable {
         poolManager.unlock(abi.encode(SwapCallbackData(key, zeroForOne, amountSpecified, msg.sender)));
     }
+
     function unlockCallback(bytes calldata data) external returns (bytes memory) {
         require(msg.sender == address(poolManager), "only pool manager");
         SwapCallbackData memory params = abi.decode(data, (SwapCallbackData));
@@ -71,7 +75,8 @@ contract H31SwapHelper is IUnlockCallback {
                 poolManager.settle{value: amountOwed}();
             } else {
                 poolManager.sync(params.key.currency0);
-                IERC20(Currency.unwrap(params.key.currency0)).transferFrom(params.sender, address(poolManager), amountOwed);
+                IERC20(Currency.unwrap(params.key.currency0))
+                    .transferFrom(params.sender, address(poolManager), amountOwed);
                 poolManager.settle();
             }
         } else if (delta0 > 0) {
@@ -83,7 +88,8 @@ contract H31SwapHelper is IUnlockCallback {
                 poolManager.settle{value: amountOwed}();
             } else {
                 poolManager.sync(params.key.currency1);
-                IERC20(Currency.unwrap(params.key.currency1)).transferFrom(params.sender, address(poolManager), amountOwed);
+                IERC20(Currency.unwrap(params.key.currency1))
+                    .transferFrom(params.sender, address(poolManager), amountOwed);
                 poolManager.settle();
             }
         } else if (delta1 > 0) {
@@ -92,6 +98,7 @@ contract H31SwapHelper is IUnlockCallback {
         return "";
     }
 }
+
 contract H31_TokenIdFork is ForkDeployHelper {
     using StateLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;
@@ -102,6 +109,7 @@ contract H31_TokenIdFork is ForkDeployHelper {
     uint256 projectId;
     IJBToken projectToken;
     receive() external payable {}
+
     function setUp() public {
         vm.createSelectFork("ethereum", 21_700_000);
         require(address(V4_POOL_MANAGER).code.length > 0, "PoolManager not deployed");
@@ -128,6 +136,7 @@ contract H31_TokenIdFork is ForkDeployHelper {
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize(feeProjectId, 3800);
     }
+
     function test_fork_h31_tokenId_matchesAfterDeploy() public {
         _accumulateTokens(projectId, address(projectToken), 100_000e18);
         uint256 nextTokenIdBefore = V4_POSITION_MANAGER.nextTokenId();
@@ -145,6 +154,7 @@ contract H31_TokenIdFork is ForkDeployHelper {
         emit log_named_uint("  nextTokenId after deploy", nextTokenIdAfter);
         emit log_named_uint("  position liquidity", posLiq);
     }
+
     function test_fork_h31_tokenId_updatesAfterRebalance() public {
         _accumulateTokens(projectId, address(projectToken), 100_000e18);
         vm.prank(multisig);
@@ -176,6 +186,7 @@ contract H31_TokenIdFork is ForkDeployHelper {
         emit log_named_uint("  new tokenId", newTokenId);
         emit log_named_uint("  new position liquidity", newLiq);
     }
+
     function _launchProject(uint16 cashOutTaxRate, uint112 weight) internal returns (uint256 id) {
         JBRulesetMetadata memory metadata = JBRulesetMetadata({
             reservedPercent: 1000,
@@ -221,6 +232,7 @@ contract H31_TokenIdFork is ForkDeployHelper {
             memo: ""
         });
     }
+
     function _accumulateTokens(uint256 pid, address tokenAddr, uint256 amount) internal {
         vm.prank(multisig);
         jbController.mintTokensOf({
@@ -244,6 +256,7 @@ contract H31_TokenIdFork is ForkDeployHelper {
         vm.prank(address(jbController));
         hook.processSplitWith(context);
     }
+
     function _payProject(uint256 pid, uint256 amount) internal {
         jbMultiTerminal.pay{value: amount}({
             projectId: pid,

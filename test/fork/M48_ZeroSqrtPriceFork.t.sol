@@ -38,6 +38,7 @@ contract M48_ZeroSqrtPriceFork is ForkDeployHelper {
     JBUniswapV4LPSplitHook hook;
     uint256 feeProjectId;
     receive() external payable {}
+
     function setUp() public {
         vm.createSelectFork("ethereum", 21_700_000);
         _deployJBCore();
@@ -56,6 +57,7 @@ contract M48_ZeroSqrtPriceFork is ForkDeployHelper {
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize(feeProjectId, 3800);
     }
+
     function test_fork_m48_zeroIssuance_noTickMathRevert() public {
         uint256 pid = _launchProject({reservedPercent: 10_000, cashOutTaxRate: 5000, weight: 1_000_000e18});
         vm.prank(multisig);
@@ -71,6 +73,7 @@ contract M48_ZeroSqrtPriceFork is ForkDeployHelper {
         assertTrue(sqrtPriceX96 < TickMath.MAX_SQRT_PRICE, "sqrtPrice < MAX");
         emit log_named_uint("  sqrtPriceX96", sqrtPriceX96);
     }
+
     function _launchProject(
         uint16 reservedPercent,
         uint16 cashOutTaxRate,
@@ -123,6 +126,7 @@ contract M48_ZeroSqrtPriceFork is ForkDeployHelper {
             memo: ""
         });
     }
+
     function _accumulateTokens(uint256 pid, address tokenAddr, uint256 amount) internal {
         vm.prank(multisig);
         jbController.mintTokensOf({
@@ -146,6 +150,7 @@ contract M48_ZeroSqrtPriceFork is ForkDeployHelper {
         vm.prank(address(jbController));
         hook.processSplitWith(context);
     }
+
     function _payProject(uint256 pid, uint256 amount) internal {
         jbMultiTerminal.pay{value: amount}({
             projectId: pid,

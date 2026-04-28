@@ -45,6 +45,7 @@ contract ExposedJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
     )
         JBUniswapV4LPSplitHook(directory, permissions, tokens, poolManager, positionManager, permit2, oracleHook)
     {}
+
     function exposed_calculateTickBounds(
         uint256 projectId,
         address terminalToken,
@@ -58,6 +59,7 @@ contract ExposedJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
     {
         return _calculateTickBounds(projectId, terminalToken, projectToken, controller, ruleset);
     }
+
     function exposed_computeInitialSqrtPrice(
         uint256 projectId,
         address terminalToken,
@@ -72,6 +74,7 @@ contract ExposedJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
         return _computeInitialSqrtPrice(projectId, terminalToken, projectToken, controller, ruleset);
     }
 }
+
 contract LPSplitHookForkTest is ForkDeployHelper {
     using StateLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;
@@ -82,6 +85,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
     uint256 projectId; // Project 2 (test project with LP split hook).
     IJBToken projectToken;
     receive() external payable {}
+
     function setUp() public {
         vm.createSelectFork("ethereum", 21_700_000);
         require(address(V4_POOL_MANAGER).code.length > 0, "PoolManager not deployed");
@@ -138,10 +142,12 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         vm.prank(address(jbController));
         hook.processSplitWith(context);
     }
+
     function test_fork_tokensAccumulated() public view {
         assertEq(hook.accumulatedProjectTokens(projectId), 100_000e18, "should have accumulated 100k tokens");
         assertFalse(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "should not be deployed yet");
     }
+
     function test_fork_deployPool_createsRealV4Pool() public {
         vm.prank(multisig);
         hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
@@ -157,6 +163,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         uint128 positionLiquidity = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         assertTrue(positionLiquidity > 0, "position should have liquidity");
     }
+
     function test_fork_burnAfterDeploy() public {
         vm.prank(multisig);
         hook.deployPool(projectId, JBConstants.NATIVE_TOKEN, 0);
@@ -186,6 +193,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         uint256 supplyAfter = IERC20(address(projectToken)).totalSupply();
         assertLt(supplyAfter, supplyBefore, "total supply should decrease from burn");
     }
+
     function test_fork_deployPool_usesPermit2NotDirectApproval() public {
         address token = address(projectToken);
         assertEq(
@@ -209,6 +217,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         uint128 liq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         assertTrue(liq > 0, "position should have liquidity via Permit2 flow");
     }
+
     function _launchProject(bool withOwnerMinting) internal returns (uint256 id) {
         JBRulesetMetadata memory metadata = JBRulesetMetadata({
             reservedPercent: withOwnerMinting ? 1000 : 0,
@@ -254,6 +263,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
             memo: ""
         });
     }
+
     function test_fork_deployPool_existingPoolOutsideBand_succeeds() public {
         address projToken = address(projectToken);
         Currency termCurrency = Currency.wrap(address(0)); // native ETH
@@ -277,6 +287,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should be deployed");
         assertGt(hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN), 0, "position NFT should be minted");
     }
+
     function test_fork_deployPool_existingPoolWithinBand_succeeds() public {
         address projToken = address(projectToken);
         Currency termCurrency = Currency.wrap(address(0)); // native ETH
@@ -312,6 +323,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         (uint160 sqrtPriceAfter,,,) = V4_POOL_MANAGER.getSlot0(poolId);
         assertEq(sqrtPriceAfter, sqrtPriceBefore, "existing in-band pool price should be reused");
     }
+
     function test_fork_deployPool_permissionlessAfterWeightDecay() public {
         JBRulesetMetadata memory newMeta = JBRulesetMetadata({
             reservedPercent: 1000,
@@ -357,6 +369,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         uint256 tokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         assertTrue(tokenId != 0, "should hold a position NFT");
     }
+
     function test_fork_deployPool_requiresPermissionBeforeDecay() public {
         address randomUser = makeAddr("randomDeployer");
         vm.prank(randomUser);

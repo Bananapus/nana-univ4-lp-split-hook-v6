@@ -38,6 +38,7 @@ contract M46_TickBoundsFork is ForkDeployHelper {
     JBUniswapV4LPSplitHook hook;
     uint256 feeProjectId;
     receive() external payable {}
+
     function setUp() public {
         vm.createSelectFork("ethereum", 21_700_000);
         _deployJBCore();
@@ -56,6 +57,7 @@ contract M46_TickBoundsFork is ForkDeployHelper {
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize(feeProjectId, 3800);
     }
+
     function test_fork_m46_extremeIssuanceRate_ticksClamped() public {
         uint112 extremeWeight = uint112(1e28);
         uint256 pid = _launchProject({reservedPercent: 0, cashOutTaxRate: 0, weight: extremeWeight});
@@ -78,6 +80,7 @@ contract M46_TickBoundsFork is ForkDeployHelper {
             );
         }
     }
+
     function test_fork_m46_lowWeight_validTickBounds() public {
         uint256 pid = _launchProject({reservedPercent: 0, cashOutTaxRate: 5000, weight: 1});
         vm.prank(multisig);
@@ -92,6 +95,7 @@ contract M46_TickBoundsFork is ForkDeployHelper {
         assertTrue(posLiq > 0, "Position should have liquidity");
         emit log_named_uint("  position liquidity", posLiq);
     }
+
     function _launchProject(
         uint16 reservedPercent,
         uint16 cashOutTaxRate,
@@ -144,6 +148,7 @@ contract M46_TickBoundsFork is ForkDeployHelper {
             memo: ""
         });
     }
+
     function _accumulateTokens(uint256 pid, address tokenAddr, uint256 amount) internal {
         vm.prank(multisig);
         jbController.mintTokensOf({
@@ -167,6 +172,7 @@ contract M46_TickBoundsFork is ForkDeployHelper {
         vm.prank(address(jbController));
         hook.processSplitWith(context);
     }
+
     function _payProject(uint256 pid, uint256 amount) internal {
         jbMultiTerminal.pay{value: amount}({
             projectId: pid,

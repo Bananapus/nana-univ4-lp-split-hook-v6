@@ -38,6 +38,7 @@ contract M50_IssuanceInversionFork is ForkDeployHelper {
     JBUniswapV4LPSplitHook hook;
     uint256 feeProjectId;
     receive() external payable {}
+
     function setUp() public {
         vm.createSelectFork("ethereum", 21_700_000);
         _deployJBCore();
@@ -56,6 +57,7 @@ contract M50_IssuanceInversionFork is ForkDeployHelper {
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize(feeProjectId, 3800);
     }
+
     function test_fork_m50_extremeWeight_noRevert() public {
         uint112 extremeWeight = uint112(1e28);
         uint256 pid = _launchProject({reservedPercent: 0, cashOutTaxRate: 5000, weight: extremeWeight});
@@ -72,6 +74,7 @@ contract M50_IssuanceInversionFork is ForkDeployHelper {
         assertTrue(sqrtPriceX96 < TickMath.MAX_SQRT_PRICE, "sqrtPrice < MAX");
         emit log_named_uint("  sqrtPriceX96", sqrtPriceX96);
     }
+
     function _launchProject(
         uint16 reservedPercent,
         uint16 cashOutTaxRate,
@@ -124,6 +127,7 @@ contract M50_IssuanceInversionFork is ForkDeployHelper {
             memo: ""
         });
     }
+
     function _accumulateTokens(uint256 pid, address tokenAddr, uint256 amount) internal {
         vm.prank(multisig);
         jbController.mintTokensOf({
@@ -147,6 +151,7 @@ contract M50_IssuanceInversionFork is ForkDeployHelper {
         vm.prank(address(jbController));
         hook.processSplitWith(context);
     }
+
     function _payProject(uint256 pid, uint256 amount) internal {
         jbMultiTerminal.pay{value: amount}({
             projectId: pid,

@@ -39,6 +39,7 @@ contract H30_ZeroRateFork is ForkDeployHelper {
     JBUniswapV4LPSplitHook hook;
     uint256 feeProjectId;
     receive() external payable {}
+
     function setUp() public {
         vm.createSelectFork("ethereum", 21_700_000);
         require(address(V4_POOL_MANAGER).code.length > 0, "PoolManager not deployed");
@@ -60,6 +61,7 @@ contract H30_ZeroRateFork is ForkDeployHelper {
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize(feeProjectId, 3800);
     }
+
     function test_fork_h30_zeroIssuance_100pctReserved_ethTerminal() public {
         uint256 pid = _launchProject({reservedPercent: 10_000, cashOutTaxRate: 5000, weight: 1_000_000e18});
         vm.prank(multisig);
@@ -84,6 +86,7 @@ contract H30_ZeroRateFork is ForkDeployHelper {
         emit log_named_int("  current tick", currentTick);
         emit log_named_uint("  sqrtPriceX96", sqrtPriceX96);
     }
+
     function test_fork_h30_zeroIssuance_weightZero_ethTerminal() public {
         uint256 pid = _launchProject({reservedPercent: 1000, cashOutTaxRate: 0, weight: 0});
         vm.prank(multisig);
@@ -104,6 +107,7 @@ contract H30_ZeroRateFork is ForkDeployHelper {
         emit log_named_int("  current tick", currentTick);
         emit log_named_uint("  sqrtPriceX96", sqrtPriceX96);
     }
+
     function test_fork_h30_zeroCashOut_zeroIssuance_revertsZeroLiquidity() public {
         uint256 pid = _launchProject({reservedPercent: 10_000, cashOutTaxRate: 5000, weight: 1_000_000e18});
         vm.prank(multisig);
@@ -117,6 +121,7 @@ contract H30_ZeroRateFork is ForkDeployHelper {
             assertEq(bytes4(reason), JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ZeroLiquidity.selector);
         }
     }
+
     function _launchProject(
         uint16 reservedPercent,
         uint16 cashOutTaxRate,
@@ -169,6 +174,7 @@ contract H30_ZeroRateFork is ForkDeployHelper {
             memo: ""
         });
     }
+
     function _accumulateTokens(uint256 pid, address tokenAddr, uint256 amount) internal {
         vm.prank(multisig);
         jbController.mintTokensOf({
@@ -192,6 +198,7 @@ contract H30_ZeroRateFork is ForkDeployHelper {
         vm.prank(address(jbController));
         hook.processSplitWith(context);
     }
+
     function _payProject(uint256 pid, uint256 amount) internal {
         jbMultiTerminal.pay{value: amount}({
             projectId: pid,

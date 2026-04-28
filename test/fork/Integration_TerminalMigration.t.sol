@@ -41,6 +41,7 @@ contract Integration_TerminalMigration is ForkDeployHelper {
     JBUniswapV4LPSplitHook hook;
     uint256 feeProjectId;
     receive() external payable {}
+
     function setUp() public {
         vm.createSelectFork("ethereum", 21_700_000);
         _deployJBCore();
@@ -59,6 +60,7 @@ contract Integration_TerminalMigration is ForkDeployHelper {
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize(feeProjectId, 3800);
     }
+
     function test_fork_integration_terminalMigration_rebalanceAfterMigration() public {
         uint256 pid =
             _launchProjectWithMigration({reservedPercent: 0, cashOutTaxRate: 5000, weight: 1_000_000e18, duration: 0});
@@ -110,6 +112,7 @@ contract Integration_TerminalMigration is ForkDeployHelper {
         emit log_named_uint("  New tokenId", newTokenId);
         emit log_named_uint("  New liquidity", newLiq);
     }
+
     function _launchFeeProject() internal returns (uint256 id) {
         JBRulesetMetadata memory metadata = JBRulesetMetadata({
             reservedPercent: 0,
@@ -155,6 +158,7 @@ contract Integration_TerminalMigration is ForkDeployHelper {
             memo: ""
         });
     }
+
     function _launchProjectWithMigration(
         uint16 reservedPercent,
         uint16 cashOutTaxRate,
@@ -209,6 +213,7 @@ contract Integration_TerminalMigration is ForkDeployHelper {
             memo: ""
         });
     }
+
     function _accumulateTokens(uint256 pid, address tokenAddr, uint256 amount) internal {
         vm.prank(multisig);
         jbController.mintTokensOf({
@@ -232,6 +237,7 @@ contract Integration_TerminalMigration is ForkDeployHelper {
         vm.prank(address(jbController));
         hook.processSplitWith(context);
     }
+
     function _payProject(uint256 pid, uint256 amount) internal {
         jbMultiTerminal.pay{value: amount}({
             projectId: pid,

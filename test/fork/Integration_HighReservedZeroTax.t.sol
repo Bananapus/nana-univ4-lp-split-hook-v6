@@ -39,6 +39,7 @@ contract Integration_HighReservedZeroTax is ForkDeployHelper {
     JBUniswapV4LPSplitHook hook;
     uint256 feeProjectId;
     receive() external payable {}
+
     function setUp() public {
         vm.createSelectFork("ethereum", 21_700_000);
         _deployJBCore();
@@ -57,6 +58,7 @@ contract Integration_HighReservedZeroTax is ForkDeployHelper {
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize(feeProjectId, 3800);
     }
+
     function test_fork_integration_highReservedZeroTax() public {
         uint256 pid = _launchProject({reservedPercent: 9000, cashOutTaxRate: 0, weight: 1_000_000_000_000e18});
         vm.prank(multisig);
@@ -86,6 +88,7 @@ contract Integration_HighReservedZeroTax is ForkDeployHelper {
             emit log("  Reverted with ZeroLiquidity (expected for one-sided LP with zero cash-out)");
         }
     }
+
     function _launchProject(
         uint16 reservedPercent,
         uint16 cashOutTaxRate,
@@ -138,6 +141,7 @@ contract Integration_HighReservedZeroTax is ForkDeployHelper {
             memo: ""
         });
     }
+
     function _accumulateTokens(uint256 pid, address tokenAddr, uint256 amount) internal {
         vm.prank(multisig);
         jbController.mintTokensOf({
@@ -161,6 +165,7 @@ contract Integration_HighReservedZeroTax is ForkDeployHelper {
         vm.prank(address(jbController));
         hook.processSplitWith(context);
     }
+
     function _payProject(uint256 pid, uint256 amount) internal {
         jbMultiTerminal.pay{value: amount}({
             projectId: pid,

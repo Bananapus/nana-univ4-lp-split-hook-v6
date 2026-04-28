@@ -38,19 +38,23 @@ import {LibClone} from "solady/src/utils/LibClone.sol";
 contract M45SwapHelper is IUnlockCallback {
     using CurrencyLibrary for Currency;
     IPoolManager public immutable poolManager;
+
     struct SwapCallbackData {
         PoolKey key;
         bool zeroForOne;
         int256 amountSpecified;
         address sender;
     }
+
     constructor(IPoolManager _poolManager) {
         poolManager = _poolManager;
     }
     receive() external payable {}
+
     function swap(PoolKey memory key, bool zeroForOne, int256 amountSpecified) external payable {
         poolManager.unlock(abi.encode(SwapCallbackData(key, zeroForOne, amountSpecified, msg.sender)));
     }
+
     function unlockCallback(bytes calldata data) external returns (bytes memory) {
         require(msg.sender == address(poolManager), "only pool manager");
         SwapCallbackData memory params = abi.decode(data, (SwapCallbackData));
@@ -71,7 +75,8 @@ contract M45SwapHelper is IUnlockCallback {
                 poolManager.settle{value: amountOwed}();
             } else {
                 poolManager.sync(params.key.currency0);
-                IERC20(Currency.unwrap(params.key.currency0)).transferFrom(params.sender, address(poolManager), amountOwed);
+                IERC20(Currency.unwrap(params.key.currency0))
+                    .transferFrom(params.sender, address(poolManager), amountOwed);
                 poolManager.settle();
             }
         } else if (delta0 > 0) {
@@ -83,7 +88,8 @@ contract M45SwapHelper is IUnlockCallback {
                 poolManager.settle{value: amountOwed}();
             } else {
                 poolManager.sync(params.key.currency1);
-                IERC20(Currency.unwrap(params.key.currency1)).transferFrom(params.sender, address(poolManager), amountOwed);
+                IERC20(Currency.unwrap(params.key.currency1))
+                    .transferFrom(params.sender, address(poolManager), amountOwed);
                 poolManager.settle();
             }
         } else if (delta1 > 0) {
@@ -92,6 +98,7 @@ contract M45SwapHelper is IUnlockCallback {
         return "";
     }
 }
+
 contract M45_PriceRatioFork is ForkDeployHelper {
     using StateLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;
@@ -100,6 +107,7 @@ contract M45_PriceRatioFork is ForkDeployHelper {
     JBUniswapV4LPSplitHook hook;
     uint256 feeProjectId;
     receive() external payable {}
+
     function setUp() public {
         vm.createSelectFork("ethereum", 21_700_000);
         require(address(V4_POOL_MANAGER).code.length > 0, "PoolManager not deployed");
@@ -122,6 +130,7 @@ contract M45_PriceRatioFork is ForkDeployHelper {
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize(feeProjectId, 3800);
     }
+
     function test_fork_m45_balancedLP_swapsBothDirections() public {
         uint256 pid = _launchProject({cashOutTaxRate: 5000, weight: 1_000_000e18});
         vm.prank(multisig);
@@ -154,6 +163,7 @@ contract M45_PriceRatioFork is ForkDeployHelper {
         assertTrue(projReceived > 0, "Should receive project tokens when buying with ETH");
         emit log_named_uint("  Project tokens received from 1 ETH", projReceived);
     }
+
     function test_fork_m45_highTaxRate_swapsBothDirections() public {
         uint256 pid = _launchProject({cashOutTaxRate: 9000, weight: 1_000_000e18});
         vm.prank(multisig);
@@ -184,6 +194,7 @@ contract M45_PriceRatioFork is ForkDeployHelper {
             IERC20(address(pToken)).balanceOf(address(this)) > projBefore, "Should receive tokens (90% tax rate)"
         );
     }
+
     function test_fork_m45_lowTaxRate_swapsBothDirections() public {
         uint256 pid = _launchProject({cashOutTaxRate: 1000, weight: 1_000_000e18});
         vm.prank(multisig);
@@ -214,6 +225,7 @@ contract M45_PriceRatioFork is ForkDeployHelper {
             IERC20(address(pToken)).balanceOf(address(this)) > projBefore, "Should receive tokens (10% tax rate)"
         );
     }
+
     function _launchProject(uint16 cashOutTaxRate, uint112 weight) internal returns (uint256 id) {
         JBRulesetMetadata memory metadata = JBRulesetMetadata({
             reservedPercent: 1000,
@@ -259,6 +271,7 @@ contract M45_PriceRatioFork is ForkDeployHelper {
             memo: ""
         });
     }
+
     function _accumulateTokens(uint256 pid, address tokenAddr, uint256 amount) internal {
         vm.prank(multisig);
         jbController.mintTokensOf({
@@ -282,6 +295,7 @@ contract M45_PriceRatioFork is ForkDeployHelper {
         vm.prank(address(jbController));
         hook.processSplitWith(context);
     }
+
     function _payProject(uint256 pid, uint256 amount) internal {
         jbMultiTerminal.pay{value: amount}({
             projectId: pid,

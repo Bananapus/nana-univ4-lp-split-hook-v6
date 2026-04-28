@@ -38,19 +38,23 @@ import {LibClone} from "solady/src/utils/LibClone.sol";
 contract SwapHelper is IUnlockCallback {
     using CurrencyLibrary for Currency;
     IPoolManager public immutable poolManager;
+
     struct SwapCallbackData {
         PoolKey key;
         bool zeroForOne;
         int256 amountSpecified;
         address sender;
     }
+
     constructor(IPoolManager _poolManager) {
         poolManager = _poolManager;
     }
     receive() external payable {}
+
     function swap(PoolKey memory key, bool zeroForOne, int256 amountSpecified) external payable {
         poolManager.unlock(abi.encode(SwapCallbackData(key, zeroForOne, amountSpecified, msg.sender)));
     }
+
     function unlockCallback(bytes calldata data) external returns (bytes memory) {
         require(msg.sender == address(poolManager), "only pool manager");
         SwapCallbackData memory params = abi.decode(data, (SwapCallbackData));
@@ -71,7 +75,8 @@ contract SwapHelper is IUnlockCallback {
                 poolManager.settle{value: amountOwed}();
             } else {
                 poolManager.sync(params.key.currency0);
-                IERC20(Currency.unwrap(params.key.currency0)).transferFrom(params.sender, address(poolManager), amountOwed);
+                IERC20(Currency.unwrap(params.key.currency0))
+                    .transferFrom(params.sender, address(poolManager), amountOwed);
                 poolManager.settle();
             }
         } else if (delta0 > 0) {
@@ -83,7 +88,8 @@ contract SwapHelper is IUnlockCallback {
                 poolManager.settle{value: amountOwed}();
             } else {
                 poolManager.sync(params.key.currency1);
-                IERC20(Currency.unwrap(params.key.currency1)).transferFrom(params.sender, address(poolManager), amountOwed);
+                IERC20(Currency.unwrap(params.key.currency1))
+                    .transferFrom(params.sender, address(poolManager), amountOwed);
                 poolManager.settle();
             }
         } else if (delta1 > 0) {
@@ -92,6 +98,7 @@ contract SwapHelper is IUnlockCallback {
         return "";
     }
 }
+
 contract TickBoundsAndFeeForkTest is ForkDeployHelper {
     using StateLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;
@@ -103,6 +110,7 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
     IJBToken projectToken;
     IJBToken feeProjectToken;
     receive() external payable {}
+
     function setUp() public {
         vm.createSelectFork("ethereum", 21_700_000);
         require(address(V4_POOL_MANAGER).code.length > 0, "PoolManager not deployed");
@@ -145,6 +153,7 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize(feeProjectId, 3800);
     }
+
     function test_fork_ethPool_tickBoundsCorrect_whenTerminalIsToken0() public {
         assertTrue(
             uint160(JBConstants.NATIVE_TOKEN) < uint160(address(projectToken)),
@@ -168,6 +177,7 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
         emit log_named_int("  current tick", currentTick);
         emit log_named_uint("  sqrtPriceX96", sqrtPriceX96);
     }
+
     function test_fork_ethPool_tickBoundsCorrect_varyingCashOutTaxRates() public {
         uint16[] memory taxRates = new uint16[](4);
         taxRates[0] = 0;
@@ -198,6 +208,7 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
             emit log_named_int("  current tick", tick);
         }
     }
+
     function test_fork_feeRouting_collectAndClaim() public {
         _accumulateTokens(projectId, address(projectToken), 100_000e18);
         vm.prank(multisig);
@@ -246,6 +257,7 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
         assertEq(hook.claimableFeeTokens(projectId), 0, "Claimable tokens should be 0 after claiming");
         emit log_named_uint("  beneficiary received", beneficiaryBalanceAfter - beneficiaryBalanceBefore);
     }
+
     function test_fork_feeRouting_multipleCollectionsThenClaim() public {
         _accumulateTokens(projectId, address(projectToken), 100_000e18);
         vm.prank(multisig);
@@ -284,6 +296,7 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
         emit log_named_uint("  claimable after second collection", claimableAfterSecond);
         emit log_named_uint("  total claimed", received);
     }
+
     function test_fork_ethPool_swapBothDirections() public {
         _accumulateTokens(projectId, address(projectToken), 100_000e18);
         vm.prank(multisig);
@@ -321,6 +334,7 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
         assertTrue(posLiq > 0, "Pool should still have liquidity after both swaps");
         emit log_named_uint("  Remaining position liquidity", posLiq);
     }
+
     function test_fork_ethPool_rebalanceAfterPriceMovement() public {
         _accumulateTokens(projectId, address(projectToken), 100_000e18);
         vm.prank(multisig);
@@ -363,6 +377,7 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
         (, int24 tickFinal,,) = V4_POOL_MANAGER.getSlot0(poolId);
         emit log_named_int("  Tick after rebalance swap", tickFinal);
     }
+
     function test_fork_ethPool_extremeTaxRate_swapsSucceed() public {
         uint256 extremeProjectId = _launchProject({withOwnerMinting: true, cashOutTaxRate: 9500, weight: 1_000_000e18});
         vm.prank(multisig);
@@ -410,6 +425,7 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
         assertTrue(finalLiq > 0, "Pool should still have liquidity after extreme tax rate swaps");
         emit log_named_uint("  Final position liquidity", finalLiq);
     }
+
     function _launchProject(bool withOwnerMinting, uint16 cashOutTaxRate, uint112 weight)
         internal
         returns (uint256 id)
@@ -458,6 +474,7 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
             memo: ""
         });
     }
+
     function _accumulateTokens(uint256 pid, address tokenAddr, uint256 amount) internal {
         vm.prank(multisig);
         jbController.mintTokensOf({
@@ -481,6 +498,7 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
         vm.prank(address(jbController));
         hook.processSplitWith(context);
     }
+
     function _payProject(uint256 pid, uint256 amount) internal {
         jbMultiTerminal.pay{value: amount}({
             projectId: pid,

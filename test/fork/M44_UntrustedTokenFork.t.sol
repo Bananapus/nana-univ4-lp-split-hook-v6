@@ -32,6 +32,7 @@ contract M44_UntrustedTokenFork is ForkDeployHelper {
     JBUniswapV4LPSplitHook hook;
     uint256 feeProjectId;
     receive() external payable {}
+
     function setUp() public {
         vm.createSelectFork("ethereum", 21_700_000);
         _deployJBCore();
@@ -50,6 +51,7 @@ contract M44_UntrustedTokenFork is ForkDeployHelper {
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize(feeProjectId, 3800);
     }
+
     function test_fork_m44_untrustedToken_usesCanonical() public {
         uint256 pid = _launchProject({reservedPercent: 0, cashOutTaxRate: 0, weight: 1_000_000e18});
         vm.prank(multisig);
@@ -79,6 +81,7 @@ contract M44_UntrustedTokenFork is ForkDeployHelper {
         hook.processSplitWith(context);
         assertEq(hook.accumulatedProjectTokens(pid), 100_000e18, "Should accumulate using canonical token");
     }
+
     function _launchProject(
         uint16 reservedPercent,
         uint16 cashOutTaxRate,

@@ -38,6 +38,7 @@ contract M49_ReservedDilutionFork is ForkDeployHelper {
     JBUniswapV4LPSplitHook hook;
     uint256 feeProjectId;
     receive() external payable {}
+
     function setUp() public {
         vm.createSelectFork("ethereum", 21_700_000);
         _deployJBCore();
@@ -56,6 +57,7 @@ contract M49_ReservedDilutionFork is ForkDeployHelper {
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize(feeProjectId, 3800);
     }
+
     function test_fork_m49_reservedDilution_priceReflectsDilution() public {
         uint256 pid = _launchProject({reservedPercent: 5000, cashOutTaxRate: 5000, weight: 1_000_000e18});
         vm.prank(multisig);
@@ -75,6 +77,7 @@ contract M49_ReservedDilutionFork is ForkDeployHelper {
         emit log_named_uint("  sqrtPriceX96", sqrtPriceX96);
         emit log_named_uint("  position liquidity", posLiq);
     }
+
     function _launchProject(
         uint16 reservedPercent,
         uint16 cashOutTaxRate,
@@ -127,6 +130,7 @@ contract M49_ReservedDilutionFork is ForkDeployHelper {
             memo: ""
         });
     }
+
     function _accumulateTokens(uint256 pid, address tokenAddr, uint256 amount) internal {
         vm.prank(multisig);
         jbController.mintTokensOf({
@@ -150,6 +154,7 @@ contract M49_ReservedDilutionFork is ForkDeployHelper {
         vm.prank(address(jbController));
         hook.processSplitWith(context);
     }
+
     function _payProject(uint256 pid, uint256 amount) internal {
         jbMultiTerminal.pay{value: amount}({
             projectId: pid,

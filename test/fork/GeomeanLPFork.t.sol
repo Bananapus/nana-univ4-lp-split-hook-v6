@@ -38,29 +38,36 @@ import {LibClone} from "solady/src/utils/LibClone.sol";
 
 contract MockUSDC is ERC20 {
     constructor() ERC20("Mock USDC", "USDC") {}
+
     function decimals() public pure override returns (uint8) {
         return 6;
     }
+
     function mint(address to, uint256 amount) external {
         _mint(to, amount);
     }
 }
+
 contract GeomeanSwapHelper is IUnlockCallback {
     using CurrencyLibrary for Currency;
     IPoolManager public immutable poolManager;
+
     struct SwapCallbackData {
         PoolKey key;
         bool zeroForOne;
         int256 amountSpecified;
         address sender;
     }
+
     constructor(IPoolManager _poolManager) {
         poolManager = _poolManager;
     }
     receive() external payable {}
+
     function swap(PoolKey memory key, bool zeroForOne, int256 amountSpecified) external payable {
         poolManager.unlock(abi.encode(SwapCallbackData(key, zeroForOne, amountSpecified, msg.sender)));
     }
+
     function unlockCallback(bytes calldata data) external returns (bytes memory) {
         require(msg.sender == address(poolManager), "only pool manager");
         SwapCallbackData memory params = abi.decode(data, (SwapCallbackData));
@@ -81,7 +88,8 @@ contract GeomeanSwapHelper is IUnlockCallback {
                 poolManager.settle{value: amountOwed}();
             } else {
                 poolManager.sync(params.key.currency0);
-                IERC20(Currency.unwrap(params.key.currency0)).transferFrom(params.sender, address(poolManager), amountOwed);
+                IERC20(Currency.unwrap(params.key.currency0))
+                    .transferFrom(params.sender, address(poolManager), amountOwed);
                 poolManager.settle();
             }
         } else if (delta0 > 0) {
@@ -94,7 +102,8 @@ contract GeomeanSwapHelper is IUnlockCallback {
                 poolManager.settle{value: amountOwed}();
             } else {
                 poolManager.sync(params.key.currency1);
-                IERC20(Currency.unwrap(params.key.currency1)).transferFrom(params.sender, address(poolManager), amountOwed);
+                IERC20(Currency.unwrap(params.key.currency1))
+                    .transferFrom(params.sender, address(poolManager), amountOwed);
                 poolManager.settle();
             }
         } else if (delta1 > 0) {
@@ -104,6 +113,7 @@ contract GeomeanSwapHelper is IUnlockCallback {
         return "";
     }
 }
+
 contract GeomeanLPForkTest is ForkDeployHelper {
     using StateLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;
@@ -114,6 +124,7 @@ contract GeomeanLPForkTest is ForkDeployHelper {
     uint256 projectId;
     IJBToken projectToken;
     receive() external payable {}
+
     function setUp() public {
         vm.createSelectFork("ethereum", 21_700_000);
         require(address(V4_POOL_MANAGER).code.length > 0, "PoolManager not deployed");
@@ -145,6 +156,7 @@ contract GeomeanLPForkTest is ForkDeployHelper {
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize(feeProjectId, 3800);
     }
+
     function test_fork_ethPool_varyingAccumulation() public {
         uint256[] memory amounts = new uint256[](4);
         amounts[0] = 1000e18;
@@ -193,6 +205,7 @@ contract GeomeanLPForkTest is ForkDeployHelper {
             emit log_named_uint("  sqrtPriceX96", sqrtPriceX96);
         }
     }
+
     function test_fork_ethPool_varyingPaymentSizes() public {
         uint256[] memory ethAmounts = new uint256[](4);
         ethAmounts[0] = 0.1 ether;
@@ -223,6 +236,7 @@ contract GeomeanLPForkTest is ForkDeployHelper {
             emit log_named_uint("  position liquidity", posLiq);
         }
     }
+
     function test_fork_ethPool_rebalanceAfterPriceMovement() public {
         _accumulateTokens(projectId, address(projectToken), 100_000e18);
         vm.prank(multisig);
@@ -258,6 +272,7 @@ contract GeomeanLPForkTest is ForkDeployHelper {
         emit log_named_uint("  original liquidity", originalLiq);
         emit log_named_uint("  rebalanced liquidity", newLiq);
     }
+
     function test_fork_usdcPool_deployAndVerify() public {
         uint256[] memory usdcAmounts = new uint256[](3);
         usdcAmounts[0] = 1000e6;
@@ -289,6 +304,7 @@ contract GeomeanLPForkTest is ForkDeployHelper {
             emit log_named_uint("  position liquidity", posLiq);
         }
     }
+
     function test_fork_usdcPool_varyingLiquidity() public {
         uint256[] memory usdcAmounts = new uint256[](3);
         usdcAmounts[0] = 1000e6;
@@ -316,6 +332,7 @@ contract GeomeanLPForkTest is ForkDeployHelper {
         assertTrue(liquidities[1] > liquidities[0] * 2, "10x USDC should yield at least 2x liquidity vs 1x");
         assertTrue(liquidities[2] > liquidities[1] * 2, "100x USDC should yield at least 2x liquidity vs 10x");
     }
+
     function test_fork_poolDeployment_tickBounds() public {
         uint112[] memory weights = new uint112[](3);
         weights[0] = 500_000e18;
@@ -353,6 +370,7 @@ contract GeomeanLPForkTest is ForkDeployHelper {
             emit log_named_uint("  position liquidity", posLiq);
         }
     }
+
     function _launchProject(bool withOwnerMinting, uint16 cashOutTaxRate) internal returns (uint256 id) {
         JBRulesetMetadata memory metadata = JBRulesetMetadata({
             reservedPercent: withOwnerMinting ? 1000 : 0,
@@ -398,6 +416,7 @@ contract GeomeanLPForkTest is ForkDeployHelper {
             memo: ""
         });
     }
+
     function _launchProjectWithConfig(uint112 weight, uint16 cashOutTaxRate) internal returns (uint256 id) {
         JBRulesetMetadata memory metadata = JBRulesetMetadata({
             reservedPercent: 1000,
@@ -443,6 +462,7 @@ contract GeomeanLPForkTest is ForkDeployHelper {
             memo: ""
         });
     }
+
     function _launchProjectWithUSDC(MockUSDC usdc) internal returns (uint256 id) {
         JBRulesetMetadata memory metadata = JBRulesetMetadata({
             reservedPercent: 1000,
@@ -487,6 +507,7 @@ contract GeomeanLPForkTest is ForkDeployHelper {
             memo: ""
         });
     }
+
     function _accumulateTokens(uint256 pid, address tokenAddr, uint256 amount) internal {
         vm.prank(multisig);
         jbController.mintTokensOf({
@@ -510,6 +531,7 @@ contract GeomeanLPForkTest is ForkDeployHelper {
         vm.prank(address(jbController));
         hook.processSplitWith(context);
     }
+
     function _payProject(uint256 pid, uint256 amount) internal {
         jbMultiTerminal.pay{value: amount}({
             projectId: pid,
@@ -521,11 +543,12 @@ contract GeomeanLPForkTest is ForkDeployHelper {
             metadata: ""
         });
     }
+
     function _payProjectUSDC(uint256 pid, MockUSDC usdc, uint256 amount) internal {
         usdc.mint(address(this), amount);
         usdc.approve(address(PERMIT2), type(uint256).max);
-        IPermit2(address(PERMIT2)).
-            approve(address(usdc), address(jbMultiTerminal), uint160(amount), uint48(block.timestamp + 3600));
+        IPermit2(address(PERMIT2))
+            .approve(address(usdc), address(jbMultiTerminal), uint160(amount), uint48(block.timestamp + 3600));
         jbMultiTerminal.pay({
             projectId: pid,
             token: address(usdc),
