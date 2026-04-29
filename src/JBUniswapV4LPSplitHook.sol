@@ -331,7 +331,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // Track the highest ETH-denominated value found so far.
         uint256 highestValue;
 
-        // Fallback tracking for tokens without a price feed (L-26).
+        // Fallback tracking for tokens without a price feed.
         address highestUnpricedToken;
         uint256 highestUnpricedBalance;
 
@@ -390,7 +390,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                         ethValue = mulDiv(balance, 10 ** 18, pricePerUnit);
                     } catch {
                         // No price feed available — skip this token so its raw balance
-                        // cannot incorrectly win (L-26). If NO token has a price feed,
+                        // cannot incorrectly win. If NO token has a price feed,
                         // the fallback below selects the highest raw balance instead.
                         if (balance > highestUnpricedBalance) {
                             highestUnpricedBalance = balance;

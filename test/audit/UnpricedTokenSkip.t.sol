@@ -34,10 +34,10 @@ contract FindHighestValueHarness is JBUniswapV4LPSplitHook {
     }
 }
 
-/// @title L-26: Unpriced tokens should be skipped, not compared by raw balance
+/// @title Unpriced tokens should be skipped, not compared by raw balance
 /// @notice Proves that a token without a price feed must not win the highest-value
 ///         comparison just because it has a large raw balance.
-contract L26_UnpricedTokenSkip is LPSplitHookV4TestBase {
+contract UnpricedTokenSkipTest is LPSplitHookV4TestBase {
     MockERC20 internal tokenB;
     FindHighestValueHarness internal harness;
 
@@ -97,13 +97,13 @@ contract L26_UnpricedTokenSkip is LPSplitHookV4TestBase {
 
     /// @notice Before the fix: tokenB (1000e18 raw) wins over tokenA (1e18 priced).
     ///         After the fix:  tokenB is skipped; tokenA wins.
-    function test_L26_unpricedTokenIsSkipped() public view {
+    function test_unpricedTokenIsSkipped() public view {
         address winner = harness.findHighestValueTerminalTokenOf(PROJECT_ID, address(controller));
 
         assertEq(
             winner,
             address(terminalToken),
-            "L-26: priced token (terminalToken) must win over unpriced token with large raw balance"
+            "priced token (terminalToken) must win over unpriced token with large raw balance"
         );
     }
 }
