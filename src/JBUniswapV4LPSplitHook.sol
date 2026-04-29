@@ -20,6 +20,7 @@ import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol
 import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBMultiTerminal} from "@bananapus/core-v6/src/interfaces/IJBMultiTerminal.sol";
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
+import {IJBProjects} from "@bananapus/core-v6/src/interfaces/IJBProjects.sol";
 import {IJBSplitHook} from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
 import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 import {IJBTerminalStore} from "@bananapus/core-v6/src/interfaces/IJBTerminalStore.sol";
@@ -141,6 +142,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @notice Uniswap V4 PositionManager address
     IPositionManager public immutable POSITION_MANAGER;
 
+    /// @notice JBProjects (to find project owners)
+    IJBProjects public immutable PROJECTS;
+
     /// @notice JBTokens (to find project tokens)
     address public immutable TOKENS;
 
@@ -255,6 +259,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         PERMIT2 = permit2;
         POOL_MANAGER = poolManager;
         POSITION_MANAGER = positionManager;
+        PROJECTS = IJBDirectory(directory).PROJECTS();
         TOKENS = tokens;
     }
 
@@ -273,7 +278,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         if (feePercent > 0 && feeProjectId == 0) revert JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject();
 
         if (feeProjectId != 0) {
-            address feeController = address(IJBDirectory(DIRECTORY).controllerOf(feeProjectId));
+            address feeController = _controllerOf(feeProjectId);
             if (feeController == address(0)) revert JBUniswapV4LPSplitHook_InvalidProjectId();
         }
 
@@ -310,6 +315,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     //*********************************************************************//
     // -------------------------- internal views ------------------------- //
     //*********************************************************************//
+
+    /// @notice Look up the controller address for a project.
+    function _controllerOf(uint256 projectId) internal view returns (address) {
+        return address(IJBDirectory(DIRECTORY).controllerOf(projectId));
+    }
 
     /// @notice Find the terminal token with the highest ETH-denominated value across all of the project's terminals.
     /// @dev Converts each token's balance to 18-decimal ETH using price feeds. Falls back to raw balance comparison
@@ -437,9 +447,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // Silence "unused parameter" warning — controller is required by callers for interface consistency.
         controller;
         // Resolve the project's primary terminal for this token.
-        IJBMultiTerminal terminal = IJBMultiTerminal(
-            address(IJBDirectory(DIRECTORY).primaryTerminalOf({projectId: projectId, token: terminalToken}))
-        );
+        IJBMultiTerminal terminal = IJBMultiTerminal(_primaryTerminalOf(projectId, terminalToken));
 
         // Get the store for surplus queries.
         IJBTerminalStore store = terminal.STORE();
@@ -650,8 +658,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         returns (uint256 projectTokenOutAmount)
     {
         // Look up the project's primary terminal for this token.
-        address terminal =
-            address(IJBDirectory(DIRECTORY).primaryTerminalOf({projectId: projectId, token: terminalToken}));
+        address terminal = _primaryTerminalOf(projectId, terminalToken);
         // Fetch the terminal's accounting context (decimals, currency) for this project/token pair.
         JBAccountingContext memory context =
             IJBMultiTerminal(terminal).accountingContextForTokenOf({projectId: projectId, token: terminalToken});
@@ -673,6 +680,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         // Apply the ruleset weight to convert terminal tokens → project tokens at the current rate.
         projectTokenOutAmount = mulDiv({x: terminalTokenInAmount, y: ruleset.weight, denominator: weightRatio});
+    }
+
+    /// @notice Look up the current sqrt price of a pool.
+    function _getSqrtPriceX96(PoolKey memory key) internal view returns (uint160 sqrtPriceX96) {
+        (sqrtPriceX96,,,) = POOL_MANAGER.getSlot0(key.toId());
     }
 
     /// @notice Compute Uniswap SqrtPriceX96 for current JuiceboxV4 price.
@@ -738,6 +750,26 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
     }
 
+    /// @notice Look up the next token ID from the position manager.
+    function _nextTokenId() internal view returns (uint256) {
+        return POSITION_MANAGER.nextTokenId();
+    }
+
+    /// @notice Look up the owner of a project.
+    function _ownerOf(uint256 projectId) internal view returns (address) {
+        return PROJECTS.ownerOf(projectId);
+    }
+
+    /// @notice Look up the primary terminal for a project/token pair.
+    function _primaryTerminalOf(uint256 projectId, address token) internal view returns (address) {
+        return address(IJBDirectory(DIRECTORY).primaryTerminalOf({projectId: projectId, token: token}));
+    }
+
+    /// @notice Look up the ERC-20 token address for a project.
+    function _tokenOf(uint256 projectId) internal view returns (address) {
+        return address(IJBTokens(TOKENS).tokenOf(projectId));
+    }
+
     //*********************************************************************//
     // --------------------- external transactions ----------------------- //
     //*********************************************************************//
@@ -751,9 +783,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param beneficiary The address that should receive any claimed fee proceeds.
     function claimFeeTokensFor(uint256 projectId, address beneficiary) external {
         _requirePermissionFrom({
-            account: IJBDirectory(DIRECTORY).PROJECTS().ownerOf(projectId),
-            projectId: projectId,
-            permissionId: JBPermissionIds.SET_BUYBACK_POOL
+            account: _ownerOf(projectId), projectId: projectId, permissionId: JBPermissionIds.SET_BUYBACK_POOL
         });
 
         uint256 tokenAmount = claimableFeeTokens[projectId];
@@ -801,7 +831,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         // Try the credit transfer directly. If the fee-project controller is paused or misconfigured, restore the
         // pending credits instead of unwinding an ERC-20 fee-token claim that already succeeded earlier in the frame.
-        try IJBController(address(IJBDirectory(DIRECTORY).controllerOf(FEE_PROJECT_ID)))
+        try IJBController(_controllerOf(FEE_PROJECT_ID))
             .transferCreditsFrom({
             holder: address(this), projectId: FEE_PROJECT_ID, recipient: beneficiary, creditCount: creditAmount
         }) {
@@ -824,7 +854,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         if (tokenId == 0) revert JBUniswapV4LPSplitHook_InvalidStageForAction();
 
         // Resolve the project's ERC-20 token and pool key for fee collection.
-        address projectToken = address(IJBTokens(TOKENS).tokenOf(projectId));
+        address projectToken = _tokenOf(projectId);
         PoolKey memory key = poolKeysOf[projectId][terminalToken];
 
         // Collect LP fees and route them to the project's terminal balance.
@@ -838,15 +868,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     function deployPool(uint256 projectId, uint256 minCashOutReturn) external {
         // Allow anyone to deploy if the current ruleset's weight has decayed 10x from the initial weight.
         // Otherwise, require SET_BUYBACK_POOL permission from the project owner.
-        address controller = address(IJBDirectory(DIRECTORY).controllerOf(projectId));
+        address controller = _controllerOf(projectId);
         (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
         uint256 initialWeight = initialWeightOf[projectId];
 
         if (initialWeight == 0 || ruleset.weight * 10 > initialWeight) {
             _requirePermissionFrom({
-                account: IJBDirectory(DIRECTORY).PROJECTS().ownerOf(projectId),
-                projectId: projectId,
-                permissionId: JBPermissionIds.SET_BUYBACK_POOL
+                account: _ownerOf(projectId), projectId: projectId, permissionId: JBPermissionIds.SET_BUYBACK_POOL
             });
         }
 
@@ -856,13 +884,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         if (tokenIdOf[projectId][terminalToken] != 0) revert JBUniswapV4LPSplitHook_PoolAlreadyDeployed();
         if (hasDeployedPool[projectId]) revert JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported();
 
-        address projectToken = address(IJBTokens(TOKENS).tokenOf(projectId));
+        address projectToken = _tokenOf(projectId);
         uint256 projectTokenBalance = accumulatedProjectTokens[projectId];
 
         if (projectTokenBalance == 0) revert JBUniswapV4LPSplitHook_NoTokensAccumulated();
 
-        address terminal =
-            address(IJBDirectory(DIRECTORY).primaryTerminalOf({projectId: projectId, token: terminalToken}));
+        address terminal = _primaryTerminalOf(projectId, terminalToken);
         if (terminal == address(0)) revert JBUniswapV4LPSplitHook_InvalidTerminalToken();
 
         // Flip the project into post-deploy burn mode before any external calls so reentrancy cannot
@@ -886,13 +913,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     function processSplitWith(JBSplitHookContext calldata context) external payable {
         if (address(context.split.hook) != address(this)) revert JBUniswapV4LPSplitHook_NotHookSpecifiedInContext();
 
-        address controller = address(IJBDirectory(DIRECTORY).controllerOf(context.projectId));
+        address controller = _controllerOf(context.projectId);
         if (controller == address(0)) revert JBUniswapV4LPSplitHook_InvalidProjectId();
         if (controller != msg.sender) revert JBUniswapV4LPSplitHook_SplitSenderNotValidControllerOrTerminal();
 
         if (context.groupId != 1) revert JBUniswapV4LPSplitHook_TerminalTokensNotAllowed();
 
-        address projectToken = address(IJBTokens(TOKENS).tokenOf(context.projectId));
+        address projectToken = _tokenOf(context.projectId);
 
         if (!hasDeployedPool[context.projectId]) {
             // This hook requires an ERC-20 project token — credits cannot be paired as LP.
@@ -932,19 +959,16 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         external
     {
         _requirePermissionFrom({
-            account: IJBDirectory(DIRECTORY).PROJECTS().ownerOf(projectId),
-            projectId: projectId,
-            permissionId: JBPermissionIds.SET_BUYBACK_POOL
+            account: _ownerOf(projectId), projectId: projectId, permissionId: JBPermissionIds.SET_BUYBACK_POOL
         });
 
-        address terminal =
-            address(IJBDirectory(DIRECTORY).primaryTerminalOf({projectId: projectId, token: terminalToken}));
+        address terminal = _primaryTerminalOf(projectId, terminalToken);
         if (terminal == address(0)) revert JBUniswapV4LPSplitHook_InvalidTerminalToken();
 
         uint256 tokenId = tokenIdOf[projectId][terminalToken];
         if (tokenId == 0) revert JBUniswapV4LPSplitHook_InvalidStageForAction();
 
-        address projectToken = address(IJBTokens(TOKENS).tokenOf(projectId));
+        address projectToken = _tokenOf(projectId);
         PoolKey memory key = poolKeysOf[projectId][terminalToken];
 
         _collectAndRouteFees({
@@ -963,7 +987,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint256 recoveredTerminalTokens = _getTerminalTokenBalance(terminalToken) - termBalBefore;
 
         // Cache controller and ruleset once for _mintRebalancedPosition and its callees.
-        address controller = address(IJBDirectory(DIRECTORY).controllerOf(projectId));
+        address controller = _controllerOf(projectId);
         // slither-disable-next-line unused-return
         (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
 
@@ -993,7 +1017,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     function _addToProjectBalance(uint256 projectId, address token, uint256 amount, bool isNative) internal {
         if (amount == 0) return;
 
-        address terminal = address(IJBDirectory(DIRECTORY).primaryTerminalOf({projectId: projectId, token: token}));
+        address terminal = _primaryTerminalOf(projectId, token);
         if (terminal == address(0)) revert JBUniswapV4LPSplitHook_TerminalNotFound(projectId, token);
 
         if (!isNative) {
@@ -1040,7 +1064,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // Read the pool's actual current price. The pool may have been initialized by another party
         // (e.g. REVDeployer) at a different price than _computeInitialSqrtPrice would return.
         PoolKey memory key = poolKeysOf[projectId][terminalToken];
-        (uint160 sqrtPriceInit,,,) = POOL_MANAGER.getSlot0(key.toId());
+        uint160 sqrtPriceInit = _getSqrtPriceX96(key);
 
         // Determine the optimal fraction of project tokens to cash out for terminal-token pairing.
         uint256 cashOutAmount = _computeOptimalCashOutAmount({
@@ -1057,8 +1081,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         // Cash out the computed fraction to get terminal tokens for pairing.
         // Use the explicit return value instead of balance-delta to prevent cross-project token capture.
-        address terminal =
-            address(IJBDirectory(DIRECTORY).primaryTerminalOf({projectId: projectId, token: terminalToken}));
+        address terminal = _primaryTerminalOf(projectId, terminalToken);
 
         uint256 terminalTokenAmount;
 
@@ -1127,7 +1150,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         // Read the token ID after minting — nextTokenId was incremented by the MINT_POSITION action
         // inside modifyLiquidities, so (nextTokenId - 1) is the ID that was just minted.
-        tokenIdOf[projectId][terminalToken] = POSITION_MANAGER.nextTokenId() - 1;
+        tokenIdOf[projectId][terminalToken] = _nextTokenId() - 1;
 
         // Per-project leftover handling via snapshot-delta (H-32).
         // Safe subtraction: V4 SWEEP may return dust beyond what was settled.
@@ -1198,9 +1221,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // TAKE_PAIR params: (currency0, currency1, recipient).
         burnParams[1] = abi.encode(key.currency0, key.currency1, address(this));
 
-        POSITION_MANAGER.modifyLiquidities({
-            unlockData: abi.encode(burnActions, burnParams), deadline: block.timestamp + _DEADLINE_SECONDS
-        });
+        _modifyLiquidities(abi.encode(burnActions, burnParams), 0);
     }
 
     /// @notice Burn project tokens using the controller
@@ -1208,7 +1229,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     function _burnProjectTokens(uint256 projectId, address projectToken, uint256 amount, string memory memo) internal {
         if (amount == 0) return;
 
-        address controller = address(IJBDirectory(DIRECTORY).controllerOf(projectId));
+        address controller = _controllerOf(projectId);
         if (controller != address(0)) {
             IJBController(controller)
                 .burnTokensOf({holder: address(this), projectId: projectId, tokenCount: amount, memo: memo});
@@ -1384,9 +1405,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // TAKE_PAIR params: (currency0, currency1, recipient).
         feeParams[1] = abi.encode(key.currency0, key.currency1, address(this));
 
-        POSITION_MANAGER.modifyLiquidities({
-            unlockData: abi.encode(feeActions, feeParams), deadline: block.timestamp + _DEADLINE_SECONDS
-        });
+        _modifyLiquidities(abi.encode(feeActions, feeParams), 0);
 
         // Diff balances to determine exactly how much was collected as fees.
         uint256 feeAmount0 = _currencyBalance(key.currency0) - bal0Before;
@@ -1601,7 +1620,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // regardless of the current pool price — if the price is out of band the position will be
         // single-sided and arbitrageurs will quickly move the price back into range.
         // slither-disable-next-line unused-return
-        (uint160 existingSqrtPriceX96,,,) = POOL_MANAGER.getSlot0(key.toId());
+        uint160 existingSqrtPriceX96 = _getSqrtPriceX96(key);
         if (existingSqrtPriceX96 != 0) {
             // Use the existing pool price for downstream liquidity calculations.
             sqrtPriceX96 = existingSqrtPriceX96;
@@ -1738,9 +1757,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // SWEEP leftover currency1 back to this contract
         params[4] = abi.encode(key.currency1, address(this));
 
-        POSITION_MANAGER.modifyLiquidities{value: ethValue}({
-            unlockData: abi.encode(actions, params), deadline: block.timestamp + _DEADLINE_SECONDS
-        });
+        _modifyLiquidities(abi.encode(actions, params), ethValue);
     }
 
     /// @notice Mint a new LP position with tick bounds recalculated from current issuance and cash-out rates.
@@ -1780,7 +1797,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // current state. Using JB issuance price here would produce suboptimal liquidity when the
         // pool price has diverged.
         // slither-disable-next-line unused-return
-        (uint160 sqrtPriceX96,,,) = POOL_MANAGER.getSlot0(key.toId());
+        uint160 sqrtPriceX96 = _getSqrtPriceX96(key);
         uint160 sqrtPriceA = TickMath.getSqrtPriceAtTick(tickLower);
         uint160 sqrtPriceB = TickMath.getSqrtPriceAtTick(tickUpper);
 
@@ -1815,7 +1832,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
             // Read the token ID after minting — nextTokenId was incremented by the MINT_POSITION action
             // inside modifyLiquidities, so (nextTokenId - 1) is the ID that was just minted.
-            tokenIdOf[projectId][terminalToken] = POSITION_MANAGER.nextTokenId() - 1;
+            tokenIdOf[projectId][terminalToken] = _nextTokenId() - 1;
 
             // Per-project leftover handling via snapshot-delta (H-32).
             // Safe subtraction: V4 SWEEP may return dust beyond what was settled.
@@ -1850,6 +1867,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             // that tokenIdOf is always nonzero for deployed projects.
             revert JBUniswapV4LPSplitHook_InsufficientLiquidity();
         }
+    }
+
+    /// @notice Forward a modifyLiquidities call to the position manager.
+    function _modifyLiquidities(bytes memory unlockData, uint256 value) internal {
+        POSITION_MANAGER.modifyLiquidities{value: value}({
+            unlockData: unlockData, deadline: block.timestamp + _DEADLINE_SECONDS
+        });
     }
 
     /// @notice Approve an ERC20 token via Permit2 so PositionManager can pull it during SETTLE.
@@ -1906,8 +1930,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         uint256 beneficiaryTokenCount = 0;
         if (feeAmount > 0) {
-            address feeTerminal =
-                address(IJBDirectory(DIRECTORY).primaryTerminalOf({projectId: FEE_PROJECT_ID, token: terminalToken}));
+            address feeTerminal = _primaryTerminalOf(FEE_PROJECT_ID, terminalToken);
             // If no fee terminal is configured, the fee project simply misses this collection and the full amount
             // stays in the project's normal split-hook flow.
             if (feeTerminal == address(0)) {
@@ -1918,7 +1941,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 // _totalOutstandingFeeTokenClaims. This prevents a reentrancy through terminal.pay()
                 // → pay hooks → collectAndRouteLPFees() from seeing stale claims and double-counting
                 // fee tokens in _burnReceivedTokens or leftover handling.
-                address feeProjectToken = address(IJBTokens(TOKENS).tokenOf(FEE_PROJECT_ID));
+                address feeProjectToken = _tokenOf(FEE_PROJECT_ID);
 
                 // If this project already has unclaimed ERC-20 fee tokens, keep using that snapshotted token address.
                 // Otherwise a fee-project token migration could strand the earlier claim behind a new token contract.
