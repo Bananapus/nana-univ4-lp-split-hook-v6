@@ -684,6 +684,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Look up the current sqrt price of a pool.
     function _getSqrtPriceX96(PoolKey memory key) internal view returns (uint160 sqrtPriceX96) {
+        // slither-disable-next-line unused-return
         (sqrtPriceX96,,,) = POOL_MANAGER.getSlot0(key.toId());
     }
 
@@ -1619,7 +1620,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // existing price and proceed. Liquidity will be added within the hook's configured tick bounds
         // regardless of the current pool price — if the price is out of band the position will be
         // single-sided and arbitrageurs will quickly move the price back into range.
-        // slither-disable-next-line unused-return
         uint160 existingSqrtPriceX96 = _getSqrtPriceX96(key);
         if (existingSqrtPriceX96 != 0) {
             // Use the existing pool price for downstream liquidity calculations.
@@ -1796,7 +1796,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // Use the actual pool price for liquidity calculation so the target matches the pool's
         // current state. Using JB issuance price here would produce suboptimal liquidity when the
         // pool price has diverged.
-        // slither-disable-next-line unused-return
         uint160 sqrtPriceX96 = _getSqrtPriceX96(key);
         uint160 sqrtPriceA = TickMath.getSqrtPriceAtTick(tickLower);
         uint160 sqrtPriceB = TickMath.getSqrtPriceAtTick(tickUpper);
