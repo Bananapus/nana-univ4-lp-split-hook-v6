@@ -317,7 +317,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param projectId The ID of the project.
     /// @param controller The project's controller address.
     /// @return highestToken The token address with the highest ETH-denominated balance.
-    function _findHighestValueTerminalToken(
+    function _findHighestValueTerminalTokenOf(
         uint256 projectId,
         address controller
     )
@@ -838,7 +838,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
 
         // Auto-select the terminal token with the highest ETH-denominated value.
-        address terminalToken = _findHighestValueTerminalToken({projectId: projectId, controller: controller});
+        address terminalToken = _findHighestValueTerminalTokenOf({projectId: projectId, controller: controller});
 
         if (tokenIdOf[projectId][terminalToken] != 0) revert JBUniswapV4LPSplitHook_PoolAlreadyDeployed();
         if (hasDeployedPool[projectId]) revert JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported();
