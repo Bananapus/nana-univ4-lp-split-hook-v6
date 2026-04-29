@@ -311,6 +311,97 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     // -------------------------- internal views ------------------------- //
     //*********************************************************************//
 
+    /// @notice Find the terminal token with the highest ETH-denominated value across all of the project's terminals.
+    /// @dev Converts each token's balance to 18-decimal ETH using price feeds. Falls back to raw balance comparison
+    /// when no price feed exists.
+    /// @param projectId The ID of the project.
+    /// @param controller The project's controller address.
+    /// @return highestToken The token address with the highest ETH-denominated balance.
+    function _findHighestValueTerminalToken(
+        uint256 projectId,
+        address controller
+    )
+        internal
+        view
+        returns (address highestToken)
+    {
+        // Fetch all terminals registered for this project.
+        IJBTerminal[] memory terminals = IJBDirectory(DIRECTORY).terminalsOf(projectId);
+
+        // Track the highest ETH-denominated value found so far.
+        uint256 highestValue;
+
+        // The ETH currency identifier used for price normalization.
+        uint32 ethCurrency = uint32(uint160(JBConstants.NATIVE_TOKEN));
+
+        // Cache terminal count for gas-efficient iteration.
+        uint256 terminalCount = terminals.length;
+
+        // Iterate over each terminal to inspect its token balances.
+        for (uint256 i; i < terminalCount; i++) {
+            // Cast to IJBMultiTerminal to access store and accounting context methods.
+            IJBMultiTerminal term = IJBMultiTerminal(address(terminals[i]));
+
+            // Get the terminal's store for balance lookups.
+            IJBTerminalStore termStore = term.STORE();
+
+            // Get all accounting contexts (one per accepted token) for this project on this terminal.
+            JBAccountingContext[] memory contexts = term.accountingContextsOf(projectId);
+
+            // Cache context count for gas-efficient iteration.
+            uint256 contextCount = contexts.length;
+
+            // Iterate over each token accepted by this terminal.
+            for (uint256 j; j < contextCount; j++) {
+                // Load the accounting context for this token.
+                JBAccountingContext memory context = contexts[j];
+
+                // Look up how much of this token the terminal holds for the project.
+                uint256 balance =
+                    termStore.balanceOf({terminal: address(term), projectId: projectId, token: context.token});
+
+                // Skip tokens with zero balance — they can't be the highest value.
+                if (balance == 0) continue;
+
+                // Convert the balance to an 18-decimal ETH-denominated value for apples-to-apples comparison.
+                uint256 ethValue;
+
+                if (context.currency == ethCurrency) {
+                    // Native ETH: balance is already denominated in 18-decimal ETH.
+                    ethValue = balance;
+                } else {
+                    // For non-ETH tokens, use the price feed to normalize to ETH.
+                    // pricePerUnit = how many of `context.currency` per 1 ETH at `context.decimals` precision.
+                    // ethValue (18-decimal) = balance * 10^18 / pricePerUnit.
+                    try IJBController(controller).PRICES()
+                        .pricePerUnitOf({
+                        projectId: projectId,
+                        pricingCurrency: context.currency,
+                        unitCurrency: ethCurrency,
+                        decimals: context.decimals
+                    }) returns (
+                        uint256 pricePerUnit
+                    ) {
+                        // Normalize the balance to 18-decimal ETH using the price feed result.
+                        ethValue = mulDiv(balance, 10 ** 18, pricePerUnit);
+                    } catch {
+                        // No price feed available — fall back to raw balance for comparison.
+                        ethValue = balance;
+                    }
+                }
+
+                // Update the highest value and corresponding token if this one exceeds the current best.
+                if (ethValue > highestValue) {
+                    highestValue = ethValue;
+                    highestToken = context.token;
+                }
+            }
+        }
+
+        // Revert if no token with a non-zero balance was found across any terminal.
+        if (highestToken == address(0)) revert JBUniswapV4LPSplitHook_NoTerminalTokenFound();
+    }
+
     /// @notice Calculate the cash out rate (price floor).
     /// @dev Uses total surplus when the project's `useTotalSurplusForCashOuts` flag is set,
     /// otherwise uses local (single-terminal) surplus to match the actual cashout behavior.
@@ -882,73 +973,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @notice Accumulate project tokens in accumulation stage
     function _accumulateTokens(uint256 projectId, uint256 amount) internal {
         accumulatedProjectTokens[projectId] += amount;
-    }
-
-    /// @notice Find the terminal token with the highest ETH-denominated value across all of the project's terminals.
-    /// @dev Converts each token's balance to 18-decimal ETH using price feeds. For native ETH, no conversion needed.
-    /// @param projectId The ID of the project.
-    /// @param controller The project's controller address.
-    /// @return highestToken The token address with the highest ETH-denominated balance.
-    function _findHighestValueTerminalToken(
-        uint256 projectId,
-        address controller
-    )
-        internal
-        view
-        returns (address highestToken)
-    {
-        IJBTerminal[] memory terminals = IJBDirectory(DIRECTORY).terminalsOf(projectId);
-        uint256 highestValue;
-        uint32 ethCurrency = uint32(uint160(JBConstants.NATIVE_TOKEN));
-
-        uint256 terminalCount = terminals.length;
-        for (uint256 i; i < terminalCount; i++) {
-            IJBMultiTerminal term = IJBMultiTerminal(address(terminals[i]));
-            IJBTerminalStore termStore = term.STORE();
-            JBAccountingContext[] memory contexts = term.accountingContextsOf(projectId);
-            uint256 contextCount = contexts.length;
-
-            for (uint256 j; j < contextCount; j++) {
-                JBAccountingContext memory context = contexts[j];
-
-                uint256 balance =
-                    termStore.balanceOf({terminal: address(term), projectId: projectId, token: context.token});
-
-                if (balance == 0) continue;
-
-                // Convert balance to 18-decimal ETH value for comparison.
-                uint256 ethValue;
-                if (context.currency == ethCurrency) {
-                    // Native ETH: balance is already in 18-decimal ETH.
-                    ethValue = balance;
-                } else {
-                    // pricePerUnit = how many of `context.currency` per 1 ETH, at `context.decimals` precision.
-                    // ethValue (18-decimal) = balance * 10^18 / pricePerUnit.
-                    // If no price feed exists, skip this token (treat as 0 value).
-                    try IJBController(controller).PRICES()
-                        .pricePerUnitOf({
-                        projectId: projectId,
-                        pricingCurrency: context.currency,
-                        unitCurrency: ethCurrency,
-                        decimals: context.decimals
-                    }) returns (
-                        uint256 pricePerUnit
-                    ) {
-                        ethValue = mulDiv(balance, 10 ** 18, pricePerUnit);
-                    } catch {
-                        // No price feed available — count raw balance as fallback.
-                        ethValue = balance;
-                    }
-                }
-
-                if (ethValue > highestValue) {
-                    highestValue = ethValue;
-                    highestToken = context.token;
-                }
-            }
-        }
-
-        if (highestToken == address(0)) revert JBUniswapV4LPSplitHook_NoTerminalTokenFound();
     }
 
     /// @notice Add tokens to project balance via terminal
