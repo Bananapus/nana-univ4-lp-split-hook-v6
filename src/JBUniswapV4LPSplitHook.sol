@@ -331,6 +331,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // Track the highest ETH-denominated value found so far.
         uint256 highestValue;
 
+        // Fallback tracking for tokens without a price feed (L-26).
+        address highestUnpricedToken;
+        uint256 highestUnpricedBalance;
+
         // The ETH currency identifier used for price normalization.
         uint32 ethCurrency = uint32(uint160(JBConstants.NATIVE_TOKEN));
 
@@ -385,8 +389,14 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                         // Normalize the balance to 18-decimal ETH using the price feed result.
                         ethValue = mulDiv(balance, 10 ** 18, pricePerUnit);
                     } catch {
-                        // No price feed available — fall back to raw balance for comparison.
-                        ethValue = balance;
+                        // No price feed available — skip this token so its raw balance
+                        // cannot incorrectly win (L-26). If NO token has a price feed,
+                        // the fallback below selects the highest raw balance instead.
+                        if (balance > highestUnpricedBalance) {
+                            highestUnpricedBalance = balance;
+                            highestUnpricedToken = context.token;
+                        }
+                        continue;
                     }
                 }
 
@@ -397,6 +407,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 }
             }
         }
+
+        // If no priced token was found, fall back to the highest-balance unpriced token.
+        if (highestToken == address(0)) highestToken = highestUnpricedToken;
 
         // Revert if no token with a non-zero balance was found across any terminal.
         if (highestToken == address(0)) revert JBUniswapV4LPSplitHook_NoTerminalTokenFound();
