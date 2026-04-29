@@ -68,25 +68,25 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     error JBUniswapV4LPSplitHook_AlreadyInitialized();
     error JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject();
     error JBUniswapV4LPSplitHook_InsufficientBalance();
+    error JBUniswapV4LPSplitHook_InsufficientLiquidity();
     error JBUniswapV4LPSplitHook_InvalidFeePercent();
     error JBUniswapV4LPSplitHook_InvalidProjectId();
     error JBUniswapV4LPSplitHook_InvalidStageForAction();
     error JBUniswapV4LPSplitHook_InvalidTerminalToken();
+    error JBUniswapV4LPSplitHook_InvalidTickBounds();
+    error JBUniswapV4LPSplitHook_NoTerminalTokenFound();
     error JBUniswapV4LPSplitHook_NoTokensAccumulated();
     error JBUniswapV4LPSplitHook_NotHookSpecifiedInContext();
     error JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported();
     error JBUniswapV4LPSplitHook_Permit2AmountOverflow();
     error JBUniswapV4LPSplitHook_PoolAlreadyDeployed();
     error JBUniswapV4LPSplitHook_SplitSenderNotValidControllerOrTerminal();
+    error JBUniswapV4LPSplitHook_TerminalNotFound(uint256 projectId, address token);
     error JBUniswapV4LPSplitHook_TerminalTokensNotAllowed();
-    error JBUniswapV4LPSplitHook_UnclaimedFeeTokenChanged(address previousToken, address nextToken);
-    error JBUniswapV4LPSplitHook_InsufficientLiquidity();
     error JBUniswapV4LPSplitHook_UnauthorizedCaller();
+    error JBUniswapV4LPSplitHook_UnclaimedFeeTokenChanged(address previousToken, address nextToken);
     error JBUniswapV4LPSplitHook_ZeroAddressNotAllowed();
     error JBUniswapV4LPSplitHook_ZeroLiquidity();
-    error JBUniswapV4LPSplitHook_InvalidTickBounds();
-    error JBUniswapV4LPSplitHook_TerminalNotFound(uint256 projectId, address token);
-    error JBUniswapV4LPSplitHook_NoTerminalTokenFound();
 
     //*********************************************************************//
     // ------------------------- public constants ------------------------ //
