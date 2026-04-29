@@ -111,6 +111,9 @@ contract CodexNemesisPreinitializedRangePoC is LPSplitHookV4TestBase {
             PROJECT_ID, JBAccountingContext({token: JBConstants.NATIVE_TOKEN, decimals: 18, currency: 1})
         );
 
+        // Set NATIVE_TOKEN balance higher so auto-select picks it over the base terminalToken.
+        store.setBalance(address(terminal), PROJECT_ID, JBConstants.NATIVE_TOKEN, 100e18);
+
         vm.deal(address(terminal), 1000 ether);
     }
 
@@ -148,7 +151,7 @@ contract CodexNemesisPreinitializedRangePoC is LPSplitHookV4TestBase {
         assertEq(actualCashOut, totalProjectTokens, "below-range branch now cashes out all project tokens");
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, JBConstants.NATIVE_TOKEN, 0);
+        hook.deployPool(PROJECT_ID, 0);
 
         assertEq(terminal.lastCashOutAmount(), actualCashOut, "deployPool used the full cash-out amount");
 

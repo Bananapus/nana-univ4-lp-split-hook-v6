@@ -1,87 +1,49 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {Test} from "forge-std/Test.sol";
+import {ForkDeployHelper} from "../helpers/ForkDeployHelper.sol";
 
-import {JBPermissions} from "@bananapus/core-v6/src/JBPermissions.sol";
-import {JBProjects} from "@bananapus/core-v6/src/JBProjects.sol";
-import {JBDirectory} from "@bananapus/core-v6/src/JBDirectory.sol";
-import {JBRulesets} from "@bananapus/core-v6/src/JBRulesets.sol";
-import {JBTokens} from "@bananapus/core-v6/src/JBTokens.sol";
-import {JBERC20} from "@bananapus/core-v6/src/JBERC20.sol";
-import {JBSplits} from "@bananapus/core-v6/src/JBSplits.sol";
-import {JBPrices} from "@bananapus/core-v6/src/JBPrices.sol";
-import {JBController} from "@bananapus/core-v6/src/JBController.sol";
-import {JBFundAccessLimits} from "@bananapus/core-v6/src/JBFundAccessLimits.sol";
-import {JBFeelessAddresses} from "@bananapus/core-v6/src/JBFeelessAddresses.sol";
-import {JBTerminalStore} from "@bananapus/core-v6/src/JBTerminalStore.sol";
-import {JBMultiTerminal} from "@bananapus/core-v6/src/JBMultiTerminal.sol";
-import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
+import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
+import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
+import {IJBSplitHook} from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
+import {IJBToken} from "@bananapus/core-v6/src/interfaces/IJBToken.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
+import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
+import {JBFundAccessLimitGroup} from "@bananapus/core-v6/src/structs/JBFundAccessLimitGroup.sol";
 import {JBRulesetConfig} from "@bananapus/core-v6/src/structs/JBRulesetConfig.sol";
 import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
-import {JBTerminalConfig} from "@bananapus/core-v6/src/structs/JBTerminalConfig.sol";
 import {JBSplitGroup} from "@bananapus/core-v6/src/structs/JBSplitGroup.sol";
-import {JBFundAccessLimitGroup} from "@bananapus/core-v6/src/structs/JBFundAccessLimitGroup.sol";
-import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
-import {IJBToken} from "@bananapus/core-v6/src/interfaces/IJBToken.sol";
-import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
-import {IJBSplitHook} from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
-import {JBSplit} from "@bananapus/core-v6/src/structs/JBSplit.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
+import {JBSplit} from "@bananapus/core-v6/src/structs/JBSplit.sol";
+import {JBTerminalConfig} from "@bananapus/core-v6/src/structs/JBTerminalConfig.sol";
 
+import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import {IPermit2} from "@uniswap/permit2/src/interfaces/IPermit2.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
-import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
-import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
-import {IPermit2} from "@uniswap/permit2/src/interfaces/IPermit2.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 
-import {LibClone} from "solady/src/utils/LibClone.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
+import {LibClone} from "solady/src/utils/LibClone.sol";
 
-/// @notice Integration fork test: deploy pool, change ruleset (new weight + reservedPercent),
-///         then rebalance. Exercises H-32 (rebalance snapshot-delta), M-46 (new tick bounds
-///         clamped), M-49 (new reserved% reflected), M-50 (new sqrtPrice precise).
-contract Integration_RebalanceChangedRuleset is Test {
+contract Integration_RebalanceChangedRuleset is ForkDeployHelper {
     using StateLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;
-
     IPoolManager constant V4_POOL_MANAGER = IPoolManager(0x000000000004444c5dc75cB358380D2e3dE08A90);
     IPositionManager constant V4_POSITION_MANAGER = IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e);
-    IPermit2 constant PERMIT2 = IPermit2(0x000000000022D473030F116dDEE9F6B43aC78BA3);
-
-    address multisig = address(0xBEEF);
-    address trustedForwarder = address(0);
-
-    JBPermissions jbPermissions;
-    JBProjects jbProjects;
-    JBDirectory jbDirectory;
-    JBRulesets jbRulesets;
-    JBTokens jbTokens;
-    JBSplits jbSplits;
-    JBPrices jbPrices;
-    JBFundAccessLimits jbFundAccessLimits;
-    JBFeelessAddresses jbFeelessAddresses;
-    JBController jbController;
-    JBTerminalStore jbTerminalStore;
-    JBMultiTerminal jbMultiTerminal;
-
     JBUniswapV4LPSplitHook hook;
     uint256 feeProjectId;
-
     receive() external payable {}
 
     function setUp() public {
         vm.createSelectFork("ethereum", 21_700_000);
         _deployJBCore();
-
         feeProjectId = _launchProject({reservedPercent: 0, cashOutTaxRate: 0, weight: 1_000_000e18, duration: 0});
         vm.prank(multisig);
         jbController.deployERC20For(feeProjectId, "Fee Token", "FEE", bytes32(0));
-
         JBUniswapV4LPSplitHook hookImpl = new JBUniswapV4LPSplitHook(
             address(jbDirectory),
             IJBPermissions(address(jbPermissions)),
@@ -95,26 +57,18 @@ contract Integration_RebalanceChangedRuleset is Test {
         hook.initialize(feeProjectId, 3800);
     }
 
-    /// @notice Deploy, change ruleset, rebalance. New position should reflect changed parameters.
     function test_fork_integration_rebalanceChangedRuleset() public {
-        // Launch with duration so we can queue a new ruleset that takes effect
         uint256 pid = _launchProject({reservedPercent: 0, cashOutTaxRate: 5000, weight: 1_000_000e18, duration: 1 days});
         vm.prank(multisig);
         IJBToken pToken = jbController.deployERC20For(pid, "Rebalance Token", "RBL", bytes32(0));
-
         _payProject(pid, 50 ether);
         _accumulateTokens(pid, address(pToken), 100_000e18);
-
-        // Deploy initial pool
         vm.prank(multisig);
-        hook.deployPool(pid, JBConstants.NATIVE_TOKEN, 0);
+        hook.deployPool(pid, 0);
         assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "Pool deployed");
-
         uint256 initialTokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
         uint128 initialLiq = V4_POSITION_MANAGER.getPositionLiquidity(initialTokenId);
         assertTrue(initialLiq > 0, "Initial position has liquidity");
-
-        // Queue new ruleset with different weight and 50% reserved
         JBRulesetMetadata memory newMeta = JBRulesetMetadata({
             reservedPercent: 5000,
             cashOutTaxRate: 5000,
@@ -136,7 +90,6 @@ contract Integration_RebalanceChangedRuleset is Test {
             dataHook: address(0),
             metadata: 0
         });
-
         JBRulesetConfig[] memory newConfigs = new JBRulesetConfig[](1);
         newConfigs[0].mustStartAtOrAfter = 0;
         newConfigs[0].duration = 1 days;
@@ -146,78 +99,21 @@ contract Integration_RebalanceChangedRuleset is Test {
         newConfigs[0].metadata = newMeta;
         newConfigs[0].splitGroups = new JBSplitGroup[](0);
         newConfigs[0].fundAccessLimitGroups = new JBFundAccessLimitGroup[](0);
-
         vm.prank(multisig);
         jbController.queueRulesetsOf({projectId: pid, rulesetConfigurations: newConfigs, memo: ""});
-
-        // Warp to activate new ruleset
         vm.warp(block.timestamp + 1 days + 1);
-
-        // Rebalance with new ruleset
         vm.prank(multisig);
         hook.rebalanceLiquidity({
             projectId: pid, terminalToken: JBConstants.NATIVE_TOKEN, decreaseAmount0Min: 0, decreaseAmount1Min: 0
         });
-
-        // Verify new position
         uint256 newTokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
         assertTrue(newTokenId > 0, "New tokenId exists");
-        // tokenId may change after rebalance (old burned, new minted)
         uint128 newLiq = V4_POSITION_MANAGER.getPositionLiquidity(newTokenId);
         assertTrue(newLiq > 0, "Rebalanced position has liquidity");
-
         emit log_named_uint("  Initial tokenId", initialTokenId);
         emit log_named_uint("  Initial liquidity", initialLiq);
         emit log_named_uint("  New tokenId", newTokenId);
         emit log_named_uint("  New liquidity", newLiq);
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════
-    //  INTERNAL HELPERS
-    // ═══════════════════════════════════════════════════════════════════════
-
-    function _deployJBCore() internal {
-        jbPermissions = new JBPermissions(trustedForwarder);
-        jbProjects = new JBProjects(multisig, address(0), trustedForwarder);
-        jbDirectory = new JBDirectory(jbPermissions, jbProjects, multisig);
-        JBERC20 jbErc20 = new JBERC20(jbPermissions, jbProjects);
-        jbTokens = new JBTokens(jbDirectory, jbErc20);
-        jbRulesets = new JBRulesets(jbDirectory);
-        jbPrices = new JBPrices(jbDirectory, jbPermissions, jbProjects, multisig, trustedForwarder);
-        jbSplits = new JBSplits(jbDirectory);
-        jbFundAccessLimits = new JBFundAccessLimits(jbDirectory);
-        jbFeelessAddresses = new JBFeelessAddresses(multisig);
-
-        jbController = new JBController(
-            jbDirectory,
-            jbFundAccessLimits,
-            jbPermissions,
-            jbPrices,
-            jbProjects,
-            jbRulesets,
-            jbSplits,
-            jbTokens,
-            address(0),
-            trustedForwarder
-        );
-
-        vm.prank(multisig);
-        jbDirectory.setIsAllowedToSetFirstController(address(jbController), true);
-
-        jbTerminalStore = new JBTerminalStore(jbDirectory, jbPrices, jbRulesets);
-
-        jbMultiTerminal = new JBMultiTerminal(
-            jbFeelessAddresses,
-            jbPermissions,
-            jbProjects,
-            jbSplits,
-            jbTerminalStore,
-            jbTokens,
-            PERMIT2,
-            trustedForwarder
-        );
-
-        vm.deal(address(this), 10_000 ether);
     }
 
     function _launchProject(
@@ -250,7 +146,6 @@ contract Integration_RebalanceChangedRuleset is Test {
             dataHook: address(0),
             metadata: 0
         });
-
         JBRulesetConfig[] memory rulesetConfigs = new JBRulesetConfig[](1);
         rulesetConfigs[0].mustStartAtOrAfter = 0;
         rulesetConfigs[0].duration = duration;
@@ -260,15 +155,12 @@ contract Integration_RebalanceChangedRuleset is Test {
         rulesetConfigs[0].metadata = metadata;
         rulesetConfigs[0].splitGroups = new JBSplitGroup[](0);
         rulesetConfigs[0].fundAccessLimitGroups = new JBFundAccessLimitGroup[](0);
-
         JBAccountingContext[] memory tokensToAccept = new JBAccountingContext[](1);
         tokensToAccept[0] = JBAccountingContext({
             token: JBConstants.NATIVE_TOKEN, decimals: 18, currency: uint32(uint160(JBConstants.NATIVE_TOKEN))
         });
-
         JBTerminalConfig[] memory terminalConfigs = new JBTerminalConfig[](1);
         terminalConfigs[0] = JBTerminalConfig({terminal: jbMultiTerminal, accountingContextsToAccept: tokensToAccept});
-
         id = jbController.launchProjectFor({
             owner: multisig,
             projectUri: "",
@@ -283,7 +175,6 @@ contract Integration_RebalanceChangedRuleset is Test {
         jbController.mintTokensOf({
             projectId: pid, tokenCount: amount, beneficiary: address(hook), memo: "", useReservedPercent: false
         });
-
         JBSplitHookContext memory context = JBSplitHookContext({
             token: tokenAddr,
             amount: amount,
@@ -299,7 +190,6 @@ contract Integration_RebalanceChangedRuleset is Test {
                 hook: IJBSplitHook(address(hook))
             })
         });
-
         vm.prank(address(jbController));
         hook.processSplitWith(context);
     }

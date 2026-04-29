@@ -165,6 +165,9 @@ contract NativeETHTest is LPSplitHookV4TestBase {
         // Set NATIVE_TOKEN as the terminal token for cash-outs
         terminal.setProjectToken(PROJECT_ID, address(projectToken));
 
+        // Set NATIVE_TOKEN balance higher so auto-select picks it over the base terminalToken
+        store.setBalance(address(terminal), PROJECT_ID, NATIVE_TOKEN, 100e18);
+
         // Accumulate project tokens
         uint256 accAmount = 100e18;
         projectToken.mint(address(hook), accAmount);
@@ -180,7 +183,7 @@ contract NativeETHTest is LPSplitHookV4TestBase {
         // Deploy pool with NATIVE_TOKEN (owner required)
         // In V4, the hook uses Currency.wrap(address(0)) for native ETH
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, NATIVE_TOKEN, 0);
+        hook.deployPool(PROJECT_ID, 0);
 
         // Verify pool was created (tokenId is nonzero)
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, NATIVE_TOKEN);

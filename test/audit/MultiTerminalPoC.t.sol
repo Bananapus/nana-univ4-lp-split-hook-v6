@@ -34,25 +34,29 @@ contract CodexNemesisMultiTerminalPoC is LPSplitHookV4TestBase {
     function test_permissionlessDecayLetsAttackerLockWrongTerminalToken() public {
         _accumulateTokens(PROJECT_ID, 100e18);
 
+        // Set balances so that terminalToken has the highest value — the auto-select logic
+        // in _findHighestValueTerminalToken will pick it regardless of what the attacker passes.
+        store.setBalance(address(terminal), PROJECT_ID, address(terminalToken), 10e18);
+        store.setBalance(address(terminal), PROJECT_ID, address(altTerminalToken), 1e18);
+
         // Open the permissionless deployment window.
         controller.setWeight(PROJECT_ID, DEFAULT_WEIGHT / 10);
 
+        // Attacker tries to deploy with the low-value altTerminalToken, but the fix
+        // auto-selects terminalToken (highest value) instead.
         vm.prank(attacker);
-        hook.deployPool(PROJECT_ID, address(altTerminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
 
-        assertTrue(hook.hasDeployedPool(PROJECT_ID), "attacker should permanently flip deployment stage");
-        assertTrue(
-            hook.tokenIdOf(PROJECT_ID, address(altTerminalToken)) != 0,
-            "attacker should be able to deploy against the alternate terminal"
-        );
-        assertEq(
+        assertTrue(hook.hasDeployedPool(PROJECT_ID), "deployment should succeed");
+        assertGt(
             hook.tokenIdOf(PROJECT_ID, address(terminalToken)),
             0,
-            "intended terminal remains undeployed even though the project is locked"
+            "auto-select should deploy the highest-value terminal token"
         );
-
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported.selector);
-        vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        assertEq(
+            hook.tokenIdOf(PROJECT_ID, address(altTerminalToken)),
+            0,
+            "attacker's low-value token should NOT be deployed"
+        );
     }
 }

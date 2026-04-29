@@ -68,24 +68,25 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     error JBUniswapV4LPSplitHook_AlreadyInitialized();
     error JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject();
     error JBUniswapV4LPSplitHook_InsufficientBalance();
+    error JBUniswapV4LPSplitHook_InsufficientLiquidity();
     error JBUniswapV4LPSplitHook_InvalidFeePercent();
     error JBUniswapV4LPSplitHook_InvalidProjectId();
     error JBUniswapV4LPSplitHook_InvalidStageForAction();
     error JBUniswapV4LPSplitHook_InvalidTerminalToken();
+    error JBUniswapV4LPSplitHook_InvalidTickBounds();
+    error JBUniswapV4LPSplitHook_NoTerminalTokenFound();
     error JBUniswapV4LPSplitHook_NoTokensAccumulated();
     error JBUniswapV4LPSplitHook_NotHookSpecifiedInContext();
     error JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported();
     error JBUniswapV4LPSplitHook_Permit2AmountOverflow();
     error JBUniswapV4LPSplitHook_PoolAlreadyDeployed();
     error JBUniswapV4LPSplitHook_SplitSenderNotValidControllerOrTerminal();
+    error JBUniswapV4LPSplitHook_TerminalNotFound(uint256 projectId, address token);
     error JBUniswapV4LPSplitHook_TerminalTokensNotAllowed();
-    error JBUniswapV4LPSplitHook_UnclaimedFeeTokenChanged(address previousToken, address nextToken);
-    error JBUniswapV4LPSplitHook_InsufficientLiquidity();
     error JBUniswapV4LPSplitHook_UnauthorizedCaller();
+    error JBUniswapV4LPSplitHook_UnclaimedFeeTokenChanged(address previousToken, address nextToken);
     error JBUniswapV4LPSplitHook_ZeroAddressNotAllowed();
     error JBUniswapV4LPSplitHook_ZeroLiquidity();
-    error JBUniswapV4LPSplitHook_InvalidTickBounds();
-    error JBUniswapV4LPSplitHook_TerminalNotFound(uint256 projectId, address token);
 
     //*********************************************************************//
     // ------------------------- public constants ------------------------ //
@@ -309,6 +310,97 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     //*********************************************************************//
     // -------------------------- internal views ------------------------- //
     //*********************************************************************//
+
+    /// @notice Find the terminal token with the highest ETH-denominated value across all of the project's terminals.
+    /// @dev Converts each token's balance to 18-decimal ETH using price feeds. Falls back to raw balance comparison
+    /// when no price feed exists.
+    /// @param projectId The ID of the project.
+    /// @param controller The project's controller address.
+    /// @return highestToken The token address with the highest ETH-denominated balance.
+    function _findHighestValueTerminalTokenOf(
+        uint256 projectId,
+        address controller
+    )
+        internal
+        view
+        returns (address highestToken)
+    {
+        // Fetch all terminals registered for this project.
+        IJBTerminal[] memory terminals = IJBDirectory(DIRECTORY).terminalsOf(projectId);
+
+        // Track the highest ETH-denominated value found so far.
+        uint256 highestValue;
+
+        // The ETH currency identifier used for price normalization.
+        uint32 ethCurrency = uint32(uint160(JBConstants.NATIVE_TOKEN));
+
+        // Cache terminal count for gas-efficient iteration.
+        uint256 terminalCount = terminals.length;
+
+        // Iterate over each terminal to inspect its token balances.
+        for (uint256 i; i < terminalCount; i++) {
+            // Cast to IJBMultiTerminal to access store and accounting context methods.
+            IJBMultiTerminal term = IJBMultiTerminal(address(terminals[i]));
+
+            // Get the terminal's store for balance lookups.
+            IJBTerminalStore termStore = term.STORE();
+
+            // Get all accounting contexts (one per accepted token) for this project on this terminal.
+            JBAccountingContext[] memory contexts = term.accountingContextsOf(projectId);
+
+            // Cache context count for gas-efficient iteration.
+            uint256 contextCount = contexts.length;
+
+            // Iterate over each token accepted by this terminal.
+            for (uint256 j; j < contextCount; j++) {
+                // Load the accounting context for this token.
+                JBAccountingContext memory context = contexts[j];
+
+                // Look up how much of this token the terminal holds for the project.
+                uint256 balance =
+                    termStore.balanceOf({terminal: address(term), projectId: projectId, token: context.token});
+
+                // Skip tokens with zero balance — they can't be the highest value.
+                if (balance == 0) continue;
+
+                // Convert the balance to an 18-decimal ETH-denominated value for apples-to-apples comparison.
+                uint256 ethValue;
+
+                if (context.currency == ethCurrency) {
+                    // Native ETH: balance is already denominated in 18-decimal ETH.
+                    ethValue = balance;
+                } else {
+                    // For non-ETH tokens, use the price feed to normalize to ETH.
+                    // pricePerUnit = how many of `context.currency` per 1 ETH at `context.decimals` precision.
+                    // ethValue (18-decimal) = balance * 10^18 / pricePerUnit.
+                    try IJBController(controller).PRICES()
+                        .pricePerUnitOf({
+                        projectId: projectId,
+                        pricingCurrency: context.currency,
+                        unitCurrency: ethCurrency,
+                        decimals: context.decimals
+                    }) returns (
+                        uint256 pricePerUnit
+                    ) {
+                        // Normalize the balance to 18-decimal ETH using the price feed result.
+                        ethValue = mulDiv(balance, 10 ** 18, pricePerUnit);
+                    } catch {
+                        // No price feed available — fall back to raw balance for comparison.
+                        ethValue = balance;
+                    }
+                }
+
+                // Update the highest value and corresponding token if this one exceeds the current best.
+                if (ethValue > highestValue) {
+                    highestValue = ethValue;
+                    highestToken = context.token;
+                }
+            }
+        }
+
+        // Revert if no token with a non-zero balance was found across any terminal.
+        if (highestToken == address(0)) revert JBUniswapV4LPSplitHook_NoTerminalTokenFound();
+    }
 
     /// @notice Calculate the cash out rate (price floor).
     /// @dev Uses total surplus when the project's `useTotalSurplusForCashOuts` flag is set,
@@ -560,11 +652,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             ? 10 ** context.decimals
             : IJBController(controller).PRICES()
                 .pricePerUnitOf({
-                    projectId: projectId,
-                    pricingCurrency: context.currency,
-                    unitCurrency: baseCurrency,
-                    decimals: context.decimals
-                });
+                projectId: projectId,
+                pricingCurrency: context.currency,
+                unitCurrency: baseCurrency,
+                decimals: context.decimals
+            });
 
         // Apply the ruleset weight to convert terminal tokens → project tokens at the current rate.
         projectTokenOutAmount = mulDiv({x: terminalTokenInAmount, y: ruleset.weight, denominator: weightRatio});
@@ -698,8 +790,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // pending credits instead of unwinding an ERC-20 fee-token claim that already succeeded earlier in the frame.
         try IJBController(address(IJBDirectory(DIRECTORY).controllerOf(FEE_PROJECT_ID)))
             .transferCreditsFrom({
-                holder: address(this), projectId: FEE_PROJECT_ID, recipient: beneficiary, creditCount: creditAmount
-            }) {
+            holder: address(this), projectId: FEE_PROJECT_ID, recipient: beneficiary, creditCount: creditAmount
+        }) {
             // slither-disable-next-line reentrancy-events
             emit FeeTokensClaimed(projectId, beneficiary, creditAmount);
         } catch {
@@ -730,7 +822,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Deploy a Uniswap V4 pool for a project using accumulated tokens
     // slither-disable-next-line reentrancy-benign,reentrancy-events,unused-return
-    function deployPool(uint256 projectId, address terminalToken, uint256 minCashOutReturn) external {
+    function deployPool(uint256 projectId, uint256 minCashOutReturn) external {
         // Allow anyone to deploy if the current ruleset's weight has decayed 10x from the initial weight.
         // Otherwise, require SET_BUYBACK_POOL permission from the project owner.
         address controller = address(IJBDirectory(DIRECTORY).controllerOf(projectId));
@@ -744,6 +836,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 permissionId: JBPermissionIds.SET_BUYBACK_POOL
             });
         }
+
+        // Auto-select the terminal token with the highest ETH-denominated value.
+        address terminalToken = _findHighestValueTerminalTokenOf({projectId: projectId, controller: controller});
 
         if (tokenIdOf[projectId][terminalToken] != 0) revert JBUniswapV4LPSplitHook_PoolAlreadyDeployed();
         if (hasDeployedPool[projectId]) revert JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported();
@@ -970,14 +1065,14 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
             terminalTokenAmount = IJBMultiTerminal(terminal)
                 .cashOutTokensOf({
-                    holder: address(this),
-                    projectId: projectId,
-                    cashOutCount: cashOutAmount,
-                    tokenToReclaim: terminalToken,
-                    minTokensReclaimed: effectiveMinReturn,
-                    beneficiary: payable(address(this)),
-                    metadata: ""
-                });
+                holder: address(this),
+                projectId: projectId,
+                cashOutCount: cashOutAmount,
+                tokenToReclaim: terminalToken,
+                minTokensReclaimed: effectiveMinReturn,
+                beneficiary: payable(address(this)),
+                metadata: ""
+            });
         }
 
         uint256 projectTokenAmount = projectTokenBalance - cashOutAmount;
@@ -1853,14 +1948,14 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                     IERC20(terminalToken).forceApprove({spender: feeTerminal, value: feeAmount});
                     beneficiaryTokenCount = IJBMultiTerminal(feeTerminal)
                         .pay({
-                            projectId: FEE_PROJECT_ID,
-                            token: terminalToken,
-                            amount: feeAmount,
-                            beneficiary: address(this),
-                            minReturnedTokens: 0,
-                            memo: "LP Fee",
-                            metadata: ""
-                        });
+                        projectId: FEE_PROJECT_ID,
+                        token: terminalToken,
+                        amount: feeAmount,
+                        beneficiary: address(this),
+                        minReturnedTokens: 0,
+                        memo: "LP Fee",
+                        metadata: ""
+                    });
                 }
 
                 // Reconcile the pre-incremented estimate with the actual token count returned by pay().

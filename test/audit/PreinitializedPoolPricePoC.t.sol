@@ -143,7 +143,7 @@ contract CodexPreinitializedPoolPricePoC is LPSplitHookV4TestBase {
 
         // M-4 fix: deployment succeeds instead of reverting.
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
 
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "project should deploy successfully with attacker price");
         assertGt(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "LP position should be created");
@@ -183,7 +183,7 @@ contract CodexPreinitializedPoolPricePoC is LPSplitHookV4TestBase {
 
         // In-band pre-initialization should be accepted — the bounded price check tolerates it.
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, address(terminalToken), 0);
+        hook.deployPool(PROJECT_ID, 0);
 
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "the project should deploy successfully with an in-band price");
         assertGt(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "an LP position should be created");
