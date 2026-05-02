@@ -85,6 +85,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     error JBUniswapV4LPSplitHook_TerminalNotFound(uint256 projectId, address token);
     error JBUniswapV4LPSplitHook_TerminalTokensNotAllowed();
     error JBUniswapV4LPSplitHook_UnauthorizedCaller();
+    error JBUniswapV4LPSplitHook_TemporaryAllowanceNotConsumed(address token, address spender, uint256 allowance);
     error JBUniswapV4LPSplitHook_UnclaimedFeeTokenChanged(address previousToken, address nextToken);
     error JBUniswapV4LPSplitHook_ZeroAddressNotAllowed();
     error JBUniswapV4LPSplitHook_ZeroLiquidity();
@@ -321,7 +322,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         return address(IJBDirectory(DIRECTORY).controllerOf(projectId));
     }
 
-    /// @notice Find the terminal token with the highest ETH-denominated value across all of the project's terminals.
+    /// @notice Find the primary terminal token with the highest ETH-denominated value across the project's terminals.
     /// @dev Converts each token's balance to 18-decimal ETH using price feeds. Falls back to raw balance comparison
     /// when no price feed exists.
     /// @param projectId The ID of the project.
@@ -369,6 +370,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             for (uint256 j; j < contextCount; j++) {
                 // Load the accounting context for this token.
                 JBAccountingContext memory context = contexts[j];
+
+                // Deployment cashes out through the primary terminal for the selected token, so ignore balances on
+                // secondary terminals that cannot satisfy the later cash-out.
+                address primaryTerminal = _primaryTerminalOf({projectId: projectId, token: context.token});
+                if (primaryTerminal == address(0) || primaryTerminal != address(term)) continue;
 
                 // Look up how much of this token the terminal holds for the project.
                 uint256 balance =
@@ -1028,6 +1034,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         IJBMultiTerminal(terminal).addToBalanceOf{value: isNative ? amount : 0}({
             projectId: projectId, token: token, amount: amount, shouldReturnHeldFees: false, memo: "", metadata: ""
         });
+
+        if (!isNative) _requireTemporaryAllowanceConsumed({token: token, spender: terminal});
     }
 
     /// @notice Add liquidity to a Uniswap V4 pool using accumulated tokens
@@ -1087,6 +1095,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint256 terminalTokenAmount;
 
         if (terminal != address(0) && cashOutAmount > 0) {
+            uint256 spendableTerminalTokenBefore = _spendableTerminalTokenBalance(terminalToken);
             uint256 effectiveMinReturn = minCashOutReturn;
             if (effectiveMinReturn == 0 && cashOutAmount > 0) {
                 uint256 cashOutRate = _getCashOutRate({
@@ -1100,7 +1109,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 }
             }
 
-            terminalTokenAmount = IJBMultiTerminal(terminal)
+            uint256 reportedTerminalTokenAmount = IJBMultiTerminal(terminal)
                 .cashOutTokensOf({
                 holder: address(this),
                 projectId: projectId,
@@ -1110,6 +1119,15 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 beneficiary: payable(address(this)),
                 metadata: ""
             });
+
+            uint256 spendableTerminalTokenAfter = _spendableTerminalTokenBalance(terminalToken);
+            uint256 actualTerminalTokenAmount = spendableTerminalTokenAfter > spendableTerminalTokenBefore
+                ? spendableTerminalTokenAfter - spendableTerminalTokenBefore
+                : 0;
+            terminalTokenAmount = reportedTerminalTokenAmount < actualTerminalTokenAmount
+                ? reportedTerminalTokenAmount
+                : actualTerminalTokenAmount;
+            if (terminalTokenAmount < effectiveMinReturn) revert JBUniswapV4LPSplitHook_InsufficientBalance();
         }
 
         uint256 projectTokenAmount = projectTokenBalance - cashOutAmount;
@@ -1223,6 +1241,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         burnParams[1] = abi.encode(key.currency0, key.currency1, address(this));
 
         _modifyLiquidities(abi.encode(burnActions, burnParams), 0);
+    }
+
+    /// @dev Reverts if a terminal kept any portion of a temporary ERC-20 allowance.
+    function _requireTemporaryAllowanceConsumed(address token, address spender) internal view {
+        uint256 allowance = IERC20(token).allowance({owner: address(this), spender: spender});
+        if (allowance != 0) revert JBUniswapV4LPSplitHook_TemporaryAllowanceNotConsumed(token, spender, allowance);
     }
 
     /// @notice Burn project tokens using the controller
@@ -1690,6 +1714,15 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         return IERC20(terminalToken).balanceOf(address(this));
     }
 
+    /// @notice Get terminal token balance not reserved for fee-token claims.
+    function _spendableTerminalTokenBalance(address terminalToken) internal view returns (uint256) {
+        uint256 balance = _getTerminalTokenBalance(terminalToken);
+        if (_isNativeToken(terminalToken)) return balance;
+
+        uint256 reserved = _reservedTokenBalance(terminalToken);
+        return balance > reserved ? balance - reserved : 0;
+    }
+
     /// @notice Check if terminal token is native ETH
     function _isNativeToken(address terminalToken) internal pure returns (bool isNative) {
         return terminalToken == JBConstants.NATIVE_TOKEN;
@@ -1950,10 +1983,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                     revert JBUniswapV4LPSplitHook_UnclaimedFeeTokenChanged(claimToken, feeProjectToken);
                 }
 
+                uint256 feeProjectTokenBalanceBefore;
+
                 // Pre-increment with feeAmount as a conservative estimate. The actual token count
                 // may differ, but any re-entrant call during pay() will see an inflated reserve,
                 // which safely prevents over-burning. We reconcile after pay() returns.
                 if (feeProjectToken != address(0)) {
+                    feeProjectTokenBalanceBefore = IERC20(feeProjectToken).balanceOf(address(this));
                     _totalOutstandingFeeTokenClaims[feeProjectToken] += feeAmount;
                     _inflightFeeRoutingCount[feeProjectToken] += 1;
                 }
@@ -1966,9 +2002,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 // mulDiv rounding yields 0 tokens, and any non-trivial floor would require
                 // an oracle dependency that doesn't belong in the LP split hook.
                 //
-                // Use the return value from pay() directly instead of balance deltas.
-                // Balance deltas are unreliable when the terminal token IS the fee project token,
-                // because the pay() call itself changes the token balance of this contract.
+                // Use the ERC-20 balance actually received by this hook instead of trusting pay()'s return value.
+                // If the terminal token is also the fee-project token, subtract the fee payment from the pre-call
+                // balance before measuring freshly received tokens.
                 if (_isNativeToken(terminalToken)) {
                     beneficiaryTokenCount = IJBMultiTerminal(feeTerminal).pay{value: feeAmount}({
                         projectId: FEE_PROJECT_ID,
@@ -1991,10 +2027,20 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                         memo: "LP Fee",
                         metadata: ""
                     });
+
+                    _requireTemporaryAllowanceConsumed({token: terminalToken, spender: feeTerminal});
                 }
 
-                // Reconcile the pre-incremented estimate with the actual token count returned by pay().
+                // Reconcile the pre-incremented estimate with the actual token count received.
                 if (feeProjectToken != address(0)) {
+                    uint256 expectedBalanceWithoutFeeTokens = feeProjectTokenBalanceBefore;
+                    if (terminalToken == feeProjectToken) expectedBalanceWithoutFeeTokens -= feeAmount;
+
+                    uint256 feeProjectTokenBalanceAfter = IERC20(feeProjectToken).balanceOf(address(this));
+                    beneficiaryTokenCount = feeProjectTokenBalanceAfter > expectedBalanceWithoutFeeTokens
+                        ? feeProjectTokenBalanceAfter - expectedBalanceWithoutFeeTokens
+                        : 0;
+
                     // Remove the estimate and apply the actual amount.
                     _totalOutstandingFeeTokenClaims[feeProjectToken] =
                         _totalOutstandingFeeTokenClaims[feeProjectToken] - feeAmount + beneficiaryTokenCount;
