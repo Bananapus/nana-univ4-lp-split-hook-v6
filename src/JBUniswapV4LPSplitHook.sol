@@ -641,6 +641,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // Clamp to valid Uniswap V4 sqrt price range.
         if (result < uint256(TickMath.MIN_SQRT_PRICE)) return TickMath.MIN_SQRT_PRICE;
         if (result > uint256(TickMath.MAX_SQRT_PRICE - 1)) return TickMath.MAX_SQRT_PRICE - 1;
+        // The value was clamped into the uint160 Uniswap sqrt-price range above.
+        // forge-lint: disable-next-line(unsafe-typecast)
         return uint160(result);
     }
 
@@ -738,6 +740,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // Clamp to valid Uniswap V4 sqrt price range.
         if (result < uint256(TickMath.MIN_SQRT_PRICE)) return TickMath.MIN_SQRT_PRICE;
         if (result > uint256(TickMath.MAX_SQRT_PRICE - 1)) return TickMath.MAX_SQRT_PRICE - 1;
+        // The value was clamped into the uint160 Uniswap sqrt-price range above.
+        // forge-lint: disable-next-line(unsafe-typecast)
         return uint160(result);
     }
 
@@ -1333,10 +1337,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             tickUpper = issuanceTick + TICK_SPACING;
 
             // Clamp to valid V4 tick range (M-46).
-            int24 minUsable = _alignTickToSpacing({tick: TickMath.MIN_TICK, spacing: TICK_SPACING}) + TICK_SPACING;
-            int24 maxUsable = _alignTickToSpacing({tick: TickMath.MAX_TICK, spacing: TICK_SPACING}) - TICK_SPACING;
-            if (tickLower < minUsable) tickLower = minUsable;
-            if (tickUpper > maxUsable) tickUpper = maxUsable;
+            int24 zeroCashOutMinUsable =
+                _alignTickToSpacing({tick: TickMath.MIN_TICK, spacing: TICK_SPACING}) + TICK_SPACING;
+            int24 zeroCashOutMaxUsable =
+                _alignTickToSpacing({tick: TickMath.MAX_TICK, spacing: TICK_SPACING}) - TICK_SPACING;
+            if (tickLower < zeroCashOutMinUsable) tickLower = zeroCashOutMinUsable;
+            if (tickUpper > zeroCashOutMaxUsable) tickUpper = zeroCashOutMaxUsable;
             if (tickLower >= tickUpper) tickUpper = tickLower + TICK_SPACING;
             return (tickLower, tickUpper);
         }
