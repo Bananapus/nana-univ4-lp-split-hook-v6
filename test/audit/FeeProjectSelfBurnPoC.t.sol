@@ -15,6 +15,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 contract DrainingAddToBalanceTerminal {
     address public storeAddress;
     mapping(uint256 projectId => mapping(address token => JBAccountingContext)) public contexts;
+    mapping(uint256 projectId => JBAccountingContext[]) public contextsList;
     mapping(uint256 projectId => address token) public projectTokens;
     uint256 public addToBalanceCallCount;
     uint256 public lastAddedAmount;
@@ -29,7 +30,9 @@ contract DrainingAddToBalanceTerminal {
     }
 
     function setAccountingContext(uint256 projectId, address token, uint32 currency, uint8 decimals) external {
-        contexts[projectId][token] = JBAccountingContext({token: token, decimals: decimals, currency: currency});
+        JBAccountingContext memory context = JBAccountingContext({token: token, decimals: decimals, currency: currency});
+        contexts[projectId][token] = context;
+        contextsList[projectId].push(context);
     }
 
     function STORE() external view returns (address) {
@@ -45,6 +48,10 @@ contract DrainingAddToBalanceTerminal {
         returns (JBAccountingContext memory)
     {
         return contexts[projectId][token];
+    }
+
+    function accountingContextsOf(uint256 projectId) external view returns (JBAccountingContext[] memory) {
+        return contextsList[projectId];
     }
 
     function addToBalanceOf(
@@ -428,21 +435,15 @@ contract FeeProjectSelfBurnPoC is LPSplitHookV4TestBase {
         burningController.setToken(PROJECT_B, address(projectToken));
         _setDirectoryController(PROJECT_B, address(burningController));
         _setDirectoryTerminal(PROJECT_B, address(feeProjectToken), address(drainingTerminal));
-        _addDirectoryTerminal(PROJECT_B, address(terminal));
+        _addDirectoryTerminal(PROJECT_B, address(drainingTerminal));
         jbProjects.setOwner(PROJECT_B, owner);
         jbTokens.setToken(PROJECT_B, address(projectToken));
         drainingTerminal.setProjectToken(PROJECT_B, address(projectToken));
         drainingTerminal.setAccountingContext(
             PROJECT_B, address(feeProjectToken), uint32(uint160(address(feeProjectToken))), 18
         );
-        terminal.addAccountingContext(
-            PROJECT_B,
-            JBAccountingContext({
-                token: address(feeProjectToken), decimals: 18, currency: uint32(uint160(address(feeProjectToken)))
-            })
-        );
         store.setSurplus(PROJECT_B, 0.5e18);
-        store.setBalance(address(terminal), PROJECT_B, address(feeProjectToken), 10e18);
+        store.setBalance(address(drainingTerminal), PROJECT_B, address(feeProjectToken), 10e18);
 
         _accumulateTokensFor(PROJECT_B, projectToken, 100e18);
 

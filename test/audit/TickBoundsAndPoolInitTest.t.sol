@@ -248,6 +248,8 @@ contract AuditFixL6Test is LPSplitHookV4TestBase {
 
     /// @dev Compute the valid tick boundaries (matching the contract's logic).
     function _minUsableTick() internal pure returns (int24) {
+        // Intentionally divide before multiplying to align the minimum tick to the spacing grid.
+        // forge-lint: disable-next-line(divide-before-multiply)
         int24 aligned = (TickMath.MIN_TICK / TICK_SPACING) * TICK_SPACING;
         if (TickMath.MIN_TICK < 0 && aligned > TickMath.MIN_TICK) {
             aligned -= TICK_SPACING;
@@ -256,6 +258,8 @@ contract AuditFixL6Test is LPSplitHookV4TestBase {
     }
 
     function _maxUsableTick() internal pure returns (int24) {
+        // Intentionally divide before multiplying to align the maximum tick to the spacing grid.
+        // forge-lint: disable-next-line(divide-before-multiply)
         int24 aligned = (TickMath.MAX_TICK / TICK_SPACING) * TICK_SPACING;
         if (TickMath.MAX_TICK < 0 && aligned > TickMath.MAX_TICK) {
             aligned -= TICK_SPACING;

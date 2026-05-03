@@ -79,6 +79,8 @@ contract Integration_HighReservedZeroTax is ForkDeployHelper {
             emit log_named_uint("  sqrtPriceX96", sqrtPriceX96);
             emit log_named_uint("  position liquidity", posLiq);
         } catch (bytes memory reason) {
+            // Expected errors are custom selectors encoded as the first 4 bytes.
+            // forge-lint: disable-next-line(unsafe-typecast)
             bytes4 selector = bytes4(reason);
             assertEq(
                 selector,

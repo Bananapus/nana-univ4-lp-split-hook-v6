@@ -9,14 +9,12 @@ import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
-import {
-    MockJBDirectory,
-    MockJBMultiTerminal,
-    MockJBPermissions,
-    MockJBProjects,
-    MockJBTokens
-} from "../mock/MockJBContracts.sol";
+import {MockJBDirectory, MockJBPermissions, MockJBProjects, MockJBTokens} from "../mock/MockJBContracts.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
+
+contract NonConsumingTerminal {
+    function addToBalanceOf(uint256, address, uint256, bool, string calldata, bytes calldata) external payable {}
+}
 
 contract AllowanceHarness is JBUniswapV4LPSplitHook {
     constructor(
@@ -44,7 +42,7 @@ contract PersistentAllowanceStealTest is Test {
     MockJBDirectory internal directory;
     MockJBProjects internal projects;
     MockJBPermissions internal permissions;
-    MockJBMultiTerminal internal terminal;
+    NonConsumingTerminal internal terminal;
     MockJBTokens internal tokens;
     MockERC20 internal terminalToken;
 
@@ -52,7 +50,7 @@ contract PersistentAllowanceStealTest is Test {
         directory = new MockJBDirectory();
         projects = new MockJBProjects();
         permissions = new MockJBPermissions();
-        terminal = new MockJBMultiTerminal();
+        terminal = new NonConsumingTerminal();
         tokens = new MockJBTokens();
         terminalToken = new MockERC20("Terminal", "TERM", 18);
 

@@ -41,7 +41,9 @@ contract FOTFeeProjectTerminal {
         return address(0);
     }
 
-    function accountingContextForTokenOf(uint256, address token) external view returns (JBAccountingContext memory) {
+    function accountingContextForTokenOf(uint256, address token) external pure returns (JBAccountingContext memory) {
+        // Test terminals use the token address as the mock currency identifier.
+        // forge-lint: disable-next-line(unsafe-typecast)
         return JBAccountingContext({token: token, decimals: 18, currency: uint32(uint160(token))});
     }
 
@@ -69,7 +71,7 @@ contract FOTFeeProjectTerminal {
         beneficiaryTokenCount = amount;
 
         TOKEN.mint(address(this), amount);
-        TOKEN.transfer(beneficiary, amount);
+        require(TOKEN.transfer(beneficiary, amount), "transfer failed");
     }
 }
 

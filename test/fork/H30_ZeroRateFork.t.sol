@@ -118,7 +118,10 @@ contract H30_ZeroRateFork is ForkDeployHelper {
         try hook.deployPool(pid, 0) {
             revert("Expected NoTerminalTokenFound revert");
         } catch (bytes memory reason) {
-            assertEq(bytes4(reason), JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoTerminalTokenFound.selector);
+            // Expected errors are custom selectors encoded as the first 4 bytes.
+            // forge-lint: disable-next-line(unsafe-typecast)
+            bytes4 selector = bytes4(reason);
+            assertEq(selector, JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoTerminalTokenFound.selector);
         }
     }
 

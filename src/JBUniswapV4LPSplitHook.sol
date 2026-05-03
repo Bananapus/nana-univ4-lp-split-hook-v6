@@ -82,10 +82,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     error JBUniswapV4LPSplitHook_Permit2AmountOverflow();
     error JBUniswapV4LPSplitHook_PoolAlreadyDeployed();
     error JBUniswapV4LPSplitHook_SplitSenderNotValidControllerOrTerminal();
+    error JBUniswapV4LPSplitHook_TemporaryAllowanceNotConsumed(address token, address spender, uint256 allowance);
     error JBUniswapV4LPSplitHook_TerminalNotFound(uint256 projectId, address token);
     error JBUniswapV4LPSplitHook_TerminalTokensNotAllowed();
     error JBUniswapV4LPSplitHook_UnauthorizedCaller();
-    error JBUniswapV4LPSplitHook_TemporaryAllowanceNotConsumed(address token, address spender, uint256 allowance);
     error JBUniswapV4LPSplitHook_UnclaimedFeeTokenChanged(address previousToken, address nextToken);
     error JBUniswapV4LPSplitHook_ZeroAddressNotAllowed();
     error JBUniswapV4LPSplitHook_ZeroLiquidity();
@@ -371,8 +371,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 // Load the accounting context for this token.
                 JBAccountingContext memory context = contexts[j];
 
-                // Deployment cashes out through the primary terminal for the selected token, so ignore balances on
-                // secondary terminals that cannot satisfy the later cash-out.
+                // Deployment will cash out the selected token through the project's primary terminal.
+                // Secondary terminals may hold balance, but they cannot satisfy that later cash-out for this token.
                 address primaryTerminal = _primaryTerminalOf({projectId: projectId, token: context.token});
                 if (primaryTerminal == address(0) || primaryTerminal != address(term)) continue;
 
@@ -403,7 +403,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                         uint256 pricePerUnit
                     ) {
                         // Normalize the balance to 18-decimal ETH using the price feed result.
-                        ethValue = mulDiv(balance, 10 ** 18, pricePerUnit);
+                        ethValue = mulDiv({x: balance, y: 10 ** 18, denominator: pricePerUnit});
                     } catch {
                         // No price feed available — skip this token so its raw balance
                         // cannot incorrectly win. If NO token has a price feed,
@@ -453,7 +453,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // Silence "unused parameter" warning — controller is required by callers for interface consistency.
         controller;
         // Resolve the project's primary terminal for this token.
-        IJBMultiTerminal terminal = IJBMultiTerminal(_primaryTerminalOf(projectId, terminalToken));
+        IJBMultiTerminal terminal = IJBMultiTerminal(_primaryTerminalOf({projectId: projectId, token: terminalToken}));
 
         // Get the store for surplus queries.
         IJBTerminalStore store = terminal.STORE();
@@ -666,7 +666,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         returns (uint256 projectTokenOutAmount)
     {
         // Look up the project's primary terminal for this token.
-        address terminal = _primaryTerminalOf(projectId, terminalToken);
+        address terminal = _primaryTerminalOf({projectId: projectId, token: terminalToken});
         // Fetch the terminal's accounting context (decimals, currency) for this project/token pair.
         JBAccountingContext memory context =
             IJBMultiTerminal(terminal).accountingContextForTokenOf({projectId: projectId, token: terminalToken});
@@ -745,6 +745,14 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         return uint160(result);
     }
 
+    /// @notice Get the terminal token balance currently held by this hook.
+    /// @param terminalToken The terminal token to read.
+    /// @return balance This hook's native ETH or ERC-20 balance for `terminalToken`.
+    function _getTerminalTokenBalance(address terminalToken) internal view returns (uint256 balance) {
+        if (_isNativeToken(terminalToken)) return address(this).balance;
+        return IERC20(terminalToken).balanceOf(address(this));
+    }
+
     /// @notice Get token decimals, defaulting to 18 if unavailable.
     /// @param token The token address to query decimals for.
     /// @return decimals The token's decimal count (defaults to 18 for native ETH or non-compliant tokens).
@@ -761,6 +769,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
     }
 
+    /// @notice Whether `terminalToken` is Juicebox's native-token sentinel.
+    /// @param terminalToken The terminal token to check.
+    /// @return isNative True if `terminalToken` represents native ETH.
+    function _isNativeToken(address terminalToken) internal pure returns (bool isNative) {
+        return terminalToken == JBConstants.NATIVE_TOKEN;
+    }
+
     /// @notice Look up the next token ID from the position manager.
     function _nextTokenId() internal view returns (uint256) {
         return POSITION_MANAGER.nextTokenId();
@@ -774,6 +789,51 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @notice Look up the primary terminal for a project/token pair.
     function _primaryTerminalOf(uint256 projectId, address token) internal view returns (address) {
         return address(IJBDirectory(DIRECTORY).primaryTerminalOf({projectId: projectId, token: token}));
+    }
+
+    /// @notice Revert if `spender` still has any temporary ERC-20 allowance from this hook.
+    /// @dev The hook grants exact-use allowances before external terminal calls. A leftover allowance means the
+    /// downstream contract did not consume the approval as expected, leaving token spend authority live.
+    /// @param token The ERC-20 token whose allowance was temporarily granted.
+    /// @param spender The contract that was expected to consume the allowance.
+    function _requireTemporaryAllowanceConsumed(address token, address spender) internal view {
+        // Check after the external call returns, when a well-behaved terminal should have spent the full allowance.
+        uint256 allowance = IERC20(token).allowance({owner: address(this), spender: spender});
+        if (allowance != 0) {
+            revert JBUniswapV4LPSplitHook_TemporaryAllowanceNotConsumed({
+                token: token, spender: spender, allowance: allowance
+            });
+        }
+    }
+
+    /// @notice Returns the portion of this contract's balance of `token` that is not currently free to reuse.
+    /// @dev When no fee route is in flight, the reserved amount is the total ERC-20 balance already promised to
+    /// project beneficiaries through `claimableFeeTokens`.
+    /// @dev While fee routing for `token` is mid-flight, reentrant code must conservatively treat the full current
+    /// balance as reserved because the final claim bookkeeping has not been written yet.
+    /// @param token The ERC-20 token whose reserved balance should be returned.
+    /// @return reservedBalance The amount of `token` balance that callers must treat as unavailable.
+    function _reservedTokenBalance(address token) internal view returns (uint256 reservedBalance) {
+        // During fee routing, the contract may already be holding freshly minted fee tokens that have not yet been
+        // reflected in `_totalOutstandingFeeTokenClaims`. Treat the whole balance as reserved until routing finishes.
+        if (_inflightFeeRoutingCount[token] != 0) return IERC20(token).balanceOf(address(this));
+        return _totalOutstandingFeeTokenClaims[token];
+    }
+
+    /// @notice Get the terminal-token balance this hook can spend for LP operations.
+    /// @dev ERC-20 balances can include fee-project tokens that already belong to claimants. Those reserves must not
+    /// be used as cash-out proceeds or LP principal.
+    /// @param terminalToken The terminal token to inspect.
+    /// @return spendableBalance The balance available after excluding reserved fee-token claims.
+    function _spendableTerminalTokenBalance(address terminalToken) internal view returns (uint256 spendableBalance) {
+        uint256 balance = _getTerminalTokenBalance(terminalToken);
+
+        // Native fee proceeds are tracked as credits, not as native-token claim reserves, so the whole balance is free.
+        if (_isNativeToken(terminalToken)) return balance;
+
+        // Keep claimable fee ERC-20s out of LP accounting so they cannot be spent before beneficiaries claim them.
+        uint256 reserved = _reservedTokenBalance(terminalToken);
+        return balance > reserved ? balance - reserved : 0;
     }
 
     /// @notice Look up the ERC-20 token address for a project.
@@ -900,7 +960,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         if (projectTokenBalance == 0) revert JBUniswapV4LPSplitHook_NoTokensAccumulated();
 
-        address terminal = _primaryTerminalOf(projectId, terminalToken);
+        address terminal = _primaryTerminalOf({projectId: projectId, token: terminalToken});
         if (terminal == address(0)) revert JBUniswapV4LPSplitHook_InvalidTerminalToken();
 
         // Flip the project into post-deploy burn mode before any external calls so reentrancy cannot
@@ -973,7 +1033,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             account: _ownerOf(projectId), projectId: projectId, permissionId: JBPermissionIds.SET_BUYBACK_POOL
         });
 
-        address terminal = _primaryTerminalOf(projectId, terminalToken);
+        address terminal = _primaryTerminalOf({projectId: projectId, token: terminalToken});
         if (terminal == address(0)) revert JBUniswapV4LPSplitHook_InvalidTerminalToken();
 
         uint256 tokenId = tokenIdOf[projectId][terminalToken];
@@ -1028,8 +1088,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     function _addToProjectBalance(uint256 projectId, address token, uint256 amount, bool isNative) internal {
         if (amount == 0) return;
 
-        address terminal = _primaryTerminalOf(projectId, token);
-        if (terminal == address(0)) revert JBUniswapV4LPSplitHook_TerminalNotFound(projectId, token);
+        address terminal = _primaryTerminalOf({projectId: projectId, token: token});
+        if (terminal == address(0)) {
+            revert JBUniswapV4LPSplitHook_TerminalNotFound({projectId: projectId, token: token});
+        }
 
         if (!isNative) {
             IERC20(token).forceApprove({spender: terminal, value: amount});
@@ -1093,13 +1155,17 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         });
 
         // Cash out the computed fraction to get terminal tokens for pairing.
-        // Use the explicit return value instead of balance-delta to prevent cross-project token capture.
-        address terminal = _primaryTerminalOf(projectId, terminalToken);
+        address terminal = _primaryTerminalOf({projectId: projectId, token: terminalToken});
 
         uint256 terminalTokenAmount;
 
         if (terminal != address(0) && cashOutAmount > 0) {
+            // Snapshot only the balance that is not reserved for fee-token claims. The post-cash-out delta below
+            // must not count ERC-20s already owed to projects that have not claimed their routed LP fees yet.
             uint256 spendableTerminalTokenBefore = _spendableTerminalTokenBalance(terminalToken);
+
+            // If the deployer did not provide an explicit slippage floor, derive one from the current cash-out rate.
+            // This keeps manual deployments protected while preserving an escape hatch for unusual market conditions.
             uint256 effectiveMinReturn = minCashOutReturn;
             if (effectiveMinReturn == 0 && cashOutAmount > 0) {
                 uint256 cashOutRate = _getCashOutRate({
@@ -1113,6 +1179,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 }
             }
 
+            // Ask the terminal to cash out first. This enforces the terminal's accounting and returns its reported
+            // reclaimed amount, which is the optimistic upper bound for how much this hook should credit to LP pairing.
             uint256 reportedTerminalTokenAmount = IJBMultiTerminal(terminal)
                 .cashOutTokensOf({
                 holder: address(this),
@@ -1124,13 +1192,20 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 metadata: ""
             });
 
+            // Reconcile the terminal report with the actual spendable balance delta. Fee-on-transfer tokens or
+            // nonstandard terminals can make the reported amount differ from what the hook can really spend.
             uint256 spendableTerminalTokenAfter = _spendableTerminalTokenBalance(terminalToken);
             uint256 actualTerminalTokenAmount = spendableTerminalTokenAfter > spendableTerminalTokenBefore
                 ? spendableTerminalTokenAfter - spendableTerminalTokenBefore
                 : 0;
+
+            // Use the smaller value so LP deployment never spends tokens that did not arrive, and never captures
+            // unrelated balance that was already sitting in the hook.
             terminalTokenAmount = reportedTerminalTokenAmount < actualTerminalTokenAmount
                 ? reportedTerminalTokenAmount
                 : actualTerminalTokenAmount;
+
+            // A derived or caller-provided minimum is still enforced against the reconciled spendable amount.
             if (terminalTokenAmount < effectiveMinReturn) revert JBUniswapV4LPSplitHook_InsufficientBalance();
         }
 
@@ -1245,12 +1320,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         burnParams[1] = abi.encode(key.currency0, key.currency1, address(this));
 
         _modifyLiquidities(abi.encode(burnActions, burnParams), 0);
-    }
-
-    /// @dev Reverts if a terminal kept any portion of a temporary ERC-20 allowance.
-    function _requireTemporaryAllowanceConsumed(address token, address spender) internal view {
-        uint256 allowance = IERC20(token).allowance({owner: address(this), spender: spender});
-        if (allowance != 0) revert JBUniswapV4LPSplitHook_TemporaryAllowanceNotConsumed(token, spender, allowance);
     }
 
     /// @notice Burn project tokens using the controller
@@ -1712,28 +1781,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         });
     }
 
-    /// @notice Get terminal token balance held by this contract.
-    function _getTerminalTokenBalance(address terminalToken) internal view returns (uint256) {
-        if (_isNativeToken(terminalToken)) {
-            return address(this).balance;
-        }
-        return IERC20(terminalToken).balanceOf(address(this));
-    }
-
-    /// @notice Get terminal token balance not reserved for fee-token claims.
-    function _spendableTerminalTokenBalance(address terminalToken) internal view returns (uint256) {
-        uint256 balance = _getTerminalTokenBalance(terminalToken);
-        if (_isNativeToken(terminalToken)) return balance;
-
-        uint256 reserved = _reservedTokenBalance(terminalToken);
-        return balance > reserved ? balance - reserved : 0;
-    }
-
-    /// @notice Check if terminal token is native ETH
-    function _isNativeToken(address terminalToken) internal pure returns (bool isNative) {
-        return terminalToken == JBConstants.NATIVE_TOKEN;
-    }
-
     /// @notice Mint a V4 position via PositionManager
     function _mintPosition(
         PoolKey memory key,
@@ -1968,7 +2015,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         uint256 beneficiaryTokenCount = 0;
         if (feeAmount > 0) {
-            address feeTerminal = _primaryTerminalOf(FEE_PROJECT_ID, terminalToken);
+            address feeTerminal = _primaryTerminalOf({projectId: FEE_PROJECT_ID, token: terminalToken});
             // If no fee terminal is configured, the fee project simply misses this collection and the full amount
             // stays in the project's normal split-hook flow.
             if (feeTerminal == address(0)) {
@@ -1986,16 +2033,24 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 address claimToken = claimableFeeTokenOf[projectId];
                 // Reject mixing outstanding claims across different fee-project ERC-20s in the same project bucket.
                 if (claimToken != address(0) && claimToken != feeProjectToken) {
-                    revert JBUniswapV4LPSplitHook_UnclaimedFeeTokenChanged(claimToken, feeProjectToken);
+                    revert JBUniswapV4LPSplitHook_UnclaimedFeeTokenChanged({
+                        previousToken: claimToken, nextToken: feeProjectToken
+                    });
                 }
 
+                // Only ERC-20 fee projects need a token-balance snapshot. Credit-only fee projects use the
+                // terminal's returned credit count and skip the balance reconciliation below.
                 uint256 feeProjectTokenBalanceBefore;
 
                 // Pre-increment with feeAmount as a conservative estimate. The actual token count
                 // may differ, but any re-entrant call during pay() will see an inflated reserve,
                 // which safely prevents over-burning. We reconcile after pay() returns.
                 if (feeProjectToken != address(0)) {
+                    // Snapshot before `pay()` so the post-pay delta measures only newly minted fee-project ERC-20s.
                     feeProjectTokenBalanceBefore = IERC20(feeProjectToken).balanceOf(address(this));
+
+                    // Reserve conservatively during the external call. This prevents reentrant LP-fee collection or
+                    // burn paths from treating in-flight fee tokens as free project-token balance.
                     _totalOutstandingFeeTokenClaims[feeProjectToken] += feeAmount;
                     _inflightFeeRoutingCount[feeProjectToken] += 1;
                 }
@@ -2037,17 +2092,24 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                     _requireTemporaryAllowanceConsumed({token: terminalToken, spender: feeTerminal});
                 }
 
-                // Reconcile the pre-incremented estimate with the actual token count received.
+                // Reconcile the pre-incremented reserve with the actual ERC-20s received by this hook.
                 if (feeProjectToken != address(0)) {
+                    // Start from the pre-pay balance. Any increase above this baseline is newly claimable fee tokens.
                     uint256 expectedBalanceWithoutFeeTokens = feeProjectTokenBalanceBefore;
+
+                    // If fees are paid in the fee-project ERC-20 itself, the `pay()` call first transfers `feeAmount`
+                    // out of this hook. Subtract it from the baseline so the later balance delta does not hide freshly
+                    // minted fee-project tokens. A successful pay implies the pre-pay balance covered `feeAmount`.
                     if (terminalToken == feeProjectToken) expectedBalanceWithoutFeeTokens -= feeAmount;
 
+                    // Prefer the observed balance delta over the terminal return value so fee-on-transfer or
+                    // nonstandard token behavior cannot overstate what this hook actually received.
                     uint256 feeProjectTokenBalanceAfter = IERC20(feeProjectToken).balanceOf(address(this));
                     beneficiaryTokenCount = feeProjectTokenBalanceAfter > expectedBalanceWithoutFeeTokens
                         ? feeProjectTokenBalanceAfter - expectedBalanceWithoutFeeTokens
                         : 0;
 
-                    // Remove the estimate and apply the actual amount.
+                    // Remove the conservative estimate and reserve the reconciled token amount for later claiming.
                     _totalOutstandingFeeTokenClaims[feeProjectToken] =
                         _totalOutstandingFeeTokenClaims[feeProjectToken] - feeAmount + beneficiaryTokenCount;
                     _inflightFeeRoutingCount[feeProjectToken] -= 1;
@@ -2079,20 +2141,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
 
         emit LPFeesRouted(projectId, terminalToken, amount, feeAmount, remainingAmount, beneficiaryTokenCount);
-    }
-
-    /// @notice Returns the portion of this contract's balance of `token` that is not currently free to reuse.
-    /// @dev When no fee route is in flight, the reserved amount is the total ERC-20 balance already promised to
-    /// project beneficiaries through `claimableFeeTokens`.
-    /// @dev While fee routing for `token` is mid-flight, reentrant code must conservatively treat the full current
-    /// balance as reserved because the final claim bookkeeping has not been written yet.
-    /// @param token The ERC-20 token whose reserved balance should be returned.
-    /// @return reservedBalance The amount of `token` balance that callers must treat as unavailable.
-    function _reservedTokenBalance(address token) internal view returns (uint256) {
-        // During fee routing, the contract may already be holding freshly minted fee tokens that have not yet been
-        // reflected in `_totalOutstandingFeeTokenClaims`. Treat the whole balance as reserved until routing finishes.
-        if (_inflightFeeRoutingCount[token] != 0) return IERC20(token).balanceOf(address(this));
-        return _totalOutstandingFeeTokenClaims[token];
     }
 
     /// @notice Sort input tokens in order expected by Uniswap V4 (token0 < token1)

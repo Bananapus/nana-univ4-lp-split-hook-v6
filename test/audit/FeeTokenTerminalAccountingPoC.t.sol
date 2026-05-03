@@ -8,6 +8,7 @@ import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingCo
 contract PullingTerminal {
     address public storeAddress;
     mapping(uint256 projectId => mapping(address token => JBAccountingContext)) public contexts;
+    mapping(uint256 projectId => JBAccountingContext[]) public contextsList;
     mapping(uint256 projectId => address token) public projectTokens;
 
     function setStore(address store) external {
@@ -19,7 +20,9 @@ contract PullingTerminal {
     }
 
     function setAccountingContext(uint256 projectId, address token, uint32 currency, uint8 decimals) external {
-        contexts[projectId][token] = JBAccountingContext({token: token, decimals: decimals, currency: currency});
+        JBAccountingContext memory context = JBAccountingContext({token: token, decimals: decimals, currency: currency});
+        contexts[projectId][token] = context;
+        contextsList[projectId].push(context);
     }
 
     function STORE() external view returns (address) {
@@ -35,6 +38,10 @@ contract PullingTerminal {
         returns (JBAccountingContext memory)
     {
         return contexts[projectId][token];
+    }
+
+    function accountingContextsOf(uint256 projectId) external view returns (JBAccountingContext[] memory) {
+        return contextsList[projectId];
     }
 
     function pay(
@@ -125,13 +132,8 @@ contract FeeTokenTerminalAccountingPoC is LPSplitHookV4TestBase {
 
         // Wire feeProjectToken for auto-select: add accounting context and set balance higher
         // than terminalToken so auto-select picks feeProjectToken as the terminal token.
-        terminal.addAccountingContext(
-            PROJECT_ID,
-            JBAccountingContext({
-                token: address(feeProjectToken), decimals: 18, currency: uint32(uint160(address(feeProjectToken)))
-            })
-        );
-        store.setBalance(address(terminal), PROJECT_ID, address(feeProjectToken), 100e18);
+        _addDirectoryTerminal(PROJECT_ID, address(pullingTerminal));
+        store.setBalance(address(pullingTerminal), PROJECT_ID, address(feeProjectToken), 100e18);
         // Clear terminalToken balance so auto-select doesn't pick it
         store.setBalance(address(terminal), PROJECT_ID, address(terminalToken), 0);
     }

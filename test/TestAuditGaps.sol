@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
+import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 
 /// @notice Audit gap tests: MEV/sandwich simulation on rebalance and extreme price scenarios.
 /// @dev These tests verify that the rebalance operation is resistant to sandwich-like
@@ -350,8 +351,7 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
     // 11. Deploy with very high surplus (extreme cash out rate)
     // -----------------------------------------------------------------------
 
-    /// @notice With a very high surplus, deployment should still reject a pool that
-    ///         was already initialized at a different price.
+    /// @notice With a very high quoted surplus, deployment should reject if the terminal under-delivers.
     function test_ExtremePrice_HighSurplus() public {
         uint256 highSurplusProject = 6;
         _setupProject(highSurplusProject);
@@ -361,11 +361,12 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
 
         _accumulateTokensForProject(highSurplusProject, 500e18);
 
-        // High surplus produces an extreme price, but deployment should still succeed
-        // since no pre-initialized pool exists and the computed price is valid.
+        // High surplus produces an aggressive derived minimum. The mock terminal's default
+        // 50% reclaim under-delivers relative to that quote, so the slippage guard should fire.
         vm.prank(owner);
+        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientBalance.selector);
         hook.deployPool(highSurplusProject, 0);
-        assertTrue(hook.hasDeployedPool(highSurplusProject), "high surplus project should deploy successfully");
+        assertFalse(hook.hasDeployedPool(highSurplusProject), "high surplus project should not deploy");
     }
 
     // -----------------------------------------------------------------------

@@ -55,6 +55,18 @@ contract M45SwapHelper is IUnlockCallback {
         poolManager.unlock(abi.encode(SwapCallbackData(key, zeroForOne, amountSpecified, msg.sender)));
     }
 
+    function _amountOwedToPool(int128 delta) private pure returns (uint256 amount) {
+        // Negative BalanceDelta values mean the swapper owes tokens to the pool.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        amount = uint256(uint128(-delta));
+    }
+
+    function _amountOwedToSender(int128 delta) private pure returns (uint256 amount) {
+        // Positive BalanceDelta values mean the pool owes tokens to the swapper.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        amount = uint256(uint128(delta));
+    }
+
     function unlockCallback(bytes calldata data) external returns (bytes memory) {
         require(msg.sender == address(poolManager), "only pool manager");
         SwapCallbackData memory params = abi.decode(data, (SwapCallbackData));
@@ -70,30 +82,36 @@ contract M45SwapHelper is IUnlockCallback {
         int128 delta0 = delta.amount0();
         int128 delta1 = delta.amount1();
         if (delta0 < 0) {
-            uint256 amountOwed = uint256(uint128(-delta0));
+            uint256 amountOwed = _amountOwedToPool(delta0);
             if (params.key.currency0.isAddressZero()) {
                 poolManager.settle{value: amountOwed}();
             } else {
                 poolManager.sync(params.key.currency0);
-                IERC20(Currency.unwrap(params.key.currency0))
-                    .transferFrom(params.sender, address(poolManager), amountOwed);
+                require(
+                    IERC20(Currency.unwrap(params.key.currency0))
+                        .transferFrom(params.sender, address(poolManager), amountOwed),
+                    "TRANSFER_FROM_FAILED"
+                );
                 poolManager.settle();
             }
         } else if (delta0 > 0) {
-            poolManager.take(params.key.currency0, params.sender, uint256(uint128(delta0)));
+            poolManager.take(params.key.currency0, params.sender, _amountOwedToSender(delta0));
         }
         if (delta1 < 0) {
-            uint256 amountOwed = uint256(uint128(-delta1));
+            uint256 amountOwed = _amountOwedToPool(delta1);
             if (params.key.currency1.isAddressZero()) {
                 poolManager.settle{value: amountOwed}();
             } else {
                 poolManager.sync(params.key.currency1);
-                IERC20(Currency.unwrap(params.key.currency1))
-                    .transferFrom(params.sender, address(poolManager), amountOwed);
+                require(
+                    IERC20(Currency.unwrap(params.key.currency1))
+                        .transferFrom(params.sender, address(poolManager), amountOwed),
+                    "TRANSFER_FROM_FAILED"
+                );
                 poolManager.settle();
             }
         } else if (delta1 > 0) {
-            poolManager.take(params.key.currency1, params.sender, uint256(uint128(delta1)));
+            poolManager.take(params.key.currency1, params.sender, _amountOwedToSender(delta1));
         }
         return "";
     }
