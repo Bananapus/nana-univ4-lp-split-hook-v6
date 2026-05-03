@@ -405,7 +405,7 @@ contract FeeProjectSelfBurnPoC is LPSplitHookV4TestBase {
 
     /// @notice When a project uses the fee project's ERC-20 as its terminal token, `_handleLeftoverTokens`
     ///         must still exclude `_totalOutstandingFeeTokenClaims` from the terminal token sweep so that
-    ///         project A's reserved fee-token claims are not consumed by project B.
+    ///         project A's committed fee-token claims are not consumed by project B.
     function test_TerminalTokenLeftoverSweepPreservesOutstandingFeeClaims() public {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
 

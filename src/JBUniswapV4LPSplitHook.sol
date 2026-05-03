@@ -806,34 +806,35 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
     }
 
-    /// @notice Returns the portion of this contract's balance of `token` that is not currently free to reuse.
-    /// @dev When no fee route is in flight, the reserved amount is the total ERC-20 balance already promised to
-    /// project beneficiaries through `claimableFeeTokens`.
+    /// @notice Returns the portion of this contract's balance of `token` that is already committed to fee claims.
+    /// @dev When no fee route is in flight, this is the total ERC-20 balance already promised to project beneficiaries
+    /// through `claimableFeeTokens`.
     /// @dev While fee routing for `token` is mid-flight, reentrant code must conservatively treat the full current
-    /// balance as reserved because the final claim bookkeeping has not been written yet.
-    /// @param token The ERC-20 token whose reserved balance should be returned.
-    /// @return reservedBalance The amount of `token` balance that callers must treat as unavailable.
-    function _reservedTokenBalance(address token) internal view returns (uint256 reservedBalance) {
+    /// balance as unavailable because the final claim bookkeeping has not been written yet.
+    /// @param token The ERC-20 token whose committed fee-claim balance should be returned.
+    /// @return unavailableBalance The amount of `token` balance that callers must treat as unavailable.
+    function _unavailableFeeTokenBalance(address token) internal view returns (uint256 unavailableBalance) {
         // During fee routing, the contract may already be holding freshly minted fee tokens that have not yet been
-        // reflected in `_totalOutstandingFeeTokenClaims`. Treat the whole balance as reserved until routing finishes.
+        // reflected in `_totalOutstandingFeeTokenClaims`. Treat the whole balance as unavailable until routing
+        // finishes.
         if (_inflightFeeRoutingCount[token] != 0) return IERC20(token).balanceOf(address(this));
         return _totalOutstandingFeeTokenClaims[token];
     }
 
     /// @notice Get the terminal-token balance this hook can spend for LP operations.
-    /// @dev ERC-20 balances can include fee-project tokens that already belong to claimants. Those reserves must not
-    /// be used as cash-out proceeds or LP principal.
+    /// @dev ERC-20 balances can include fee-project tokens that already belong to claimants. Those unavailable tokens
+    /// must not be used as cash-out proceeds or LP principal.
     /// @param terminalToken The terminal token to inspect.
-    /// @return spendableBalance The balance available after excluding reserved fee-token claims.
+    /// @return spendableBalance The balance available after excluding committed fee-token claims.
     function _spendableTerminalTokenBalance(address terminalToken) internal view returns (uint256 spendableBalance) {
         uint256 balance = _getTerminalTokenBalance(terminalToken);
 
-        // Native fee proceeds are tracked as credits, not as native-token claim reserves, so the whole balance is free.
+        // Native fee proceeds are tracked as credits, not as claimable ERC-20 balances, so the whole balance is free.
         if (_isNativeToken(terminalToken)) return balance;
 
         // Keep claimable fee ERC-20s out of LP accounting so they cannot be spent before beneficiaries claim them.
-        uint256 reserved = _reservedTokenBalance(terminalToken);
-        return balance > reserved ? balance - reserved : 0;
+        uint256 unavailable = _unavailableFeeTokenBalance(terminalToken);
+        return balance > unavailable ? balance - unavailable : 0;
     }
 
     /// @notice Look up the ERC-20 token address for a project.
@@ -1008,7 +1009,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             // covers accumulated total. The standard controller transfers tokens before calling
             // processSplitWith, but custom controllers may not — this guards against accounting drift.
             if (
-                IERC20(projectToken).balanceOf(address(this)) - _reservedTokenBalance(projectToken)
+                IERC20(projectToken).balanceOf(address(this)) - _unavailableFeeTokenBalance(projectToken)
                     < accumulatedProjectTokens[context.projectId]
             ) {
                 revert JBUniswapV4LPSplitHook_InsufficientBalance();
@@ -1337,11 +1338,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Burn received project tokens in deployment stage
     function _burnReceivedTokens(uint256 projectId, address projectToken) internal {
-        // Get this contract's balance of the project token, minus any fee tokens reserved
-        // for other projects. Without this subtraction, fee tokens (e.g. JBX) held on behalf
+        // Get this contract's balance of the project token, minus any fee tokens committed
+        // to other projects. Without this subtraction, fee tokens (e.g. JBX) held on behalf
         // of projects that routed LP fees would be incorrectly burned.
         uint256 projectTokenBalance =
-            IERC20(projectToken).balanceOf(address(this)) - _reservedTokenBalance(projectToken);
+            IERC20(projectToken).balanceOf(address(this)) - _unavailableFeeTokenBalance(projectToken);
 
         if (projectTokenBalance > 0) {
             // Burn the project tokens to reduce circulating supply.
