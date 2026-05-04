@@ -371,9 +371,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 // Load the accounting context for this token.
                 JBAccountingContext memory context = contexts[j];
 
-                // This hook keys each LP by terminal token and later cashes out through the project's primary terminal
-                // for that token. Ignore same-token secondary terminals so auto-selection matches the terminal this
-                // hook will actually use.
+                // This hook keys each LP by terminal token and, when it operates, cashes out through the project's
+                // primary terminal for that token. Holders may still cash out directly from same-token secondary
+                // terminals, but those balances are not available to this hook's primary-terminal path.
                 address primaryTerminal = _primaryTerminalOf({projectId: projectId, token: context.token});
                 if (primaryTerminal == address(0) || primaryTerminal != address(term)) continue;
 
