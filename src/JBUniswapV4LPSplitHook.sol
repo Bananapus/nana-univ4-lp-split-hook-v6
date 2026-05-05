@@ -136,10 +136,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @notice The Permit2 utility used to approve tokens for PositionManager.
     IAllowanceTransfer public immutable PERMIT2;
 
-    /// @notice Uniswap V4 PoolManager address
+    /// @notice The Uniswap V4 pool manager contract that coordinates all pool operations.
     IPoolManager public immutable POOL_MANAGER;
 
-    /// @notice Uniswap V4 PositionManager address
+    /// @notice The Uniswap V4 position manager contract that handles liquidity position NFTs.
     IPositionManager public immutable POSITION_MANAGER;
 
     /// @notice JBProjects (to find project owners)
@@ -858,7 +858,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @dev ERC-20 fee tokens are claimed first, followed by any fee credits that were accrued while the fee project
     /// had no ERC-20. Credit claims are best-effort: if the downstream controller rejects the transfer, the pending
     /// credit balance is restored so it can be retried later without blocking the ERC-20 claim path.
-    /// @param projectId The project whose accumulated fee proceeds are being claimed.
+    /// @param projectId The project to claim accumulated fee proceeds for.
     /// @param beneficiary The address that should receive any claimed fee proceeds.
     function claimFeeTokensFor(uint256 projectId, address beneficiary) external {
         _requirePermissionFrom({
@@ -879,7 +879,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @notice Claims ERC-20 fee tokens that have accrued for `projectId`.
     /// @dev State is cleared before the transfer so any revert from the ERC-20 send restores both bookkeeping and the
     /// event in the same frame.
-    /// @param projectId The project whose fee-token claim is being processed.
+    /// @param projectId The project whose fee-token claim to process.
     /// @param beneficiary The address that should receive the claimed ERC-20 fee tokens.
     /// @param tokenAmount The number of ERC-20 fee tokens to transfer.
     function _claimFeeTokens(uint256 projectId, address beneficiary, uint256 tokenAmount) internal {
@@ -901,7 +901,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @notice Claims fee proceeds that were accrued as fee-project credits for `projectId`.
     /// @dev Credits are optimistically cleared before the controller call. If the downstream controller rejects the
     /// transfer, the credit balance is restored so a paused or misconfigured fee project does not block ERC-20 claims.
-    /// @param projectId The project whose fee-credit claim is being processed.
+    /// @param projectId The project whose fee-credit claim to process.
     /// @param beneficiary The address that should receive the claimed fee-project credits.
     /// @param creditAmount The number of fee-project credits to transfer.
     function _claimFeeCredits(uint256 projectId, address beneficiary, uint256 creditAmount) internal {
@@ -1505,7 +1505,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @dev Uses `DECREASE_LIQUIDITY(0)` to trigger fee collection without removing any principal, followed by
     /// `TAKE_PAIR` to transfer the fees to this contract. Terminal-token fees are added to the project's balance;
     /// project-token fees are burned to avoid inflating supply.
-    /// @param projectId The ID of the Juicebox project whose LP fees are being collected.
+    /// @param projectId The ID of the Juicebox project whose LP fees to collect.
     /// @param projectToken The project's ERC-20 token address.
     /// @param terminalToken The terminal token (e.g. ETH or USDC) paired with the project token.
     /// @param tokenId The Uniswap V4 position NFT token ID to collect fees from.
@@ -1882,7 +1882,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// `JBUniswapV4LPSplitHook_InsufficientLiquidity` if the resulting liquidity is zero (e.g. price moved entirely
     /// outside the new tick range), preventing `tokenIdOf` from being left stale. Any leftover tokens after minting
     /// are routed back to the project via per-project snapshot-delta leftover handling.
-    /// @param projectId The ID of the Juicebox project being rebalanced.
+    /// @param projectId The ID of the Juicebox project to rebalance.
     /// @param projectToken The project's ERC-20 token address.
     /// @param terminalToken The terminal token paired with the project token.
     /// @param key The pool key identifying the Uniswap V4 pool.
