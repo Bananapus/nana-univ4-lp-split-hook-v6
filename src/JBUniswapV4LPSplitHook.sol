@@ -37,24 +37,23 @@ import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTran
 import {IJBUniswapV4LPSplitHook} from "./interfaces/IJBUniswapV4LPSplitHook.sol";
 
 /// @custom:benediction DEVS BENEDICAT ET PROTEGAT CONTRACTVS MEAM
-/**
- * @title JBUniswapV4LPSplitHook
- * @notice JuiceboxV4 IJBSplitHook contract that manages a two-stage deployment process:
- *
- * Before pool deployment:
- * - Accumulate project tokens received via reserved token splits
- * - Pool deployment is triggered manually by the project owner or authorized operator
- *
- * After pool deployment:
- * - Burn any newly received project tokens
- * - Route LP fees back to the project (with configurable fee split)
- * - Support liquidity rebalancing as rates change
- *
- * @dev This contract is the creator of the projectToken/terminalToken Uniswap V4 pool.
- * @dev Any tokens held by the contract can be added to a Uniswap V4 LP position.
- * @dev For any given Uniswap V4 pool, the contract will control a single LP position.
- * @dev Pool deployment requires SET_BUYBACK_POOL permission from the project owner.
- */
+/// @notice A split hook that builds and manages a Uniswap V4 liquidity position for a Juicebox project, using the
+/// project's reserved-token distributions as the seed capital. The lifecycle has two stages:
+///
+/// 1. Accumulation — Each time the project distributes reserved tokens, the hook's share is held in escrow. Once the
+/// project owner (or anyone, after sufficient weight decay) triggers `deployPool`, the accumulated tokens are paired
+/// with terminal tokens obtained via a proportional cash-out, and the resulting Uniswap V4 LP position is minted.
+///
+/// 2. Burn-and-route — After the pool exists, any further reserved tokens sent to the hook are burned immediately to
+/// reduce circulating supply. LP trading fees are collected periodically and routed back to the project's terminal
+/// balance (with an optional protocol fee split to a configurable fee project).
+///
+/// The hook also supports `rebalanceLiquidity`, which re-centers the LP tick range around the project's current
+/// issuance and cash-out prices when they drift from the original deployment parameters.
+///
+/// @dev Each clone manages exactly one Uniswap V4 pool per project (one terminal-token pairing). Pool deployment
+/// requires `SET_BUYBACK_POOL` permission. The pool uses a 1% fee tier, 200-tick spacing, and a shared oracle hook
+/// for TWAP observations.
 contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPermissioned {
     using JBRulesetMetadataResolver for JBRuleset;
     using SafeERC20 for IERC20;
@@ -295,6 +294,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     // ------------------------- external views -------------------------- //
     //*********************************************************************//
 
+    /// @notice Whether this contract implements a given interface (ERC-165).
     function supportsInterface(bytes4 interfaceId) public pure override returns (bool) {
         return interfaceId == type(IJBUniswapV4LPSplitHook).interfaceId || interfaceId == type(IJBSplitHook).interfaceId;
     }
@@ -303,12 +303,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     // -------------------------- public views --------------------------- //
     //*********************************************************************//
 
-    /// @notice Check if a pool has been deployed for a project/terminal token pair
+    /// @notice Whether a Uniswap V4 LP position has been minted for a project's terminal-token pair.
     function isPoolDeployed(uint256 projectId, address terminalToken) public view returns (bool deployed) {
         return tokenIdOf[projectId][terminalToken] != 0;
     }
 
-    /// @notice Get the PoolKey for a deployed project/terminal token pair
+    /// @notice The Uniswap V4 pool key (currency pair, fee, tick spacing, and hook) for a project's deployed pool.
     function poolKeyOf(uint256 projectId, address terminalToken) public view returns (PoolKey memory key) {
         return poolKeysOf[projectId][terminalToken];
     }
@@ -923,7 +923,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
     }
 
-    /// @notice Collect LP fees and route them back to the project.
+    /// @notice Collect accrued Uniswap LP trading fees for a project and route them back to its terminal balance. The
+    /// terminal-token portion is deposited (minus an optional fee-project cut); the project-token portion is burned.
+    /// Callable by anyone.
     /// @param projectId The ID of the project whose LP fees to collect.
     /// @param terminalToken The terminal token paired with the project token in the pool.
     // forge-lint: disable-next-line(mixed-case-function)
@@ -942,7 +944,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         });
     }
 
-    /// @notice Deploy a Uniswap V4 pool for a project using accumulated tokens
+    /// @notice Create the Uniswap V4 pool and mint the initial LP position using the project's accumulated reserved
+    /// tokens. A portion of those tokens is cashed out for terminal tokens so the position is two-sided. Permissionless
+    /// once the ruleset weight has decayed to 10% of what it was when accumulation began; otherwise requires
+    /// `SET_BUYBACK_POOL` permission from the project owner.
+    /// @param projectId The ID of the project whose accumulated tokens should be deployed as LP.
+    /// @param minCashOutReturn Minimum terminal tokens to accept from the cash-out (slippage protection). Pass 0 to use
+    /// the hook's default 3% tolerance derived from the current cash-out rate.
     // slither-disable-next-line reentrancy-benign,reentrancy-events,unused-return
     function deployPool(uint256 projectId, uint256 minCashOutReturn) external {
         // Allow anyone to deploy if the current ruleset's weight has decayed 10x from the initial weight.
@@ -987,7 +995,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         emit ProjectDeployed(projectId, terminalToken, PoolId.unwrap(poolKeysOf[projectId][terminalToken].toId()));
     }
 
-    /// @notice IJBSplitHook: called by JuiceboxV4 controller when sending funds to designated split hook
+    /// @notice Called by the Juicebox controller when reserved tokens are distributed to this hook's split. Before the
+    /// pool is deployed, tokens are accumulated in escrow. After deployment, tokens are burned immediately to reduce
+    /// circulating supply.
+    /// @dev Only accepts reserved-token splits (groupId == 1). Reverts if the sender is not the project's controller or
+    /// if the project has no ERC-20 token deployed.
     // slither-disable-next-line unused-return
     function processSplitWith(JBSplitHookContext calldata context) external payable {
         if (address(context.split.hook) != address(this)) revert JBUniswapV4LPSplitHook_NotHookSpecifiedInContext();
@@ -1026,8 +1038,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
     }
 
-    /// @notice Rebalance LP position to match current issuance and cash out rates
-    /// @dev Requires SET_BUYBACK_POOL permission from the project owner.
+    /// @notice Burn the existing LP position and re-mint it with tick bounds recalculated from the project's current
+    /// issuance and cash-out rates. Useful when rate changes have shifted the price range away from the active
+    /// position. Requires `SET_BUYBACK_POOL` permission from the project owner.
+    /// @param projectId The ID of the project whose LP position should be rebalanced.
+    /// @param terminalToken The terminal token paired with the project token in the pool.
+    /// @param decreaseAmount0Min Minimum amount of token0 to recover from the burned position (slippage protection).
+    /// @param decreaseAmount1Min Minimum amount of token1 to recover from the burned position (slippage protection).
     // slither-disable-next-line reentrancy-eth,reentrancy-benign,reentrancy-events
     function rebalanceLiquidity(
         uint256 projectId,
@@ -1086,12 +1103,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     // ------------------------ internal functions ----------------------- //
     //*********************************************************************//
 
-    /// @notice Accumulate project tokens in accumulation stage
+    /// @notice Record incoming project tokens in the pre-deployment accumulation ledger.
     function _accumulateTokens(uint256 projectId, uint256 amount) internal {
         accumulatedProjectTokens[projectId] += amount;
     }
 
-    /// @notice Add tokens to project balance via terminal
+    /// @notice Deposit tokens into a project's primary terminal balance via `addToBalanceOf`.
     // slither-disable-next-line arbitrary-send-eth,incorrect-equality
     function _addToProjectBalance(uint256 projectId, address token, uint256 amount, bool isNative) internal {
         if (amount == 0) return;
@@ -1330,7 +1347,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         _modifyLiquidities(abi.encode(burnActions, burnParams), 0);
     }
 
-    /// @notice Burn project tokens using the controller
+    /// @notice Burn project tokens held by this contract through the project's controller.
     // slither-disable-next-line incorrect-equality,reentrancy-events
     function _burnProjectTokens(uint256 projectId, address projectToken, uint256 amount, string memory memo) internal {
         if (amount == 0) return;
@@ -1343,7 +1360,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
     }
 
-    /// @notice Burn received project tokens in deployment stage
+    /// @notice Burn all project tokens currently held by this contract (excluding fee-token reserves) after pool
+    /// deployment, reducing the project's circulating supply.
     function _burnReceivedTokens(uint256 projectId, address projectToken) internal {
         // Get this contract's balance of the project token, minus any fee tokens committed
         // to other projects. Without this subtraction, fee tokens (e.g. JBX) held on behalf
@@ -1744,7 +1762,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         poolKeysOf[projectId][terminalToken] = key;
     }
 
-    /// @notice Get balance of a currency held by this contract
+    /// @notice The native ETH or ERC-20 balance this contract holds for a given Uniswap V4 currency.
     function _currencyBalance(Currency currency) internal view returns (uint256) {
         if (currency.isAddressZero()) {
             return address(this).balance;
@@ -1792,7 +1810,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         });
     }
 
-    /// @notice Mint a V4 position via PositionManager
+    /// @notice Mint a new concentrated-liquidity position via the Uniswap V4 PositionManager, settling both currencies
+    /// and sweeping any unconsumed dust back to this contract.
     function _mintPosition(
         PoolKey memory key,
         int24 tickLower,
@@ -1965,14 +1984,14 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
     }
 
-    /// @notice Forward a modifyLiquidities call to the position manager.
+    /// @notice Execute a batched position-manager action (mint, burn, decrease, etc.) with a short deadline.
     function _modifyLiquidities(bytes memory unlockData, uint256 value) internal {
         POSITION_MANAGER.modifyLiquidities{value: value}({
             unlockData: unlockData, deadline: block.timestamp + _DEADLINE_SECONDS
         });
     }
 
-    /// @notice Approve an ERC20 token via Permit2 so PositionManager can pull it during SETTLE.
+    /// @notice Grant the PositionManager a time-limited Permit2 allowance so it can pull tokens during SETTLE.
     function _approveViaPermit2(address token, uint256 amount) internal {
         IERC20(token).forceApprove({spender: address(PERMIT2), value: amount});
         if (amount > type(uint160).max) revert JBUniswapV4LPSplitHook_Permit2AmountOverflow();
@@ -1986,7 +2005,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         });
     }
 
-    /// @notice Route collected fees from Uniswap position to project
+    /// @notice Identify which side of the collected LP fees is the terminal token and route it to the project; burn the
+    /// project-token side.
     // slither-disable-next-line reentrancy-eth,reentrancy-events,incorrect-equality
     function _routeCollectedFees(
         uint256 projectId,
@@ -2154,13 +2174,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         emit LPFeesRouted(projectId, terminalToken, amount, feeAmount, remainingAmount, beneficiaryTokenCount);
     }
 
-    /// @notice Sort input tokens in order expected by Uniswap V4 (token0 < token1)
+    /// @notice Sort two token addresses into the canonical Uniswap V4 ordering (lower address = token0).
     function _sortTokens(address tokenA, address tokenB) internal pure returns (address token0, address token1) {
         return tokenA < tokenB ? (tokenA, tokenB) : (tokenB, tokenA);
     }
 
-    /// @notice Convert terminal token to Uniswap V4 Currency
-    /// @dev Juicebox uses JBConstants.NATIVE_TOKEN for native ETH; V4 uses Currency.wrap(address(0))
+    /// @notice Convert a Juicebox terminal-token address to the equivalent Uniswap V4 `Currency`.
+    /// @dev Juicebox uses the sentinel `JBConstants.NATIVE_TOKEN` for ETH; Uniswap V4 uses `address(0)`.
     function _toCurrency(address terminalToken) internal pure returns (Currency) {
         return Currency.wrap(_isNativeToken(terminalToken) ? address(0) : terminalToken);
     }
