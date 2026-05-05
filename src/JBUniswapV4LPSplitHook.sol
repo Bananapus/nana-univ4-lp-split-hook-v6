@@ -858,7 +858,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @dev ERC-20 fee tokens are claimed first, followed by any fee credits that were accrued while the fee project
     /// had no ERC-20. Credit claims are best-effort: if the downstream controller rejects the transfer, the pending
     /// credit balance is restored so it can be retried later without blocking the ERC-20 claim path.
-    /// @param projectId The project whose accumulated fee proceeds to claim.
+    /// @param projectId The project to claim accumulated fee proceeds for.
     /// @param beneficiary The address that should receive any claimed fee proceeds.
     function claimFeeTokensFor(uint256 projectId, address beneficiary) external {
         _requirePermissionFrom({
