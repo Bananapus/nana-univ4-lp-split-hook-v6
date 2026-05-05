@@ -267,7 +267,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @dev The implementation contract can be initialized by anyone, but this is harmless —
     ///      each clone gets its own storage, so the implementation's state is never used.
     /// @param feeProjectId Project ID to receive LP fees.
-    /// @param feePercent Percentage of LP fees to route to fee project (in basis points, e.g., 3800 = 38%).
+    /// @param feePercent Percentage of LP fees to route to fee project, out of `BPS` (e.g., 3800 = 38%).
     function initialize(uint256 feeProjectId, uint256 feePercent) external {
         if (initialized) revert JBUniswapV4LPSplitHook_AlreadyInitialized();
 

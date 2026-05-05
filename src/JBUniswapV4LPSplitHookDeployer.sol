@@ -47,7 +47,7 @@ contract JBUniswapV4LPSplitHookDeployer is IJBUniswapV4LPSplitHookDeployer {
 
     /// @notice Deploy a new `JBUniswapV4LPSplitHook` clone with the caller as its initial owner.
     /// @param feeProjectId The Juicebox project ID that receives a share of LP fees.
-    /// @param feePercent The percentage of LP fees routed to the fee project (in basis points, e.g. 3800 = 38%).
+    /// @param feePercent The percentage of LP fees routed to the fee project, out of `BPS` (e.g. 3800 = 38%).
     /// @param salt An optional salt for deterministic CREATE2 deployment. Pass `bytes32(0)` for a plain CREATE.
     /// @return hook The newly deployed hook.
     // slither-disable-next-line reentrancy-benign,reentrancy-events

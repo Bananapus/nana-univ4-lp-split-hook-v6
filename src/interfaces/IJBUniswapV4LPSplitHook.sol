@@ -76,6 +76,6 @@ interface IJBUniswapV4LPSplitHook {
 
     /// @notice Initialize per-instance config on a clone.
     /// @param feeProjectId Project ID to receive LP fees.
-    /// @param feePercent Percentage of LP fees to route to fee project (in basis points).
+    /// @param feePercent Percentage of LP fees to route to fee project, out of `BPS`.
     function initialize(uint256 feeProjectId, uint256 feePercent) external;
 }
