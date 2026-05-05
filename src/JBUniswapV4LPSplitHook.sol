@@ -136,10 +136,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @notice The Permit2 utility used to approve tokens for PositionManager.
     IAllowanceTransfer public immutable PERMIT2;
 
-    /// @notice Uniswap V4 PoolManager address
+    /// @notice The Uniswap V4 pool manager contract that coordinates all pool operations.
     IPoolManager public immutable POOL_MANAGER;
 
-    /// @notice Uniswap V4 PositionManager address
+    /// @notice The Uniswap V4 position manager contract that handles liquidity position NFTs.
     IPositionManager public immutable POSITION_MANAGER;
 
     /// @notice JBProjects (to find project owners)
