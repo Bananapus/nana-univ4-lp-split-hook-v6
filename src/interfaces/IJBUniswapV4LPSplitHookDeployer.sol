@@ -9,7 +9,7 @@ import {JBUniswapV4LPSplitHook} from "../JBUniswapV4LPSplitHook.sol";
 interface IJBUniswapV4LPSplitHookDeployer {
     /// @notice Emitted when a new hook clone is deployed.
     /// @param feeProjectId The project ID that receives LP fees.
-    /// @param feePercent The percentage of LP fees routed to the fee project.
+    /// @param feePercent The percentage of LP fees routed to the fee project, out of `BPS`.
     /// @param hook The deployed hook clone.
     /// @param caller The address that deployed the hook.
     event HookDeployed(uint256 indexed feeProjectId, uint256 feePercent, IJBUniswapV4LPSplitHook hook, address caller);
