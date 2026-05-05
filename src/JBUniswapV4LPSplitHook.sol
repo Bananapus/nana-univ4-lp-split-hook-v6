@@ -735,7 +735,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             return token0 == terminalToken ? TickMath.MIN_SQRT_PRICE : TickMath.MAX_SQRT_PRICE - 1;
         }
 
-        // Compute sqrtPriceX96 directly from the rate, matching the M-50 pattern.
+        // Compute sqrtPriceX96 directly from the rate, then clamp once to Uniswap's valid sqrt-price range.
         uint256 result;
         if (token0 == terminalToken) {
             result = mulDiv({x: sqrt(issuanceRate), y: _Q96, denominator: sqrt(_WAD)});
@@ -1413,13 +1413,16 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             tickLower = issuanceTick - TICK_SPACING;
             tickUpper = issuanceTick + TICK_SPACING;
 
-            // Clamp to valid V4 tick range (M-46).
+            // The zero-cash-out fallback builds a one-spacing band around the issuance tick. If that
+            // issuance tick is near a TickMath edge, the band can spill outside V4's valid tick range.
+            // Clamp to aligned ticks that stay inside the boundary and still leave room for a non-empty range.
             int24 zeroCashOutMinUsable =
                 _alignTickToSpacing({tick: TickMath.MIN_TICK, spacing: TICK_SPACING}) + TICK_SPACING;
             int24 zeroCashOutMaxUsable =
                 _alignTickToSpacing({tick: TickMath.MAX_TICK, spacing: TICK_SPACING}) - TICK_SPACING;
             if (tickLower < zeroCashOutMinUsable) tickLower = zeroCashOutMinUsable;
             if (tickUpper > zeroCashOutMaxUsable) tickUpper = zeroCashOutMaxUsable;
+            // If both sides collapsed to one tick after clamping, widen the upper side by one spacing.
             if (tickLower >= tickUpper) tickUpper = tickLower + TICK_SPACING;
             return (tickLower, tickUpper);
         }
@@ -1600,7 +1603,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // Place the initial price at the geometric midpoint of the floor and ceiling.
         int24 tickMid = _alignTickToSpacing({tick: (tickLower + tickUpper) / 2, spacing: TICK_SPACING});
 
-        // Clamp to valid V4 tick range.
+        // Keep the midpoint inside TickMath's valid range before converting it back to sqrtPriceX96.
         int24 minTick = TickMath.MIN_TICK;
         int24 maxTick = TickMath.MAX_TICK;
         if (tickMid < minTick) tickMid = _alignTickToSpacing({tick: minTick, spacing: TICK_SPACING}) + TICK_SPACING;
