@@ -358,9 +358,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             IJBMultiTerminal term = IJBMultiTerminal(address(terminals[i]));
 
             // Get the terminal's store for balance lookups.
+            // slither-disable-next-line calls-loop
             IJBTerminalStore termStore = term.STORE();
 
             // Get all accounting contexts (one per accepted token) for this project on this terminal.
+            // slither-disable-next-line calls-loop
             JBAccountingContext[] memory contexts = term.accountingContextsOf(projectId);
 
             // Cache context count for gas-efficient iteration.
@@ -374,10 +376,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 // This hook keys each LP by terminal token and, when it operates, cashes out through the project's
                 // primary terminal for that token. Holders may still cash out directly from same-token secondary
                 // terminals, but those balances are not available to this hook's primary-terminal path.
+                // slither-disable-next-line calls-loop
                 address primaryTerminal = _primaryTerminalOf({projectId: projectId, token: context.token});
                 if (primaryTerminal == address(0) || primaryTerminal != address(term)) continue;
 
                 // Look up how much of this token the terminal holds for the project.
+                // slither-disable-next-line calls-loop
                 uint256 balance =
                     termStore.balanceOf({terminal: address(term), projectId: projectId, token: context.token});
 
@@ -394,6 +398,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                     // For non-ETH tokens, use the price feed to normalize to ETH.
                     // pricePerUnit = how many of `context.currency` per 1 ETH at `context.decimals` precision.
                     // ethValue (18-decimal) = balance * 10^18 / pricePerUnit.
+                    // slither-disable-next-line calls-loop
                     try IJBController(controller).PRICES()
                         .pricePerUnitOf({
                         projectId: projectId,
@@ -789,6 +794,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Look up the primary terminal for a project/token pair.
     function _primaryTerminalOf(uint256 projectId, address token) internal view returns (address) {
+        // slither-disable-next-line calls-loop
         return address(IJBDirectory(DIRECTORY).primaryTerminalOf({projectId: projectId, token: token}));
     }
 

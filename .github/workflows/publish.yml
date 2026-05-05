@@ -12,7 +12,7 @@ jobs:
           submodules: recursive
       - uses: actions/setup-node@v4
         with:
-          node-version: latest
+          node-version: 25.9.0
           registry-url: https://registry.npmjs.org
       - name: Publish to npm
         run: npm publish --access public

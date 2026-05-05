@@ -6,7 +6,6 @@ import {ForkDeployHelper} from "../helpers/ForkDeployHelper.sol";
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
 import {IJBSplitHook} from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
-import {IJBToken} from "@bananapus/core-v6/src/interfaces/IJBToken.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
 import {JBFundAccessLimitGroup} from "@bananapus/core-v6/src/structs/JBFundAccessLimitGroup.sol";
@@ -55,7 +54,7 @@ contract M44_UntrustedTokenFork is ForkDeployHelper {
     function test_fork_m44_untrustedToken_usesCanonical() public {
         uint256 pid = _launchProject({reservedPercent: 0, cashOutTaxRate: 0, weight: 1_000_000e18});
         vm.prank(multisig);
-        IJBToken pToken = jbController.deployERC20For(pid, "Project Token", "PTK", bytes32(0));
+        jbController.deployERC20For(pid, "Project Token", "PTK", bytes32(0));
         vm.prank(multisig);
         jbController.mintTokensOf({
             projectId: pid, tokenCount: 100_000e18, beneficiary: address(hook), memo: "", useReservedPercent: false
