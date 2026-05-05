@@ -8,9 +8,10 @@ import {JBUniswapV4LPSplitHook} from "./JBUniswapV4LPSplitHook.sol";
 import {IJBUniswapV4LPSplitHook} from "./interfaces/IJBUniswapV4LPSplitHook.sol";
 import {IJBUniswapV4LPSplitHookDeployer} from "./interfaces/IJBUniswapV4LPSplitHookDeployer.sol";
 
-/// @notice Deploys `JBUniswapV4LPSplitHook` clones with shared infrastructure baked into the implementation.
-/// @dev Anyone can deploy a hook by providing only `feeProjectId` and `feePercent`.
-/// @dev Supports deterministic deployment via CREATE2 when a non-zero salt is provided.
+/// @notice Factory that deploys lightweight `JBUniswapV4LPSplitHook` clones. Each clone shares the same logic
+/// implementation but gets its own storage, allowing many projects to run independent LP split hooks from a single
+/// deployment. Anyone can deploy a hook by specifying a fee project and fee percentage; deterministic CREATE2 addresses
+/// are supported via an optional salt.
 contract JBUniswapV4LPSplitHookDeployer is IJBUniswapV4LPSplitHookDeployer {
     //*********************************************************************//
     // --------------- public immutable stored properties ---------------- //
