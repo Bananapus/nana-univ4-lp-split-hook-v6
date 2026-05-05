@@ -24,7 +24,7 @@ contract CodexNemesisDeployScriptPoC is Test {
     function test_IsDeployedFalseNegativeForNonDeterministicDeployerFactory() public {
         CodexNemesisDeployScriptHarness harness = new CodexNemesisDeployScriptHarness();
 
-        bytes32 salt = bytes32("codex-nemesis-salt");
+        bytes32 salt = keccak256(bytes("codex-nemesis-salt"));
         bytes memory creationCode = type(JBUniswapV4LPSplitHookDeployer).creationCode;
         bytes memory constructorArgs = abi.encode(address(0xBEEF), address(0xCAFE));
 

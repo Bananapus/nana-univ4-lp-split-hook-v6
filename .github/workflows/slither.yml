@@ -1,11 +1,13 @@
 name: slither
 on:
-  pull_request:
-    branches: [main]
-  push:
-    branches: [main]
+    pull_request:
+      branches:
+        - main
+    push:
+      branches:
+        - main
 jobs:
-  slither:
+  analyze:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -13,11 +15,16 @@ jobs:
           submodules: recursive
       - uses: actions/setup-node@v4
         with:
-          node-version: 22.4.x
+          node-version: 25.9.0
       - name: Install npm dependencies
         run: npm install --omit=dev
-      - name: Run Slither
-        uses: crytic/slither-action@v0.3.1
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+      - name: Build contracts
+        run: forge build --deny notes --build-info --skip "*/test/**" --skip "*/script/**"
+      - name: Run slither
+        uses: crytic/slither-action@v0.4.1
         with:
-          slither-config: slither-ci.config.json
-          fail-on: medium
+            slither-config: slither-ci.config.json
+            fail-on: medium
+            ignore-compile: true

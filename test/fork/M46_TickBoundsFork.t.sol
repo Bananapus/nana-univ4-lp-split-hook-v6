@@ -73,6 +73,8 @@ contract M46_TickBoundsFork is ForkDeployHelper {
             assertTrue(sqrtPriceX96 <= TickMath.MAX_SQRT_PRICE, "sqrtPrice <= MAX");
             emit log_named_uint("  sqrtPriceX96", sqrtPriceX96);
         } catch (bytes memory reason) {
+            // Expected errors are custom selectors encoded as the first 4 bytes.
+            // forge-lint: disable-next-line(unsafe-typecast)
             bytes4 err = bytes4(reason);
             assertTrue(
                 err == JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ZeroLiquidity.selector

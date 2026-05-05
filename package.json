@@ -1,11 +1,20 @@
 {
   "name": "@bananapus/univ4-lp-split-hook-v6",
-  "version": "0.0.26",
+  "version": "0.0.27",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Bananapus/nana-univ4-lp-split-hook-v6"
   },
+  "files": [
+    "CHANGELOG.md",
+    "foundry.lock",
+    "foundry.toml",
+    "references/",
+    "remappings.txt",
+    "script/Deploy.s.sol",
+    "src/"
+  ],
   "engines": {
     "node": ">=20.0.0"
   },
@@ -15,19 +24,19 @@
     "coverage": "forge coverage --report lcov --report summary"
   },
   "dependencies": {
-    "@bananapus/address-registry-v6": "^0.0.20",
-    "@bananapus/core-v6": "^0.0.36",
-    "@bananapus/permission-ids-v6": "^0.0.19",
-    "@bananapus/univ4-router-v6": "^0.0.20",
-    "@openzeppelin/contracts": "^5.6.1",
-    "@prb/math": "^4.1.0",
+    "@bananapus/address-registry-v6": "0.0.25",
+    "@bananapus/core-v6": "0.0.39",
+    "@bananapus/permission-ids-v6": "0.0.22",
+    "@bananapus/univ4-router-v6": "0.0.23",
+    "@openzeppelin/contracts": "5.6.1",
+    "@prb/math": "4.1.1",
     "@sphinx-labs/contracts": "0.23.1",
-    "@uniswap/permit2": "github:Uniswap/permit2",
-    "@uniswap/v4-core": "^1.0.2",
-    "@uniswap/v4-periphery": "^1.0.3",
-    "solmate": "^6.8.0"
+    "@uniswap/permit2": "github:Uniswap/permit2#cc56ad0f3439c502c246fc5cfcc3db92bb8b7219",
+    "@uniswap/v4-core": "1.0.2",
+    "@uniswap/v4-periphery": "1.0.3",
+    "solady": "0.1.26"
   },
   "devDependencies": {
-    "@sphinx-labs/plugins": "^0.33.3"
+    "@sphinx-labs/plugins": "0.33.3"
   }
 }

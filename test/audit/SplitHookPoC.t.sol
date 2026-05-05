@@ -132,7 +132,7 @@ contract MintThenReenterFeeTerminal {
 
     function pay(
         uint256,
-        address,
+        address token,
         uint256 amount,
         address beneficiary,
         uint256,
@@ -142,6 +142,10 @@ contract MintThenReenterFeeTerminal {
         external
         returns (uint256 beneficiaryTokenCount)
     {
+        if (amount > 0 && token != address(0x000000000000000000000000000000000000EEEe)) {
+            require(MockERC20(token).transferFrom(msg.sender, address(this), amount), "TRANSFER_FROM_FAILED");
+        }
+
         beneficiaryTokenCount = amount;
         if (beneficiaryTokenCount != 0) feeProjectToken.mint(beneficiary, beneficiaryTokenCount);
 

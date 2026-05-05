@@ -31,6 +31,7 @@ contract ReentrantControllerTerminal is MockJBController {
     uint256 public accumulatedDuringReentry;
 
     mapping(uint256 projectId => mapping(address token => JBAccountingContext)) public _contexts;
+    mapping(uint256 projectId => JBAccountingContext[]) public _contextsList;
 
     constructor(
         JBUniswapV4LPSplitHook _hook,
@@ -66,7 +67,13 @@ contract ReentrantControllerTerminal is MockJBController {
     }
 
     function setTerminalAccountingContext(uint256 pid, address token, uint32 currency, uint8 decimals) external {
-        _contexts[pid][token] = JBAccountingContext({token: token, decimals: decimals, currency: currency});
+        JBAccountingContext memory context = JBAccountingContext({token: token, decimals: decimals, currency: currency});
+        _contexts[pid][token] = context;
+        _contextsList[pid].push(context);
+    }
+
+    function accountingContextsOf(uint256 pid) external view returns (JBAccountingContext[] memory) {
+        return _contextsList[pid];
     }
 
     function cashOutTokensOf(
@@ -126,12 +133,26 @@ contract ReentrantControllerTerminal is MockJBController {
         return reclaimAmount;
     }
 
-    function addToBalanceOf(uint256, address, uint256, bool, string calldata, bytes calldata) external payable {}
+    function addToBalanceOf(
+        uint256,
+        address token,
+        uint256 amount,
+        bool,
+        string calldata,
+        bytes calldata
+    )
+        external
+        payable
+    {
+        if (amount > 0 && token != address(0x000000000000000000000000000000000000EEEe)) {
+            require(MockERC20(token).transferFrom(msg.sender, address(this), amount), "TRANSFER_FROM_FAILED");
+        }
+    }
 
     function pay(
         uint256,
-        address,
-        uint256,
+        address token,
+        uint256 amount,
         address,
         uint256,
         string calldata,
@@ -141,6 +162,9 @@ contract ReentrantControllerTerminal is MockJBController {
         payable
         returns (uint256)
     {
+        if (amount > 0 && token != address(0x000000000000000000000000000000000000EEEe)) {
+            require(MockERC20(token).transferFrom(msg.sender, address(this), amount), "TRANSFER_FROM_FAILED");
+        }
         return 0;
     }
 
@@ -182,7 +206,7 @@ contract ReentrantFeeTerminal {
 
     function pay(
         uint256, /* projectId */
-        address, /* token */
+        address token,
         uint256 amount,
         address beneficiary,
         uint256, /* minReturnedTokens */
@@ -194,6 +218,10 @@ contract ReentrantFeeTerminal {
         returns (uint256)
     {
         payCallCount++;
+
+        if (amount > 0 && token != address(0x000000000000000000000000000000000000EEEe)) {
+            require(MockERC20(token).transferFrom(msg.sender, address(this), amount), "TRANSFER_FROM_FAILED");
+        }
 
         if (!reentering && reentryMode != ReentryMode.NONE) {
             reentering = true;
@@ -263,6 +291,7 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
         // 2. Register it as both controller and terminal for PROJECT_ID
         _setDirectoryController(PROJECT_ID, address(malicious));
         _setDirectoryTerminal(PROJECT_ID, address(terminalToken), address(malicious));
+        _addDirectoryTerminal(PROJECT_ID, address(malicious));
 
         // 3. Set up controller state (weights, prices, etc.)
         malicious.setWeight(PROJECT_ID, DEFAULT_WEIGHT);
@@ -273,6 +302,7 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
         malicious.setTerminalAccountingContext(
             PROJECT_ID, address(terminalToken), uint32(uint160(address(terminalToken))), 18
         );
+        store.setBalance(address(malicious), PROJECT_ID, address(terminalToken), 10e18);
 
         // 4. Accumulate tokens through the malicious controller
         uint256 accumulateAmount = 1000e18;

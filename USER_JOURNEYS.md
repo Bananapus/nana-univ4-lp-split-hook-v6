@@ -15,7 +15,7 @@ This repo takes reserved Juicebox token issuance and turns it into a managed Uni
 - `JBUniswapV4LPSplitHook`: accumulation, deployment, rebalancing, and fee tracking
 - `JBUniswapV4LPSplitHookDeployer`: clone and provenance packaging
 - `deployPool(...)`: first-pool deployment entrypoint
-- `rebalance(...)` / `claimFeeTokensFor(...)`: operate the position and release tracked fee value
+- `rebalanceLiquidity(...)` / `claimFeeTokensFor(...)`: operate the position and release tracked fee value
 
 ## Journey 1: Accumulate Reserved Tokens Before A Pool Exists
 

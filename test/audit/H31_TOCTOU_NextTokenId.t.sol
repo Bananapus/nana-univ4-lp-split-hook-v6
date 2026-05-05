@@ -63,7 +63,7 @@ contract H31_TOCTOU_NextTokenId is LPSplitHookV4TestBase {
     //   t0: our mint → nextTokenId becomes 3
     //   t1: fix reads nextTokenId() - 1 = 2 ← CORRECT
 
-    function test_frontRun_oldPatternVsNewPattern_mathematical() public {
+    function test_frontRun_oldPatternVsNewPattern_mathematical() public pure {
         // Starting state
         uint256 initialNextId = 1;
 
@@ -87,7 +87,7 @@ contract H31_TOCTOU_NextTokenId is LPSplitHookV4TestBase {
 
     // ─── Test: Multiple front-runs — old pattern off by N ───
 
-    function test_frontRun_multipleAttackers_oldPatternOffByN() public {
+    function test_frontRun_multipleAttackers_oldPatternOffByN() public pure {
         uint256 initialNextId = 1;
         uint256 numFrontRunners = 5;
 

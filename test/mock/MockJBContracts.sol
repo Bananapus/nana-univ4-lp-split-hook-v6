@@ -391,8 +391,7 @@ contract MockJBMultiTerminal {
 
     function pay(
         uint256 projectId,
-        address,
-        /* token */
+        address token,
         uint256 amount,
         address beneficiary,
         uint256 minReturnedTokens,
@@ -408,6 +407,10 @@ contract MockJBMultiTerminal {
         lastPayProjectId = projectId;
         lastPayAmount = amount;
         lastPayMinReturnedTokens = minReturnedTokens;
+
+        if (amount > 0 && token != address(0x000000000000000000000000000000000000EEEe)) {
+            require(MockERC20(token).transferFrom(msg.sender, address(this), amount), "TRANSFER_FROM_FAILED");
+        }
 
         if (usePayReturnOverride) {
             beneficiaryTokenCount = payReturnAmount;
@@ -465,10 +468,8 @@ contract MockJBMultiTerminal {
     function addToBalanceOf(
         uint256,
         /* projectId */
-        address,
-        /* token */
-        uint256,
-        /* amount */
+        address token,
+        uint256 amount,
         bool,
         /* shouldReturnHeldTokens */
         string calldata,
@@ -479,6 +480,10 @@ contract MockJBMultiTerminal {
         payable
     {
         addToBalanceCallCount++;
+
+        if (amount > 0 && token != address(0x000000000000000000000000000000000000EEEe)) {
+            require(MockERC20(token).transferFrom(msg.sender, address(this), amount), "TRANSFER_FROM_FAILED");
+        }
     }
 
     receive() external payable {}
