@@ -8,7 +8,7 @@ This repo takes reserved Juicebox token issuance and turns it into a managed Uni
 
 - projects that want reserved-token issuance to become managed UniV4 liquidity
 - operators deploying and later rebalancing the position
-- auditors checking range math, fee tracking, and post-deployment lifecycle assumptions
+- reviewers checking range math, fee tracking, and post-deployment lifecycle assumptions
 
 ## Key Surfaces
 

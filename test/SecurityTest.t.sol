@@ -233,7 +233,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
             })
         );
 
-        // M-44 fix: processSplitWith now uses canonical token from TOKENS.tokenOf, so project B needs a token set.
+        // fix: processSplitWith now uses canonical token from TOKENS.tokenOf, so project B needs a token set.
         jbTokens.setToken(projectB, address(projectToken));
 
         // Accumulate different amounts for each project

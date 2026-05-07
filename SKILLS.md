@@ -15,7 +15,7 @@
 | Runtime and operational invariants | [`references/runtime.md`](./references/runtime.md), [`references/operations.md`](./references/operations.md) |
 | Interfaces and V4 test scaffolding | [`src/interfaces/`](./src/interfaces/), [`test/TestBaseV4.sol`](./test/TestBaseV4.sol) |
 | Lifecycle, fee-routing, and rebalancing coverage | [`test/AccumulationStageTest.t.sol`](./test/AccumulationStageTest.t.sol), [`test/DeploymentStageTest.t.sol`](./test/DeploymentStageTest.t.sol), [`test/FeeRoutingTest.t.sol`](./test/FeeRoutingTest.t.sol), [`test/RebalanceTest.t.sol`](./test/RebalanceTest.t.sol), [`test/IntegrationLifecycle.t.sol`](./test/IntegrationLifecycle.t.sol) |
-| Security, deployment, and weight-decay edge cases | [`test/SecurityTest.t.sol`](./test/SecurityTest.t.sol), [`test/ReentrancyTest.t.sol`](./test/ReentrancyTest.t.sol), [`test/DeployerTest.t.sol`](./test/DeployerTest.t.sol), [`test/WeightDecayDeployTest.t.sol`](./test/WeightDecayDeployTest.t.sol), [`test/SplitHookRegressions.t.sol`](./test/SplitHookRegressions.t.sol), [`test/TestAuditGaps.sol`](./test/TestAuditGaps.sol) |
+| Security, deployment, and weight-decay edge cases | [`test/SecurityTest.t.sol`](./test/SecurityTest.t.sol), [`test/ReentrancyTest.t.sol`](./test/ReentrancyTest.t.sol), [`test/DeployerTest.t.sol`](./test/DeployerTest.t.sol), [`test/WeightDecayDeployTest.t.sol`](./test/WeightDecayDeployTest.t.sol), [`test/SplitHookRegressions.t.sol`](./test/SplitHookRegressions.t.sol), [`test/TestRegressionGaps.sol`](./test/TestRegressionGaps.sol) |
 
 ## Repo Map
 
