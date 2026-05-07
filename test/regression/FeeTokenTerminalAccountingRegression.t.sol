@@ -108,7 +108,7 @@ contract PullingTerminal {
 /// @notice Verifies that fee token accounting works correctly when the terminal token IS the fee
 /// project token (e.g., a project whose terminal token is JBX). The pre-increment pattern in
 /// _routeFeesToProject prevents the burn logic from consuming the freshly minted fee tokens.
-contract FeeTokenTerminalAccountingPoC is LPSplitHookV4TestBase {
+contract FeeTokenTerminalAccountingRegression is LPSplitHookV4TestBase {
     PullingTerminal internal pullingTerminal;
 
     function setUp() public override {

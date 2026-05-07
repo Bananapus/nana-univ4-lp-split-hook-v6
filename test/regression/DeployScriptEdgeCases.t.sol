@@ -6,7 +6,7 @@ import {Test} from "forge-std/Test.sol";
 import {DeployScript} from "../../script/Deploy.s.sol";
 import {JBUniswapV4LPSplitHookDeployer} from "../../src/JBUniswapV4LPSplitHookDeployer.sol";
 
-contract CodexNemesisDeployScriptHarness is DeployScript {
+contract RegressionDeployScriptHarness is DeployScript {
     function exposed_isDeployed(
         bytes32 salt,
         bytes memory creationCode,
@@ -20,11 +20,11 @@ contract CodexNemesisDeployScriptHarness is DeployScript {
     }
 }
 
-contract CodexNemesisDeployScriptPoC is Test {
+contract RegressionDeployScriptRegression is Test {
     function test_IsDeployedFalseNegativeForNonDeterministicDeployerFactory() public {
-        CodexNemesisDeployScriptHarness harness = new CodexNemesisDeployScriptHarness();
+        RegressionDeployScriptHarness harness = new RegressionDeployScriptHarness();
 
-        bytes32 salt = keccak256(bytes("codex-nemesis-salt"));
+        bytes32 salt = keccak256(bytes("regression-salt"));
         bytes memory creationCode = type(JBUniswapV4LPSplitHookDeployer).creationCode;
         bytes memory constructorArgs = abi.encode(address(0xBEEF), address(0xCAFE));
 

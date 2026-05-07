@@ -47,7 +47,7 @@ contract FeeProjectIdValidationTest is Test {
     function test_initialize_reverts_feePercent_without_feeProjectId() public {
         JBUniswapV4LPSplitHook clone = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
 
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject.selector);
         clone.initialize(0, 3800); // feeProjectId=0, feePercent=38%
     }
 

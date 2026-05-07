@@ -101,7 +101,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
 
         // Should revert instead of zeroing tokenIdOf
         vm.prank(owner);
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientLiquidity.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientLiquidity.selector);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
 
         // tokenIdOf should remain unchanged (revert rolled back state)
@@ -289,7 +289,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         );
 
         projectToken.mint(address(hook), 10e18);
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PoolAlreadyDeployed.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PoolAlreadyDeployed.selector);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, 0);
     }

@@ -6,7 +6,6 @@ import {ForkDeployHelper} from "../helpers/ForkDeployHelper.sol";
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
 import {IJBSplitHook} from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
-import {IJBToken} from "@bananapus/core-v6/src/interfaces/IJBToken.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
 import {JBFundAccessLimitGroup} from "@bananapus/core-v6/src/structs/JBFundAccessLimitGroup.sol";
@@ -22,17 +21,11 @@ import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPermit2} from "@uniswap/permit2/src/interfaces/IPermit2.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
-import {PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
-import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
 import {LibClone} from "solady/src/utils/LibClone.sol";
 
-contract M49_ReservedDilutionFork is ForkDeployHelper {
-    using StateLibrary for IPoolManager;
-    using PoolIdLibrary for PoolKey;
+contract UntrustedTokenFork is ForkDeployHelper {
     IPoolManager constant V4_POOL_MANAGER = IPoolManager(0x000000000004444c5dc75cB358380D2e3dE08A90);
     IPositionManager constant V4_POSITION_MANAGER = IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e);
     JBUniswapV4LPSplitHook hook;
@@ -58,24 +51,34 @@ contract M49_ReservedDilutionFork is ForkDeployHelper {
         hook.initialize(feeProjectId, 3800);
     }
 
-    function test_fork_m49_reservedDilution_priceReflectsDilution() public {
-        uint256 pid = _launchProject({reservedPercent: 5000, cashOutTaxRate: 5000, weight: 1_000_000e18});
+    function test_fork_m44_untrustedToken_usesCanonical() public {
+        uint256 pid = _launchProject({reservedPercent: 0, cashOutTaxRate: 0, weight: 1_000_000e18});
         vm.prank(multisig);
-        IJBToken pToken = jbController.deployERC20For(pid, "Diluted Token", "DIL", bytes32(0));
-        _payProject(pid, 50 ether);
-        _accumulateTokens(pid, address(pToken), 100_000e18);
+        jbController.deployERC20For(pid, "Project Token", "PTK", bytes32(0));
         vm.prank(multisig);
-        hook.deployPool(pid, 0);
-        assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "Pool should deploy with 50% reserved");
-        PoolKey memory key = hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN);
-        (uint160 sqrtPriceX96,,,) = V4_POOL_MANAGER.getSlot0(key.toId());
-        assertTrue(sqrtPriceX96 > TickMath.MIN_SQRT_PRICE, "sqrtPrice > MIN");
-        assertTrue(sqrtPriceX96 < TickMath.MAX_SQRT_PRICE, "sqrtPrice < MAX");
-        uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
-        uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
-        assertTrue(posLiq > 0, "Position should have liquidity");
-        emit log_named_uint("  sqrtPriceX96", sqrtPriceX96);
-        emit log_named_uint("  position liquidity", posLiq);
+        jbController.mintTokensOf({
+            projectId: pid, tokenCount: 100_000e18, beneficiary: address(hook), memo: "", useReservedPercent: false
+        });
+        address bogusToken = address(0xDEAD);
+        JBSplitHookContext memory context = JBSplitHookContext({
+            token: bogusToken,
+            amount: 100_000e18,
+            decimals: 18,
+            projectId: pid,
+            groupId: 1,
+            split: JBSplit({
+                percent: 1_000_000,
+                projectId: 0,
+                beneficiary: payable(address(0)),
+                preferAddToBalance: false,
+                lockedUntil: 0,
+                hook: IJBSplitHook(address(hook))
+            })
+        });
+        address controller = address(jbDirectory.controllerOf(pid));
+        vm.prank(controller);
+        hook.processSplitWith(context);
+        assertEq(hook.accumulatedProjectTokens(pid), 100_000e18, "Should accumulate using canonical token");
     }
 
     function _launchProject(
@@ -128,42 +131,6 @@ contract M49_ReservedDilutionFork is ForkDeployHelper {
             rulesetConfigurations: rulesetConfigs,
             terminalConfigurations: terminalConfigs,
             memo: ""
-        });
-    }
-
-    function _accumulateTokens(uint256 pid, address tokenAddr, uint256 amount) internal {
-        vm.prank(multisig);
-        jbController.mintTokensOf({
-            projectId: pid, tokenCount: amount, beneficiary: address(hook), memo: "", useReservedPercent: false
-        });
-        JBSplitHookContext memory context = JBSplitHookContext({
-            token: tokenAddr,
-            amount: amount,
-            decimals: 18,
-            projectId: pid,
-            groupId: 1,
-            split: JBSplit({
-                percent: 1_000_000,
-                projectId: 0,
-                beneficiary: payable(address(0)),
-                preferAddToBalance: false,
-                lockedUntil: 0,
-                hook: IJBSplitHook(address(hook))
-            })
-        });
-        vm.prank(address(jbController));
-        hook.processSplitWith(context);
-    }
-
-    function _payProject(uint256 pid, uint256 amount) internal {
-        jbMultiTerminal.pay{value: amount}({
-            projectId: pid,
-            token: JBConstants.NATIVE_TOKEN,
-            amount: amount,
-            beneficiary: multisig,
-            minReturnedTokens: 0,
-            memo: "",
-            metadata: ""
         });
     }
 }

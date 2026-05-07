@@ -7,7 +7,7 @@ import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
 
-contract CodexNemesisMultiTerminalPoC is LPSplitHookV4TestBase {
+contract RegressionMultiTerminalRegression is LPSplitHookV4TestBase {
     MockERC20 internal altTerminalToken;
     address internal attacker;
 

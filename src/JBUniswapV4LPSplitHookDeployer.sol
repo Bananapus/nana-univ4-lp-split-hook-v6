@@ -50,7 +50,6 @@ contract JBUniswapV4LPSplitHookDeployer is IJBUniswapV4LPSplitHookDeployer {
     /// @param feePercent The percentage of LP fees routed to the fee project, out of `BPS` (e.g. 3800 = 38%).
     /// @param salt An optional salt for deterministic CREATE2 deployment. Pass `bytes32(0)` for a plain CREATE.
     /// @return hook The newly deployed hook.
-    // slither-disable-next-line reentrancy-benign,reentrancy-events
     function deployHookFor(
         uint256 feeProjectId,
         uint256 feePercent,

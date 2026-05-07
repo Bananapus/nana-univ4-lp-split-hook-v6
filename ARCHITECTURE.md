@@ -71,11 +71,11 @@ It also owns claim segregation for routed LP fees. Outstanding fee-token claims 
 - staged accumulation, deployment, and rebalance lifecycle:
   `test/IntegrationLifecycle.t.sol`
 - fee-token claim segregation against burn paths:
-  `test/audit/FeeTokenTerminalAccountingPoC.t.sol`
+  `test/regression/FeeTokenTerminalAccountingRegression.t.sol`
 - split-hook staging and accounting invariants:
   `test/invariant/LPSplitHookInvariant.t.sol`
 - edge-case unit tests (zero-rate fallback, tokenId resolution, price/tick/bounds edge cases):
-  `test/audit/`
+  `test/regression/`
 - fork tests (full JB core deployment per scenario):
   `test/fork/`
 - integration fork tests (cross-scenario interaction chains):
@@ -86,5 +86,5 @@ It also owns claim segregation for routed LP fees. Outstanding fee-token claims 
 - `src/JBUniswapV4LPSplitHook.sol`
 - `src/JBUniswapV4LPSplitHookDeployer.sol`
 - `test/IntegrationLifecycle.t.sol`
-- `test/audit/FeeTokenTerminalAccountingPoC.t.sol`
+- `test/regression/FeeTokenTerminalAccountingRegression.t.sol`
 - `test/invariant/LPSplitHookInvariant.t.sol`

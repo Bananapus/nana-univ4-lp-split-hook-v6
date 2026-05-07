@@ -130,7 +130,7 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
     }
 
     /// @notice When current weight is 0 (infinite decay), the permission check is bypassed
-    ///         (0 * 10 <= initialWeight). With the H-30 fix, the issuance fallback returns
+    ///         (0 * 10 <= initialWeight). With the fix, the issuance fallback returns
     ///         a token-order-aware extreme (MIN when terminal is token0), so the initial price
     ///         is set at a valid midpoint rather than at the upper bound. This allows the LP
     ///         position to deploy successfully with cash-out-derived terminal tokens.
@@ -145,7 +145,7 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
         terminalToken.approve(address(positionManager), type(uint256).max);
         vm.stopPrank();
 
-        // With the H-30 fix, the token-order-aware fallback places the initial price
+        // With the fix, the token-order-aware fallback places the initial price
         // at a valid midpoint, allowing the LP to deploy. The deployment succeeding
         // (not reverting with Unauthorized) proves the permissionless path was reached.
         vm.prank(randomUser);

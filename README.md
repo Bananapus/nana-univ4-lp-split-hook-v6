@@ -89,7 +89,7 @@ src/
   JBUniswapV4LPSplitHookDeployer.sol
   interfaces/
 test/
-  stage, deployment, fee, rebalance, fork, invariant, audit, and regression coverage
+  stage, deployment, fee, rebalance, fork, invariant, review, and regression coverage
 script/
   Deploy.s.sol
 ```

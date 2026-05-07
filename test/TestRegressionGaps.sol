@@ -6,10 +6,10 @@ import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingCo
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
 import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 
-/// @notice Audit gap tests: MEV/sandwich simulation on rebalance and extreme price scenarios.
+/// @notice Regression gap tests: MEV/sandwich simulation on rebalance and extreme price scenarios.
 /// @dev These tests verify that the rebalance operation is resistant to sandwich-like
 ///      value extraction and that the contract behaves correctly at extreme price ratios.
-contract TestAuditGaps is LPSplitHookV4TestBase {
+contract TestRegressionGaps is LPSplitHookV4TestBase {
     uint256 poolTokenId;
 
     function setUp() public override {
@@ -295,7 +295,7 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
 
         _accumulateTokensForProject(lowWeightProject, 1000e18);
 
-        // After L-6 tick re-clamp fix, low weights deploy with clamped tick bounds.
+        // After tick re-clamp fix, low weights deploy with clamped tick bounds.
         vm.prank(owner);
         hook.deployPool(lowWeightProject, 0);
         assertTrue(hook.hasDeployedPool(lowWeightProject), "low weight project should deploy with clamped ticks");
@@ -364,7 +364,7 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
         // High surplus produces an aggressive derived minimum. The mock terminal's default
         // 50% reclaim under-delivers relative to that quote, so the slippage guard should fire.
         vm.prank(owner);
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientBalance.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientBalance.selector);
         hook.deployPool(highSurplusProject, 0);
         assertFalse(hook.hasDeployedPool(highSurplusProject), "high surplus project should not deploy");
     }
@@ -424,7 +424,7 @@ contract TestAuditGaps is LPSplitHookV4TestBase {
 
         _accumulateTokensForProject(highReservedProject, 500e18);
 
-        // After L-6 tick re-clamp fix, extreme reserved percents deploy successfully
+        // After tick re-clamp fix, extreme reserved percents deploy successfully
         // with clamped tick bounds.
         vm.prank(owner);
         hook.deployPool(highReservedProject, 0);

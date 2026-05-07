@@ -35,7 +35,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
 import {LibClone} from "solady/src/utils/LibClone.sol";
 
-contract M45SwapHelper is IUnlockCallback {
+contract PriceRatioSwapHelper is IUnlockCallback {
     using CurrencyLibrary for Currency;
     IPoolManager public immutable poolManager;
 
@@ -117,7 +117,7 @@ contract M45SwapHelper is IUnlockCallback {
     }
 }
 
-contract M45_PriceRatioFork is ForkDeployHelper {
+contract PriceRatioFork is ForkDeployHelper {
     using StateLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;
     IPoolManager constant V4_POOL_MANAGER = IPoolManager(0x000000000004444c5dc75cB358380D2e3dE08A90);
@@ -162,7 +162,7 @@ contract M45_PriceRatioFork is ForkDeployHelper {
         assertTrue(posLiq > 0, "Position should have liquidity");
         emit log_named_uint("  position liquidity", posLiq);
         PoolKey memory key = hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN);
-        M45SwapHelper swapHelper = new M45SwapHelper(V4_POOL_MANAGER);
+        PriceRatioSwapHelper swapHelper = new PriceRatioSwapHelper(V4_POOL_MANAGER);
         bool projIsToken0 = Currency.unwrap(key.currency0) == address(pToken);
         vm.prank(multisig);
         jbController.mintTokensOf({
@@ -195,7 +195,7 @@ contract M45_PriceRatioFork is ForkDeployHelper {
         assertTrue(posLiq > 0, "Position should have liquidity with 90% tax rate");
         emit log_named_uint("  position liquidity (90% tax)", posLiq);
         PoolKey memory key = hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN);
-        M45SwapHelper swapHelper = new M45SwapHelper(V4_POOL_MANAGER);
+        PriceRatioSwapHelper swapHelper = new PriceRatioSwapHelper(V4_POOL_MANAGER);
         bool projIsToken0 = Currency.unwrap(key.currency0) == address(pToken);
         vm.prank(multisig);
         jbController.mintTokensOf({
@@ -226,7 +226,7 @@ contract M45_PriceRatioFork is ForkDeployHelper {
         assertTrue(posLiq > 0, "Position should have liquidity with 10% tax rate");
         emit log_named_uint("  position liquidity (10% tax)", posLiq);
         PoolKey memory key = hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN);
-        M45SwapHelper swapHelper = new M45SwapHelper(V4_POOL_MANAGER);
+        PriceRatioSwapHelper swapHelper = new PriceRatioSwapHelper(V4_POOL_MANAGER);
         bool projIsToken0 = Currency.unwrap(key.currency0) == address(pToken);
         vm.prank(multisig);
         jbController.mintTokensOf({

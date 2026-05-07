@@ -17,8 +17,8 @@ import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionMa
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
 
-/// @notice Harness that exposes internal functions for M-45 ratio testing.
-contract M45Harness is JBUniswapV4LPSplitHook {
+/// @notice Harness that exposes internal functions for ratio testing.
+contract PriceRatioHarness is JBUniswapV4LPSplitHook {
     constructor(
         address _directory,
         IJBPermissions _permissions,
@@ -104,17 +104,17 @@ contract M45Harness is JBUniswapV4LPSplitHook {
     }
 }
 
-/// @notice Tests proving H-30 (token-ordering extreme prices) and M-45 (in-range ratio math).
+/// @notice Tests proving (token-ordering extreme prices) and (in-range ratio math).
 ///
-/// M-45: The old `_computeOptimalCashOutAmount` used a ratio formula that was off by
+/// The old `_computeOptimalCashOutAmount` used a ratio formula that was off by
 ///        sqrtPriceInit²/Q96² (terminalIsToken0) or missing sqrtPriceB/Q96² (!terminalIsToken0).
 ///        This caused suboptimal LP positions with wasted tokens.
 ///
 /// The fix uses the correct Uniswap V4 amount0/amount1 formulas:
 ///   terminalIsToken0: ratio = Q96² × (√Pb − √P) / (√P × √Pb × (√P − √Pa))
 ///   !terminalIsToken0: ratio = √P × √Pb × (√P − √Pa) / (Q96² × (√Pb − √P))
-contract H30_M45_PriceRatio is LPSplitHookV4TestBase {
-    M45Harness internal harness;
+contract PriceRatioRegression is LPSplitHookV4TestBase {
+    PriceRatioHarness internal harness;
 
     uint256 constant Q96 = 2 ** 96;
     uint256 constant WAD = 1e18;
@@ -122,7 +122,7 @@ contract H30_M45_PriceRatio is LPSplitHookV4TestBase {
     function setUp() public override {
         super.setUp();
 
-        harness = new M45Harness(
+        harness = new PriceRatioHarness(
             address(directory),
             IJBPermissions(address(permissions)),
             address(jbTokens),
@@ -133,13 +133,13 @@ contract H30_M45_PriceRatio is LPSplitHookV4TestBase {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // M-45: Prove the old formula was wrong, and the fix matches Uniswap math
+    // Prove the old formula was wrong, and the fix matches Uniswap math
     // ═══════════════════════════════════════════════════════════════════════
 
     /// @notice The fix produces a cash-out amount that results in balanced LP liquidity.
     ///         "Balanced" means both token sides yield roughly equal liquidity contributions,
     ///         which is the definition of optimal token pairing.
-    function test_M45_fixProducesBalancedLiquidity() public view {
+    function test_priceRatioFixProducesBalancedLiquidity() public view {
         uint256 totalProjectTokens = 100e18;
 
         // Get tick bounds and initial price.
@@ -151,7 +151,7 @@ contract H30_M45_PriceRatio is LPSplitHookV4TestBase {
         // The initial price must be in-range for this test to be meaningful.
         uint160 sqrtPriceA = TickMath.getSqrtPriceAtTick(tickLower);
         uint160 sqrtPriceB = TickMath.getSqrtPriceAtTick(tickUpper);
-        require(sqrtPriceInit > sqrtPriceA && sqrtPriceInit < sqrtPriceB, "price must be in range for M-45 test");
+        require(sqrtPriceInit > sqrtPriceA && sqrtPriceInit < sqrtPriceB, "price must be in range for test");
 
         // Compute optimal cash-out using the fixed formula.
         uint256 cashOut = harness.exposed_computeOptimalCashOutAmount(
@@ -193,7 +193,7 @@ contract H30_M45_PriceRatio is LPSplitHookV4TestBase {
     /// @notice Prove the OLD formula would produce imbalanced liquidity.
     ///         We manually compute the old formula's ratio and show the resulting
     ///         token split is significantly worse than the fix.
-    function test_M45_oldFormulaProducesImbalancedLiquidity() public view {
+    function test_priceRatioOldFormulaProducesImbalancedLiquidity() public view {
         uint256 totalProjectTokens = 100e18;
 
         (int24 tickLower, int24 tickUpper) =
@@ -255,7 +255,7 @@ contract H30_M45_PriceRatio is LPSplitHookV4TestBase {
 
     /// @notice The fix-computed cash-out amount produces maximal liquidity — no other split
     ///         within a reasonable tolerance can do better.
-    function test_M45_fixMaximizesLiquidity() public view {
+    function test_priceRatioFixMaximizesLiquidity() public view {
         uint256 totalProjectTokens = 100e18;
 
         (int24 tickLower, int24 tickUpper) =
@@ -300,7 +300,7 @@ contract H30_M45_PriceRatio is LPSplitHookV4TestBase {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // H-30: Token ordering for zero-rate extreme prices
+    // Token ordering for zero-rate extreme prices
     // ═══════════════════════════════════════════════════════════════════════
 
     /// @notice When issuance is zero, the extreme sqrtPrice depends on which token is token0.

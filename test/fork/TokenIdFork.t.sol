@@ -35,7 +35,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
 import {LibClone} from "solady/src/utils/LibClone.sol";
 
-contract H31SwapHelper is IUnlockCallback {
+contract TokenIdSwapHelper is IUnlockCallback {
     using CurrencyLibrary for Currency;
     IPoolManager public immutable poolManager;
 
@@ -117,7 +117,7 @@ contract H31SwapHelper is IUnlockCallback {
     }
 }
 
-contract H31_TokenIdFork is ForkDeployHelper {
+contract TokenIdFork is ForkDeployHelper {
     using StateLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;
     IPoolManager constant V4_POOL_MANAGER = IPoolManager(0x000000000004444c5dc75cB358380D2e3dE08A90);
@@ -179,7 +179,7 @@ contract H31_TokenIdFork is ForkDeployHelper {
         hook.deployPool(projectId, 0);
         uint256 oldTokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         PoolKey memory key = hook.poolKeyOf(projectId, JBConstants.NATIVE_TOKEN);
-        H31SwapHelper swapHelper = new H31SwapHelper(V4_POOL_MANAGER);
+        TokenIdSwapHelper swapHelper = new TokenIdSwapHelper(V4_POOL_MANAGER);
         vm.prank(multisig);
         jbController.mintTokensOf({
             projectId: projectId, tokenCount: 50_000e18, beneficiary: address(this), memo: "", useReservedPercent: false

@@ -32,7 +32,7 @@ contract PullingTerminal {
     receive() external payable {}
 }
 
-contract CodexNemesisFreshRound is LPSplitHookV4TestBase {
+contract RegressionFreshRound is LPSplitHookV4TestBase {
     function test_feeRouting_missingFeeTerminalFallsBackToProjectBalance() public {
         _accumulateAndDeploy(PROJECT_ID, 1000e18);
 

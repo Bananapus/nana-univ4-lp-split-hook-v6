@@ -173,7 +173,7 @@ contract BurningController {
     }
 }
 
-contract FeeProjectSelfBurnPoC is LPSplitHookV4TestBase {
+contract FeeProjectSelfBurnRegression is LPSplitHookV4TestBase {
     BurningController internal burningController;
     DrainingAddToBalanceTerminal internal drainingTerminal;
     uint256 internal constant PROJECT_B = 3;
@@ -224,7 +224,7 @@ contract FeeProjectSelfBurnPoC is LPSplitHookV4TestBase {
     }
 
     /// @notice Verifies that _totalOutstandingFeeTokenClaims prevents the fee project's own pool
-    /// deployment from consuming other projects' claimable fee tokens (H-2 fix).
+    /// deployment from consuming other projects' claimable fee tokens (fix).
     function test_FeeProjectPoolDeploymentDoesNotBurnOtherProjectsClaimableFeeTokens() public {
         uint256 feeProjectAccumulation = 100e18;
 

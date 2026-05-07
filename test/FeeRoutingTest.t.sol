@@ -135,7 +135,7 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
         controller.setFirstWeight(freshProjectId, DEFAULT_FIRST_WEIGHT);
         _setDirectoryController(freshProjectId, address(controller));
 
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidStageForAction.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidStageForAction.selector);
         hook.collectAndRouteLPFees(freshProjectId, address(terminalToken));
     }
 
@@ -151,7 +151,7 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
         controller.setFirstWeight(noPoolProjectId, DEFAULT_FIRST_WEIGHT);
         _setDirectoryController(noPoolProjectId, address(controller));
 
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidStageForAction.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidStageForAction.selector);
         hook.collectAndRouteLPFees(noPoolProjectId, address(terminalToken));
     }
 
@@ -171,7 +171,7 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
         bytes32 slot = keccak256(abi.encode(address(terminalToken), outerSlot));
         vm.store(address(hook), slot, bytes32(0));
 
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidStageForAction.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidStageForAction.selector);
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
     }
 

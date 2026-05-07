@@ -13,8 +13,8 @@ import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
-/// @notice Harness exposing internal price functions for H-30 zero-rate fallback testing.
-contract H30Harness is JBUniswapV4LPSplitHook {
+/// @notice Harness exposing internal price functions for zero-rate fallback testing.
+contract ZeroRateFallbackHarness is JBUniswapV4LPSplitHook {
     constructor(
         address _directory,
         IJBPermissions _permissions,
@@ -94,7 +94,7 @@ contract H30Harness is JBUniswapV4LPSplitHook {
     }
 }
 
-/// @notice Tests for CertiK Finding 4 (H-30): Token-order-aware zero-rate fallback prices.
+/// @notice Tests token-order-aware zero-rate fallback prices.
 ///
 /// Bug: `_getCashOutRateSqrtPriceX96` and `_getIssuanceRateSqrtPriceX96` returned hardcoded
 /// extreme sqrtPriceX96 values when rates are zero, without checking which token sorts to
@@ -107,8 +107,8 @@ contract H30Harness is JBUniswapV4LPSplitHook {
 /// `terminalToken`) to exercise both sort orderings. The `projectToken` address only affects
 /// the `_sortTokens` call — the rate lookup uses `terminalToken` which is wired up in the mock
 /// directory.
-contract H30_ZeroRateFallback is LPSplitHookV4TestBase {
-    H30Harness internal harness;
+contract ZeroRateFallbackRegression is LPSplitHookV4TestBase {
+    ZeroRateFallbackHarness internal harness;
 
     // Controlled addresses for testing both token orderings.
     // lowProjectToken < terminalToken → projectToken is token0, terminalToken is token1
@@ -119,7 +119,7 @@ contract H30_ZeroRateFallback is LPSplitHookV4TestBase {
     function setUp() public override {
         super.setUp();
 
-        harness = new H30Harness(
+        harness = new ZeroRateFallbackHarness(
             address(directory),
             IJBPermissions(address(permissions)),
             address(jbTokens),

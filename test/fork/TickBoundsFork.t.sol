@@ -30,7 +30,7 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
 import {LibClone} from "solady/src/utils/LibClone.sol";
 
-contract M50_IssuanceInversionFork is ForkDeployHelper {
+contract TickBoundsFork is ForkDeployHelper {
     using StateLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;
     IPoolManager constant V4_POOL_MANAGER = IPoolManager(0x000000000004444c5dc75cB358380D2e3dE08A90);
@@ -58,21 +58,45 @@ contract M50_IssuanceInversionFork is ForkDeployHelper {
         hook.initialize(feeProjectId, 3800);
     }
 
-    function test_fork_m50_extremeWeight_noRevert() public {
+    function test_fork_m46_extremeIssuanceRate_ticksClamped() public {
         uint112 extremeWeight = uint112(1e28);
-        uint256 pid = _launchProject({reservedPercent: 0, cashOutTaxRate: 5000, weight: extremeWeight});
+        uint256 pid = _launchProject({reservedPercent: 0, cashOutTaxRate: 0, weight: extremeWeight});
         vm.prank(multisig);
-        IJBToken pToken = jbController.deployERC20For(pid, "Extreme Token", "EXT", bytes32(0));
-        _payProject(pid, 100 ether);
-        _accumulateTokens(pid, address(pToken), 1e27);
+        IJBToken pToken = jbController.deployERC20For(pid, "Extreme Tick Token", "ETT", bytes32(0));
+        _accumulateTokens(pid, address(pToken), 100_000e18);
+        vm.prank(multisig);
+        try hook.deployPool(pid, 0) {
+            assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "Pool should deploy");
+            PoolKey memory key = hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN);
+            (uint160 sqrtPriceX96,,,) = V4_POOL_MANAGER.getSlot0(key.toId());
+            assertTrue(sqrtPriceX96 >= TickMath.MIN_SQRT_PRICE, "sqrtPrice >= MIN");
+            assertTrue(sqrtPriceX96 <= TickMath.MAX_SQRT_PRICE, "sqrtPrice <= MAX");
+            emit log_named_uint("  sqrtPriceX96", sqrtPriceX96);
+        } catch (bytes memory reason) {
+            // Expected errors are custom selectors encoded as the first 4 bytes.
+            // forge-lint: disable-next-line(unsafe-typecast)
+            bytes4 err = bytes4(reason);
+            assertTrue(
+                err == JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ZeroLiquidity.selector
+                    || err == JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoTerminalTokenFound.selector,
+                "Should revert with ZeroLiquidity or NoTerminalTokenFound"
+            );
+        }
+    }
+
+    function test_fork_m46_lowWeight_validTickBounds() public {
+        uint256 pid = _launchProject({reservedPercent: 0, cashOutTaxRate: 5000, weight: 1});
+        vm.prank(multisig);
+        IJBToken pToken = jbController.deployERC20For(pid, "Low Weight Token", "LWT", bytes32(0));
+        _payProject(pid, 50 ether);
+        _accumulateTokens(pid, address(pToken), 100_000e18);
         vm.prank(multisig);
         hook.deployPool(pid, 0);
-        assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "Pool should deploy with extreme weight");
-        PoolKey memory key = hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN);
-        (uint160 sqrtPriceX96,,,) = V4_POOL_MANAGER.getSlot0(key.toId());
-        assertTrue(sqrtPriceX96 > TickMath.MIN_SQRT_PRICE, "sqrtPrice > MIN");
-        assertTrue(sqrtPriceX96 < TickMath.MAX_SQRT_PRICE, "sqrtPrice < MAX");
-        emit log_named_uint("  sqrtPriceX96", sqrtPriceX96);
+        assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "Pool should deploy with low weight");
+        uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+        uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
+        assertTrue(posLiq > 0, "Position should have liquidity");
+        emit log_named_uint("  position liquidity", posLiq);
     }
 
     function _launchProject(

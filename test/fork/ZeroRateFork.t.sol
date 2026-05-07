@@ -31,7 +31,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
 import {LibClone} from "solady/src/utils/LibClone.sol";
 
-contract H30_ZeroRateFork is ForkDeployHelper {
+contract ZeroRateFork is ForkDeployHelper {
     using StateLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;
     IPoolManager constant V4_POOL_MANAGER = IPoolManager(0x000000000004444c5dc75cB358380D2e3dE08A90);

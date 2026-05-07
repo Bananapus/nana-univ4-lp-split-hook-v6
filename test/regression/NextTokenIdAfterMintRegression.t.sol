@@ -5,9 +5,9 @@ import {Test} from "forge-std/Test.sol";
 
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
 
-/// @notice Tests proving the H-31 TOCTOU fix: reading nextTokenId() AFTER minting
+/// @notice Tests proving the TOCTOU fix: reading nextTokenId() AFTER minting
 ///         instead of BEFORE, so the stored tokenIdOf always matches the actual minted position.
-contract H31_TOCTOU_NextTokenId is LPSplitHookV4TestBase {
+contract NextTokenIdAfterMintRegression is LPSplitHookV4TestBase {
     // ─── Test: Basic correctness — tokenIdOf matches the actual minted position ───
 
     function test_deployPool_storesCorrectTokenId() public {

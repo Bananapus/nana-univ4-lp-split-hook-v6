@@ -21,7 +21,7 @@ import {MockJBDirectory, MockJBPermissions} from "../mock/MockJBContracts.sol";
 /// CREATE2/CREATE deployments.
 /// @dev Both CREATE and CREATE2 opcodes increment the sender's EVM nonce, so the deployer's
 /// `_nonce` must increment for both paths to stay in sync for address registry registration.
-contract AuditFixM31Test is Test {
+contract RegressionFixM31Test is Test {
     JBUniswapV4LPSplitHook hookImpl;
     JBUniswapV4LPSplitHookDeployer deployer;
     JBAddressRegistry addressRegistry;

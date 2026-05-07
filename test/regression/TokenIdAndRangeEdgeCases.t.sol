@@ -10,8 +10,8 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
 
-contract CodexNemesisFindingsTest is LPSplitHookV4TestBase {
-    function test_codex_nemesis_preinitializedPoolAcceptsAttackerChosenPrice() public {
+contract RegressionRegressionsTest is LPSplitHookV4TestBase {
+    function test_regression_preinitializedPoolAcceptsAttackerChosenPrice() public {
         _accumulateTokens(PROJECT_ID, 100e18);
 
         Currency terminalCurrency = Currency.wrap(address(terminalToken));
@@ -40,7 +40,7 @@ contract CodexNemesisFindingsTest is LPSplitHookV4TestBase {
         assertGt(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "LP position should still mint");
     }
 
-    function test_codex_nemesis_permissionlessDeployCanLockWrongTerminalToken() public {
+    function test_regression_permissionlessDeployCanLockWrongTerminalToken() public {
         MockERC20 secondTerminalToken = new MockERC20("Second Terminal Token", "TERM2", 18);
 
         directory.setTerminal(PROJECT_ID, address(secondTerminalToken), address(terminal));

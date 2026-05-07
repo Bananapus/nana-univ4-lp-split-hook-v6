@@ -11,7 +11,7 @@ import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionMa
 
 /// @notice Tests for JBUniswapV4LPSplitHook constructor and initialize() behavior.
 /// @dev Verifies all immutables are set correctly by the constructor (5 params),
-///      per-clone config is set by initialize(), zero-address checks revert,
+///      per-clone config is set by initialize(),
 ///      fee percent validation works, feeProjectId=0 skips controllerOf check,
 ///      and double-initialization reverts.
 contract ConstructorTest is LPSplitHookV4TestBase {
@@ -33,62 +33,6 @@ contract ConstructorTest is LPSplitHookV4TestBase {
         assertEq(hook.FEE_PERCENT(), FEE_PERCENT, "FEE_PERCENT mismatch");
     }
 
-    /// @notice Constructor reverts when directory is address(0).
-    function test_Constructor_RevertsOn_ZeroDirectory() public {
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ZeroAddressNotAllowed.selector);
-        new JBUniswapV4LPSplitHook(
-            address(0), // directory = zero
-            IJBPermissions(address(permissions)),
-            address(jbTokens),
-            IPoolManager(address(1)),
-            IPositionManager(address(positionManager)),
-            IAllowanceTransfer(address(0)),
-            IHooks(address(0))
-        );
-    }
-
-    /// @notice Constructor reverts when tokens is address(0).
-    function test_Constructor_RevertsOn_ZeroTokens() public {
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ZeroAddressNotAllowed.selector);
-        new JBUniswapV4LPSplitHook(
-            address(directory),
-            IJBPermissions(address(permissions)),
-            address(0), // tokens = zero
-            IPoolManager(address(1)),
-            IPositionManager(address(positionManager)),
-            IAllowanceTransfer(address(0)),
-            IHooks(address(0))
-        );
-    }
-
-    /// @notice Constructor reverts when poolManager is address(0).
-    function test_Constructor_RevertsOn_ZeroPoolManager() public {
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ZeroAddressNotAllowed.selector);
-        new JBUniswapV4LPSplitHook(
-            address(directory),
-            IJBPermissions(address(permissions)),
-            address(jbTokens),
-            IPoolManager(address(0)), // poolManager = zero
-            IPositionManager(address(positionManager)),
-            IAllowanceTransfer(address(0)),
-            IHooks(address(0))
-        );
-    }
-
-    /// @notice Constructor reverts when positionManager is address(0).
-    function test_Constructor_RevertsOn_ZeroPositionManager() public {
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ZeroAddressNotAllowed.selector);
-        new JBUniswapV4LPSplitHook(
-            address(directory),
-            IJBPermissions(address(permissions)),
-            address(jbTokens),
-            IPoolManager(address(1)),
-            IPositionManager(address(0)), // positionManager = zero
-            IAllowanceTransfer(address(0)),
-            IHooks(address(0))
-        );
-    }
-
     // ─────────────────────────────────────────────────────────────────────
     // initialize() tests
     // ─────────────────────────────────────────────────────────────────────
@@ -106,7 +50,7 @@ contract ConstructorTest is LPSplitHookV4TestBase {
             IHooks(address(0))
         );
 
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidFeePercent.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidFeePercent.selector);
         impl.initialize(FEE_PROJECT_ID, 10_001);
     }
 
@@ -123,7 +67,7 @@ contract ConstructorTest is LPSplitHookV4TestBase {
             IHooks(address(0))
         );
 
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject.selector);
         impl.initialize(0, FEE_PERCENT);
     }
 
@@ -163,7 +107,7 @@ contract ConstructorTest is LPSplitHookV4TestBase {
         impl.initialize(FEE_PROJECT_ID, FEE_PERCENT);
 
         // Second init reverts
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_AlreadyInitialized.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_AlreadyInitialized.selector);
         impl.initialize(FEE_PROJECT_ID, FEE_PERCENT);
     }
 }

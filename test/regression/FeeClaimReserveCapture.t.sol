@@ -171,7 +171,7 @@ contract OverreportingCashOutTerminal {
     }
 }
 
-contract FeeClaimReserveCapturePoC is LPSplitHookV4TestBase {
+contract FeeClaimReserveCaptureRegression is LPSplitHookV4TestBase {
     uint256 internal constant PROJECT_B = 3;
 
     PullingFeeTerminal internal pullingTerminal;
@@ -258,7 +258,7 @@ contract FeeClaimReserveCapturePoC is LPSplitHookV4TestBase {
         hook.processSplitWith(_buildContext(PROJECT_B, address(projectTokenB), 100e18, 1));
 
         vm.prank(owner);
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientBalance.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientBalance.selector);
         hook.deployPool(PROJECT_B, 0);
 
         assertEq(

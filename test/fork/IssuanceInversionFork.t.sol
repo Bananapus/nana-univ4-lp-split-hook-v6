@@ -30,7 +30,7 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
 import {LibClone} from "solady/src/utils/LibClone.sol";
 
-contract M48_ZeroSqrtPriceFork is ForkDeployHelper {
+contract IssuanceInversionFork is ForkDeployHelper {
     using StateLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;
     IPoolManager constant V4_POOL_MANAGER = IPoolManager(0x000000000004444c5dc75cB358380D2e3dE08A90);
@@ -58,15 +58,16 @@ contract M48_ZeroSqrtPriceFork is ForkDeployHelper {
         hook.initialize(feeProjectId, 3800);
     }
 
-    function test_fork_m48_zeroIssuance_noTickMathRevert() public {
-        uint256 pid = _launchProject({reservedPercent: 10_000, cashOutTaxRate: 5000, weight: 1_000_000e18});
+    function test_fork_m50_extremeWeight_noRevert() public {
+        uint112 extremeWeight = uint112(1e28);
+        uint256 pid = _launchProject({reservedPercent: 0, cashOutTaxRate: 5000, weight: extremeWeight});
         vm.prank(multisig);
-        IJBToken pToken = jbController.deployERC20For(pid, "Zero Issuance Token", "ZIT", bytes32(0));
-        _payProject(pid, 50 ether);
-        _accumulateTokens(pid, address(pToken), 100_000e18);
+        IJBToken pToken = jbController.deployERC20For(pid, "Extreme Token", "EXT", bytes32(0));
+        _payProject(pid, 100 ether);
+        _accumulateTokens(pid, address(pToken), 1e27);
         vm.prank(multisig);
         hook.deployPool(pid, 0);
-        assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "Pool should deploy with 100% reserved");
+        assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "Pool should deploy with extreme weight");
         PoolKey memory key = hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN);
         (uint160 sqrtPriceX96,,,) = V4_POOL_MANAGER.getSlot0(key.toId());
         assertTrue(sqrtPriceX96 > TickMath.MIN_SQRT_PRICE, "sqrtPrice > MIN");

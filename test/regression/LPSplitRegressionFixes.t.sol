@@ -16,8 +16,8 @@ import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
-/// @notice Harness that exposes _computeOptimalCashOutAmount for M-40 edge-case testing.
-contract M40Harness is JBUniswapV4LPSplitHook {
+/// @notice Harness that exposes _computeOptimalCashOutAmount for edge-case testing.
+contract OutOfRangeAmountHarness is JBUniswapV4LPSplitHook {
     constructor(
         address _directory,
         IJBPermissions _permissions,
@@ -61,18 +61,18 @@ contract M40Harness is JBUniswapV4LPSplitHook {
     }
 }
 
-/// @notice Tests for Pass 12 audit fixes: M-40 (out-of-range token ordering) and M-41 (credit-only splits strand).
-contract Pass12Fixes is LPSplitHookV4TestBase {
-    M40Harness internal harness;
+/// @notice Tests out-of-range token ordering and credit-only split regressions.
+contract LPSplitRegressionFixes is LPSplitHookV4TestBase {
+    OutOfRangeAmountHarness internal harness;
 
-    // A new project ID with no ERC-20 token set (for M-41 test).
+    // A new project ID with no ERC-20 token set (for test).
     uint256 constant NO_TOKEN_PROJECT_ID = 99;
 
     function setUp() public override {
         super.setUp();
 
-        // Deploy harness for M-40 tests.
-        harness = new M40Harness(
+        // Deploy harness for tests.
+        harness = new OutOfRangeAmountHarness(
             address(directory),
             IJBPermissions(address(permissions)),
             address(jbTokens),
@@ -81,7 +81,7 @@ contract Pass12Fixes is LPSplitHookV4TestBase {
             IAllowanceTransfer(address(hook.PERMIT2()))
         );
 
-        // Set up project 99 with a controller but NO ERC-20 token (for M-41).
+        // Set up project 99 with a controller but NO ERC-20 token (for ).
         _setDirectoryController(NO_TOKEN_PROJECT_ID, address(controller));
         controller.setWeight(NO_TOKEN_PROJECT_ID, DEFAULT_WEIGHT);
         controller.setFirstWeight(NO_TOKEN_PROJECT_ID, DEFAULT_WEIGHT);
@@ -90,7 +90,7 @@ contract Pass12Fixes is LPSplitHookV4TestBase {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // M-40: Out-of-range token ordering — below range
+    // Out-of-range token ordering — below range
     // ═══════════════════════════════════════════════════════════════════════
 
     /// @notice When sqrtPriceInit <= sqrtPriceA (below range), only token0 has value.
@@ -121,15 +121,15 @@ contract Pass12Fixes is LPSplitHookV4TestBase {
 
         if (terminalIsToken0) {
             // Below range: only token0 has value. Terminal IS token0, so cash out everything.
-            assertEq(result, totalProjectTokens, "M-40 below range: terminalIsToken0 should return all tokens");
+            assertEq(result, totalProjectTokens, "below range: terminalIsToken0 should return all tokens");
         } else {
             // Below range: only token0 has value. Terminal is NOT token0, so cash out nothing.
-            assertEq(result, 0, "M-40 below range: terminal is token1 should return 0");
+            assertEq(result, 0, "below range: terminal is token1 should return 0");
         }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // M-40: Out-of-range token ordering — above range
+    // Out-of-range token ordering — above range
     // ═══════════════════════════════════════════════════════════════════════
 
     /// @notice When sqrtPriceInit >= sqrtPriceB (above range), only token1 has value.
@@ -159,15 +159,15 @@ contract Pass12Fixes is LPSplitHookV4TestBase {
 
         if (terminalIsToken0) {
             // Above range: only token1 has value. Terminal is token0, so cash out nothing.
-            assertEq(result, 0, "M-40 above range: terminalIsToken0 should return 0");
+            assertEq(result, 0, "above range: terminalIsToken0 should return 0");
         } else {
             // Above range: only token1 has value. Terminal IS token1, so cash out everything.
-            assertEq(result, totalProjectTokens, "M-40 above range: terminal is token1 should return all tokens");
+            assertEq(result, totalProjectTokens, "above range: terminal is token1 should return all tokens");
         }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // M-41: Credit-only splits strand — revert before accumulation
+    // Credit-only splits strand — revert before accumulation
     // ═══════════════════════════════════════════════════════════════════════
 
     /// @notice processSplitWith should revert with JBUniswapV4LPSplitHook_InvalidProjectId
@@ -198,12 +198,10 @@ contract Pass12Fixes is LPSplitHookV4TestBase {
 
         // Call processSplitWith from the controller — should revert.
         vm.prank(address(controller));
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidProjectId.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidProjectId.selector);
         hook.processSplitWith(context);
 
         // Accumulator should still be zero (revert happened before _accumulateTokens).
-        assertEq(
-            hook.accumulatedProjectTokens(NO_TOKEN_PROJECT_ID), 0, "M-41: accumulator must remain zero after revert"
-        );
+        assertEq(hook.accumulatedProjectTokens(NO_TOKEN_PROJECT_ID), 0, "accumulator must remain zero after revert");
     }
 }

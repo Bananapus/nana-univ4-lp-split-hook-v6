@@ -16,7 +16,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
-/// @notice Wrapper that exposes internal tick calculation functions for L-6 testing.
+/// @notice Wrapper that exposes internal tick calculation functions for testing.
 contract TickBoundsTestableHook is JBUniswapV4LPSplitHook {
     using PoolIdLibrary for PoolKey;
 
@@ -72,11 +72,11 @@ contract TickBoundsTestableHook is JBUniswapV4LPSplitHook {
     }
 }
 
-/// @notice Tests verifying the M-4 audit fix: _createAndInitializePool no longer reverts on pre-initialized pools.
-/// @dev M-4 fix allows deployPool to succeed even when an attacker or another deployer has already
+/// @notice Tests verifying the regression fix: _createAndInitializePool no longer reverts on pre-initialized pools.
+/// @dev fix allows deployPool to succeed even when an attacker or another deployer has already
 ///      initialized the Uniswap V4 pool at a different price. The hook now accepts whatever price
 ///      exists and adds liquidity (possibly out-of-range).
-contract AuditFixM4Test is LPSplitHookV4TestBase {
+contract RegressionFixM4Test is LPSplitHookV4TestBase {
     using PoolIdLibrary for PoolKey;
 
     // ─────────────────────────────────────────────────────────────────────
@@ -114,7 +114,7 @@ contract AuditFixM4Test is LPSplitHookV4TestBase {
         bytes32 poolId = keccak256(abi.encode(key));
         assertTrue(positionManager.poolInitialized(poolId), "precondition: pool should be pre-initialized");
 
-        // deployPool should succeed (M-4 fix: no revert on pre-initialized pools).
+        // deployPool should succeed (fix: no revert on pre-initialized pools).
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, 0);
 
@@ -223,11 +223,11 @@ contract AuditFixM4Test is LPSplitHookV4TestBase {
     }
 }
 
-/// @notice Tests verifying the L-6 audit fix: fallback tick computation re-clamps to valid TickMath range.
-/// @dev L-6 fix adds a second clamping pass after the fallback calculation (currentTick +/- TICK_SPACING).
+/// @notice Tests verifying the regression fix: fallback tick computation re-clamps to valid TickMath range.
+/// @dev fix adds a second clamping pass after the fallback calculation (currentTick +/- TICK_SPACING).
 ///      Without it, a currentTick at MIN_TICK or MAX_TICK would produce ticks outside the valid range,
 ///      causing TickMath.getSqrtPriceAtTick to revert.
-contract AuditFixL6Test is LPSplitHookV4TestBase {
+contract RegressionFixL6Test is LPSplitHookV4TestBase {
     TickBoundsTestableHook public testableHook;
 
     int24 constant TICK_SPACING = 200;
@@ -273,7 +273,7 @@ contract AuditFixL6Test is LPSplitHookV4TestBase {
 
     /// @notice When cashOut and issuance rates produce nearly identical ticks (collapsing
     ///         tickLower >= tickUpper), the fallback uses currentTick +/- TICK_SPACING.
-    ///         If currentTick is near MIN_TICK, the L-6 fix clamps tickLower to minUsable.
+    ///         If currentTick is near MIN_TICK, the fix clamps tickLower to minUsable.
     function test_L6_FallbackTickNearMinTick_ClampedToValidRange() public {
         // Force the fallback branch by making cashOut and issuance rates nearly equal.
         // With very high surplus, cashOutRate approaches issuanceRate, causing tick collapse.
@@ -286,7 +286,7 @@ contract AuditFixL6Test is LPSplitHookV4TestBase {
         controller.setWeight(PROJECT_ID, 1); // Extremely low weight => near-zero issuance
         controller.setReservedPercent(PROJECT_ID, 0);
 
-        // The fallback should trigger and the L-6 fix ensures no revert.
+        // The fallback should trigger and the fix ensures no revert.
         // Without the fix, this would revert in TickMath.getSqrtPriceAtTick if tick < MIN_TICK.
         (int24 tickLower, int24 tickUpper) =
             testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
@@ -295,8 +295,8 @@ contract AuditFixL6Test is LPSplitHookV4TestBase {
         int24 maxUsable = _maxUsableTick();
 
         // Verify ticks are within valid range.
-        assertGe(tickLower, minUsable, "tickLower must be >= minUsable after L-6 clamping");
-        assertLe(tickUpper, maxUsable, "tickUpper must be <= maxUsable after L-6 clamping");
+        assertGe(tickLower, minUsable, "tickLower must be >= minUsable after clamping");
+        assertLe(tickUpper, maxUsable, "tickUpper must be <= maxUsable after clamping");
         assertLt(tickLower, tickUpper, "tickLower must be < tickUpper");
     }
 
@@ -305,7 +305,7 @@ contract AuditFixL6Test is LPSplitHookV4TestBase {
     // ─────────────────────────────────────────────────────────────────────
 
     /// @notice When the current Juicebox price maps to a tick near MAX_TICK, the fallback
-    ///         calculation (currentTick + TICK_SPACING) would exceed MAX_TICK without L-6 clamping.
+    ///         calculation (currentTick + TICK_SPACING) would exceed MAX_TICK without clamping.
     function test_L6_FallbackTickNearMaxTick_ClampedToValidRange() public {
         // Force the fallback branch: make cashOut and issuance rates nearly equal.
         store.setSurplus(PROJECT_ID, 900e18);
@@ -317,7 +317,7 @@ contract AuditFixL6Test is LPSplitHookV4TestBase {
         controller.setWeight(PROJECT_ID, type(uint88).max); // Very high weight
         controller.setReservedPercent(PROJECT_ID, 0);
 
-        // The fallback should trigger and the L-6 fix ensures no revert.
+        // The fallback should trigger and the fix ensures no revert.
         (int24 tickLower, int24 tickUpper) =
             testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
 
@@ -325,8 +325,8 @@ contract AuditFixL6Test is LPSplitHookV4TestBase {
         int24 maxUsable = _maxUsableTick();
 
         // Verify ticks are within valid range.
-        assertGe(tickLower, minUsable, "tickLower must be >= minUsable after L-6 clamping");
-        assertLe(tickUpper, maxUsable, "tickUpper must be <= maxUsable after L-6 clamping");
+        assertGe(tickLower, minUsable, "tickLower must be >= minUsable after clamping");
+        assertLe(tickUpper, maxUsable, "tickUpper must be <= maxUsable after clamping");
         assertLt(tickLower, tickUpper, "tickLower must be < tickUpper");
     }
 

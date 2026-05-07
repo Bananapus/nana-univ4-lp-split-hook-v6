@@ -27,11 +27,10 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
 import {LibClone} from "solady/src/utils/LibClone.sol";
 
-contract H32_CrossProjectFork is ForkDeployHelper {
+contract ReservedDilutionFork is ForkDeployHelper {
     using StateLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;
     IPoolManager constant V4_POOL_MANAGER = IPoolManager(0x000000000004444c5dc75cB358380D2e3dE08A90);
@@ -59,33 +58,24 @@ contract H32_CrossProjectFork is ForkDeployHelper {
         hook.initialize(feeProjectId, 3800);
     }
 
-    function test_fork_h32_crossProjectIsolation() public {
-        uint256 pidA = _launchProject({reservedPercent: 0, cashOutTaxRate: 5000, weight: 1_000_000e18});
+    function test_fork_m49_reservedDilution_priceReflectsDilution() public {
+        uint256 pid = _launchProject({reservedPercent: 5000, cashOutTaxRate: 5000, weight: 1_000_000e18});
         vm.prank(multisig);
-        IJBToken pTokenA = jbController.deployERC20For(pidA, "Project A Token", "TKA", bytes32(0));
-        _payProject(pidA, 50 ether);
-        _accumulateTokens(pidA, address(pTokenA), 100_000e18);
-        uint256 pidB = _launchProject({reservedPercent: 0, cashOutTaxRate: 5000, weight: 500_000e18});
+        IJBToken pToken = jbController.deployERC20For(pid, "Diluted Token", "DIL", bytes32(0));
+        _payProject(pid, 50 ether);
+        _accumulateTokens(pid, address(pToken), 100_000e18);
         vm.prank(multisig);
-        IJBToken pTokenB = jbController.deployERC20For(pidB, "Project B Token", "TKB", bytes32(0));
-        _payProject(pidB, 30 ether);
-        _accumulateTokens(pidB, address(pTokenB), 80_000e18);
-        uint256 bAccumulatedBefore = hook.accumulatedProjectTokens(pidB);
-        uint256 bTokenBalanceBefore = IERC20(address(pTokenB)).balanceOf(address(hook));
-        assertEq(bAccumulatedBefore, 80_000e18, "B accumulated before");
-        vm.prank(multisig);
-        hook.deployPool(pidA, 0);
-        assertTrue(hook.isPoolDeployed(pidA, JBConstants.NATIVE_TOKEN), "A pool should deploy");
-        uint256 bAccumulatedAfter = hook.accumulatedProjectTokens(pidB);
-        uint256 bTokenBalanceAfter = IERC20(address(pTokenB)).balanceOf(address(hook));
-        assertEq(bAccumulatedAfter, bAccumulatedBefore, "B accumulated should be unchanged");
-        assertEq(bTokenBalanceAfter, bTokenBalanceBefore, "B token balance should be unchanged");
-        assertEq(hook.accumulatedProjectTokens(pidA), 0, "A accumulated should be 0 after deploy");
-        uint256 tokenIdA = hook.tokenIdOf(pidA, JBConstants.NATIVE_TOKEN);
-        uint128 posLiqA = V4_POSITION_MANAGER.getPositionLiquidity(tokenIdA);
-        assertTrue(posLiqA > 0, "A position should have liquidity");
-        emit log_named_uint("  A position liquidity", posLiqA);
-        emit log_named_uint("  B accumulated (unchanged)", bAccumulatedAfter);
+        hook.deployPool(pid, 0);
+        assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "Pool should deploy with 50% reserved");
+        PoolKey memory key = hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN);
+        (uint160 sqrtPriceX96,,,) = V4_POOL_MANAGER.getSlot0(key.toId());
+        assertTrue(sqrtPriceX96 > TickMath.MIN_SQRT_PRICE, "sqrtPrice > MIN");
+        assertTrue(sqrtPriceX96 < TickMath.MAX_SQRT_PRICE, "sqrtPrice < MAX");
+        uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+        uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
+        assertTrue(posLiq > 0, "Position should have liquidity");
+        emit log_named_uint("  sqrtPriceX96", sqrtPriceX96);
+        emit log_named_uint("  position liquidity", posLiq);
     }
 
     function _launchProject(

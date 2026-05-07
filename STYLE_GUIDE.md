@@ -451,54 +451,9 @@ jobs:
         run: forge fmt --check
 ```
 
-**slither.yml** (repos with `src/` contracts only):
-```yaml
-name: slither
-on:
-    pull_request:
-      branches:
-        - main
-    push:
-      branches:
-        - main
-jobs:
-  analyze:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - uses: actions/setup-node@v4
-        with:
-          node-version: latest
-      - name: Install npm dependencies
-        run: npm install --omit=dev
-      - name: Install Foundry
-        uses: foundry-rs/foundry-toolchain@v1
-      - name: Run slither
-        uses: crytic/slither-action@v0.3.1
-        with:
-            slither-config: slither-ci.config.json
-            fail-on: medium
-```
+**Static review workflow** (repos with `src/` contracts only):
 
-**slither-ci.config.json:**
-```json
-{
-  "detectors_to_exclude": "timestamp,uninitialized-local,naming-convention,solc-version,shadowing-local",
-  "exclude_informational": true,
-  "exclude_low": false,
-  "exclude_medium": false,
-  "exclude_high": false,
-  "disable_color": false,
-  "filter_paths": "(mocks/|test/|node_modules/|lib/)",
-  "legacy_ast": false
-}
-```
-
-**Variations:**
-- Deployer-only repos (no `src/`, only `script/`) skip slither entirely — the action's internal `forge build` skips `test/` and `script/` by default, leaving nothing to compile.
-- Use inline `// slither-disable-next-line <detector>` to suppress known false positives rather than adding to `detectors_to_exclude` in the config. The comment must be on the line immediately before the flagged expression.
+Keep repo-local static review automation current with the package's runtime surface. At minimum, CI should run formatting, linting, and build checks with `--deny notes`. Repos that only contain deployment scripts can rely on the shared formatting and lint jobs unless they add runtime contracts.
 
 ### package.json
 

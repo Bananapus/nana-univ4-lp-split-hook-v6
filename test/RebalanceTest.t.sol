@@ -40,7 +40,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
         jbProjects.setOwner(newProjectId, owner);
 
         vm.prank(owner);
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidStageForAction.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidStageForAction.selector);
         hook.rebalanceLiquidity(newProjectId, address(terminalToken), 0, 0);
     }
 
@@ -59,7 +59,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
         terminal.setAccountingContext(PROJECT_ID, address(otherToken), uint32(uint160(address(otherToken))), 18);
 
         vm.prank(owner);
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidStageForAction.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidStageForAction.selector);
         hook.rebalanceLiquidity(PROJECT_ID, address(otherToken), 0, 0);
     }
 
@@ -73,7 +73,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
         address randomToken = makeAddr("randomToken");
 
         vm.prank(owner);
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidTerminalToken.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidTerminalToken.selector);
         hook.rebalanceLiquidity(PROJECT_ID, randomToken, 0, 0);
     }
 

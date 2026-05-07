@@ -18,7 +18,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
 
-contract CodexNemesisMathHook is JBUniswapV4LPSplitHook {
+contract RegressionMathHook is JBUniswapV4LPSplitHook {
     constructor(
         address _directory,
         IJBPermissions _permissions,
@@ -90,13 +90,13 @@ contract CodexNemesisMathHook is JBUniswapV4LPSplitHook {
     }
 }
 
-contract CodexNemesisPreinitializedRangePoC is LPSplitHookV4TestBase {
-    CodexNemesisMathHook internal mathHook;
+contract RegressionPreinitializedRangeRegression is LPSplitHookV4TestBase {
+    RegressionMathHook internal mathHook;
 
     function setUp() public override {
         super.setUp();
 
-        mathHook = new CodexNemesisMathHook(
+        mathHook = new RegressionMathHook(
             address(directory),
             IJBPermissions(address(permissions)),
             address(jbTokens),

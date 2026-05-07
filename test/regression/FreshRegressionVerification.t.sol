@@ -5,7 +5,7 @@ import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
 
 /// @notice Verify that fee collection reverts when the project's terminal has been removed.
-contract CodexNemesisFreshAuditVerification is LPSplitHookV4TestBase {
+contract RegressionFreshRegressionVerification is LPSplitHookV4TestBase {
     function test_collectFeesRevertsAfterProjectTerminalRemoval() public {
         _accumulateAndDeploy(PROJECT_ID, 1000e18);
 

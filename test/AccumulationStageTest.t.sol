@@ -99,7 +99,14 @@ contract AccumulationStageTest is LPSplitHookV4TestBase {
 
         JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, amount);
 
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_SplitSenderNotValidControllerOrTerminal.selector);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_SplitSenderNotValidControllerOrTerminal.selector,
+                PROJECT_ID,
+                user,
+                address(controller)
+            )
+        );
         // Call from `user` instead of controller
         vm.prank(user);
         hook.processSplitWith(context);
@@ -131,7 +138,13 @@ contract AccumulationStageTest is LPSplitHookV4TestBase {
             })
         });
 
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NotHookSpecifiedInContext.selector);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NotHookSpecifiedInContext.selector,
+                address(hook),
+                address(0xdead)
+            )
+        );
         vm.prank(address(controller));
         hook.processSplitWith(context);
     }
@@ -148,7 +161,11 @@ contract AccumulationStageTest is LPSplitHookV4TestBase {
         // Build context with groupId=0 (payout split, not reserved tokens)
         JBSplitHookContext memory context = _buildContext(PROJECT_ID, address(projectToken), amount, 0);
 
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_TerminalTokensNotAllowed.selector);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_TerminalTokensNotAllowed.selector, 0, 1
+            )
+        );
         vm.prank(address(controller));
         hook.processSplitWith(context);
     }
@@ -166,7 +183,14 @@ contract AccumulationStageTest is LPSplitHookV4TestBase {
         // Project 999 has no controller set in directory (defaults to address(0))
         JBSplitHookContext memory context = _buildReservedContext(invalidProjectId, amount);
 
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidProjectId.selector);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidProjectId.selector,
+                invalidProjectId,
+                address(0),
+                address(0)
+            )
+        );
         // Even pranking as some address, it will fail at the controllerOf check first
         vm.prank(address(controller));
         hook.processSplitWith(context);
@@ -249,10 +273,14 @@ contract AccumulationStageTest is LPSplitHookV4TestBase {
         // Build context with token = address(0) — simulating a project that only has credits
         JBSplitHookContext memory context = _buildContext(PROJECT_ID, address(0), amount, 1);
 
-        // With M-44 fix, the hook uses the canonical token (from TOKENS.tokenOf), not context.token.
+        // With fix, the hook uses the canonical token (from TOKENS.tokenOf), not context.token.
         // Since the project has a real ERC-20, the canonical token is non-zero, but no actual tokens
         // were transferred, so the balance check catches the mismatch.
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientBalance.selector);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientBalance.selector, 0, amount
+            )
+        );
         vm.prank(address(controller));
         hook.processSplitWith(context);
     }
@@ -280,7 +308,11 @@ contract AccumulationStageTest is LPSplitHookV4TestBase {
         // But we simulate no transfer — just the call.
         JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, 1e18);
 
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientBalance.selector);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientBalance.selector, 50e18, 101e18
+            )
+        );
         vm.prank(address(controller));
         hook.processSplitWith(context);
     }

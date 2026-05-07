@@ -65,29 +65,29 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     // --------------------------- custom errors ------------------------- //
     //*********************************************************************//
 
-    error JBUniswapV4LPSplitHook_AlreadyInitialized();
-    error JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject();
-    error JBUniswapV4LPSplitHook_InsufficientBalance();
-    error JBUniswapV4LPSplitHook_InsufficientLiquidity();
-    error JBUniswapV4LPSplitHook_InvalidFeePercent();
-    error JBUniswapV4LPSplitHook_InvalidProjectId();
-    error JBUniswapV4LPSplitHook_InvalidStageForAction();
-    error JBUniswapV4LPSplitHook_InvalidTerminalToken();
-    error JBUniswapV4LPSplitHook_InvalidTickBounds();
-    error JBUniswapV4LPSplitHook_NoTerminalTokenFound();
-    error JBUniswapV4LPSplitHook_NoTokensAccumulated();
-    error JBUniswapV4LPSplitHook_NotHookSpecifiedInContext();
-    error JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported();
-    error JBUniswapV4LPSplitHook_Permit2AmountOverflow();
-    error JBUniswapV4LPSplitHook_PoolAlreadyDeployed();
-    error JBUniswapV4LPSplitHook_SplitSenderNotValidControllerOrTerminal();
+    error JBUniswapV4LPSplitHook_AlreadyInitialized(bool initialized);
+    error JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject(uint256 feePercent, uint256 feeProjectId);
+    error JBUniswapV4LPSplitHook_InsufficientBalance(uint256 available, uint256 required);
+    error JBUniswapV4LPSplitHook_InsufficientLiquidity(uint128 liquidity);
+    error JBUniswapV4LPSplitHook_InvalidFeePercent(uint256 feePercent, uint256 maxFeePercent);
+    error JBUniswapV4LPSplitHook_InvalidProjectId(uint256 projectId, address controller, address projectToken);
+    error JBUniswapV4LPSplitHook_InvalidStageForAction(uint256 projectId, address terminalToken, uint256 tokenId);
+    error JBUniswapV4LPSplitHook_InvalidTerminalToken(uint256 projectId, address terminalToken);
+    error JBUniswapV4LPSplitHook_InvalidTickBounds(int24 tickLower, int24 tickUpper);
+    error JBUniswapV4LPSplitHook_NoTerminalTokenFound(uint256 projectId);
+    error JBUniswapV4LPSplitHook_NoTokensAccumulated(uint256 projectId);
+    error JBUniswapV4LPSplitHook_NotHookSpecifiedInContext(address expectedHook, address actualHook);
+    error JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported(uint256 projectId, address terminalToken);
+    error JBUniswapV4LPSplitHook_Permit2AmountOverflow(address token, uint256 amount, uint256 maxAmount);
+    error JBUniswapV4LPSplitHook_PoolAlreadyDeployed(uint256 projectId, address terminalToken, uint256 tokenId);
+    error JBUniswapV4LPSplitHook_SplitSenderNotValidControllerOrTerminal(
+        uint256 projectId, address sender, address controller
+    );
     error JBUniswapV4LPSplitHook_TemporaryAllowanceNotConsumed(address token, address spender, uint256 allowance);
     error JBUniswapV4LPSplitHook_TerminalNotFound(uint256 projectId, address token);
-    error JBUniswapV4LPSplitHook_TerminalTokensNotAllowed();
-    error JBUniswapV4LPSplitHook_UnauthorizedCaller();
+    error JBUniswapV4LPSplitHook_TerminalTokensNotAllowed(uint256 groupId, uint256 requiredGroupId);
     error JBUniswapV4LPSplitHook_UnclaimedFeeTokenChanged(address previousToken, address nextToken);
-    error JBUniswapV4LPSplitHook_ZeroAddressNotAllowed();
-    error JBUniswapV4LPSplitHook_ZeroLiquidity();
+    error JBUniswapV4LPSplitHook_ZeroLiquidity(uint256 amount0, uint256 amount1);
 
     //*********************************************************************//
     // ------------------------- public constants ------------------------ //
@@ -249,11 +249,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     )
         JBPermissioned(permissions)
     {
-        if (directory == address(0)) revert JBUniswapV4LPSplitHook_ZeroAddressNotAllowed();
-        if (tokens == address(0)) revert JBUniswapV4LPSplitHook_ZeroAddressNotAllowed();
-        if (address(poolManager) == address(0)) revert JBUniswapV4LPSplitHook_ZeroAddressNotAllowed();
-        if (address(positionManager) == address(0)) revert JBUniswapV4LPSplitHook_ZeroAddressNotAllowed();
-
         DIRECTORY = directory;
         ORACLE_HOOK = oracleHook;
         PERMIT2 = permit2;
@@ -269,17 +264,27 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param feeProjectId Project ID to receive LP fees.
     /// @param feePercent Percentage of LP fees to route to fee project, out of `BPS` (e.g., 3800 = 38%).
     function initialize(uint256 feeProjectId, uint256 feePercent) external {
-        if (initialized) revert JBUniswapV4LPSplitHook_AlreadyInitialized();
+        if (initialized) revert JBUniswapV4LPSplitHook_AlreadyInitialized({initialized: initialized});
 
-        if (feePercent > BPS) revert JBUniswapV4LPSplitHook_InvalidFeePercent();
+        if (feePercent > BPS) {
+            revert JBUniswapV4LPSplitHook_InvalidFeePercent({feePercent: feePercent, maxFeePercent: BPS});
+        }
 
         // If fees are configured, a valid fee project must be specified — otherwise fee tokens get stuck
         // because primaryTerminalOf(0, token) returns address(0).
-        if (feePercent > 0 && feeProjectId == 0) revert JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject();
+        if (feePercent > 0 && feeProjectId == 0) {
+            revert JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject({
+                feePercent: feePercent, feeProjectId: feeProjectId
+            });
+        }
 
         if (feeProjectId != 0) {
             address feeController = _controllerOf(feeProjectId);
-            if (feeController == address(0)) revert JBUniswapV4LPSplitHook_InvalidProjectId();
+            if (feeController == address(0)) {
+                revert JBUniswapV4LPSplitHook_InvalidProjectId({
+                    projectId: feeProjectId, controller: feeController, projectToken: address(0)
+                });
+            }
         }
 
         initialized = true;
@@ -358,11 +363,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             IJBMultiTerminal term = IJBMultiTerminal(address(terminals[i]));
 
             // Get the terminal's store for balance lookups.
-            // slither-disable-next-line calls-loop
             IJBTerminalStore termStore = term.STORE();
 
             // Get all accounting contexts (one per accepted token) for this project on this terminal.
-            // slither-disable-next-line calls-loop
             JBAccountingContext[] memory contexts = term.accountingContextsOf(projectId);
 
             // Cache context count for gas-efficient iteration.
@@ -376,12 +379,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 // This hook keys each LP by terminal token and, when it operates, cashes out through the project's
                 // primary terminal for that token. Holders may still cash out directly from same-token secondary
                 // terminals, but those balances are not available to this hook's primary-terminal path.
-                // slither-disable-next-line calls-loop
                 address primaryTerminal = _primaryTerminalOf({projectId: projectId, token: context.token});
                 if (primaryTerminal == address(0) || primaryTerminal != address(term)) continue;
 
                 // Look up how much of this token the terminal holds for the project.
-                // slither-disable-next-line calls-loop
                 uint256 balance =
                     termStore.balanceOf({terminal: address(term), projectId: projectId, token: context.token});
 
@@ -398,7 +399,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                     // For non-ETH tokens, use the price feed to normalize to ETH.
                     // pricePerUnit = how many of `context.currency` per 1 ETH at `context.decimals` precision.
                     // ethValue (18-decimal) = balance * 10^18 / pricePerUnit.
-                    // slither-disable-next-line calls-loop
                     try IJBController(controller).PRICES()
                         .pricePerUnitOf({
                         projectId: projectId,
@@ -434,7 +434,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         if (highestToken == address(0)) highestToken = highestUnpricedToken;
 
         // Revert if no token with a non-zero balance was found across any terminal.
-        if (highestToken == address(0)) revert JBUniswapV4LPSplitHook_NoTerminalTokenFound();
+        if (highestToken == address(0)) revert JBUniswapV4LPSplitHook_NoTerminalTokenFound({projectId: projectId});
     }
 
     /// @notice Calculate the cash out rate (price floor).
@@ -564,7 +564,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param controller The project's controller address (pre-fetched to avoid redundant lookups).
     /// @param ruleset The project's current ruleset (pre-fetched to avoid redundant lookups).
     /// @return projectTokensPerTerminalToken Project tokens minted (after reserves) per terminal token (18-decimal).
-    // slither-disable-next-line unused-return
     function _getIssuanceRate(
         uint256 projectId,
         address terminalToken,
@@ -659,7 +658,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param controller The project's controller address (pre-fetched to avoid redundant lookups).
     /// @param ruleset The project's current ruleset (pre-fetched to avoid redundant lookups).
     /// @return projectTokenOutAmount The equivalent project token amount at the current issuance weight.
-    // slither-disable-next-line unused-return
     function _getProjectTokensOutForTerminalTokensIn(
         uint256 projectId,
         address terminalToken,
@@ -698,7 +696,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Look up the current sqrt price of a pool.
     function _getSqrtPriceX96(PoolKey memory key) internal view returns (uint160 sqrtPriceX96) {
-        // slither-disable-next-line unused-return
         (sqrtPriceX96,,,) = POOL_MANAGER.getSlot0(key.toId());
     }
 
@@ -794,7 +791,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Look up the primary terminal for a project/token pair.
     function _primaryTerminalOf(uint256 projectId, address token) internal view returns (address) {
-        // slither-disable-next-line calls-loop
         return address(IJBDirectory(DIRECTORY).primaryTerminalOf({projectId: projectId, token: token}));
     }
 
@@ -894,7 +890,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         // Emit the claim after bookkeeping so the event only survives if the downstream transfer does too.
         emit FeeTokensClaimed(projectId, beneficiary, tokenAmount);
-        // slither-disable-next-line reentrancy-no-eth,reentrancy-events
         IERC20(feeProjectToken).safeTransfer({to: beneficiary, value: tokenAmount});
     }
 
@@ -914,11 +909,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             .transferCreditsFrom({
             holder: address(this), projectId: FEE_PROJECT_ID, recipient: beneficiary, creditCount: creditAmount
         }) {
-            // slither-disable-next-line reentrancy-events
             emit FeeTokensClaimed(projectId, beneficiary, creditAmount);
         } catch {
             // Restore the pending credits so the project owner can retry once the fee-project controller is usable.
-            // slither-disable-next-line reentrancy-no-eth,reentrancy-events,reentrancy-benign
             claimableFeeCredits[projectId] = creditAmount;
         }
     }
@@ -932,7 +925,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     function collectAndRouteLPFees(uint256 projectId, address terminalToken) external {
         // Ensure a pool has been deployed for this project/token pair.
         uint256 tokenId = tokenIdOf[projectId][terminalToken];
-        if (tokenId == 0) revert JBUniswapV4LPSplitHook_InvalidStageForAction();
+        if (tokenId == 0) {
+            revert JBUniswapV4LPSplitHook_InvalidStageForAction({
+                projectId: projectId, terminalToken: terminalToken, tokenId: tokenId
+            });
+        }
 
         // Resolve the project's ERC-20 token and pool key for fee collection.
         address projectToken = _tokenOf(projectId);
@@ -951,7 +948,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param projectId The ID of the project whose accumulated tokens should be deployed as LP.
     /// @param minCashOutReturn Minimum terminal tokens to accept from the cash-out (slippage protection). Pass 0 to use
     /// the hook's default 3% tolerance derived from the current cash-out rate.
-    // slither-disable-next-line reentrancy-benign,reentrancy-events,unused-return
     function deployPool(uint256 projectId, uint256 minCashOutReturn) external {
         // Allow anyone to deploy if the current ruleset's weight has decayed 10x from the initial weight.
         // Otherwise, require SET_BUYBACK_POOL permission from the project owner.
@@ -968,16 +964,26 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // Auto-select the terminal token with the highest ETH-denominated value.
         address terminalToken = _findHighestValueTerminalTokenOf({projectId: projectId, controller: controller});
 
-        if (tokenIdOf[projectId][terminalToken] != 0) revert JBUniswapV4LPSplitHook_PoolAlreadyDeployed();
-        if (hasDeployedPool[projectId]) revert JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported();
+        if (tokenIdOf[projectId][terminalToken] != 0) {
+            revert JBUniswapV4LPSplitHook_PoolAlreadyDeployed({
+                projectId: projectId, terminalToken: terminalToken, tokenId: tokenIdOf[projectId][terminalToken]
+            });
+        }
+        if (hasDeployedPool[projectId]) {
+            revert JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported({
+                projectId: projectId, terminalToken: terminalToken
+            });
+        }
 
         address projectToken = _tokenOf(projectId);
         uint256 projectTokenBalance = accumulatedProjectTokens[projectId];
 
-        if (projectTokenBalance == 0) revert JBUniswapV4LPSplitHook_NoTokensAccumulated();
+        if (projectTokenBalance == 0) revert JBUniswapV4LPSplitHook_NoTokensAccumulated({projectId: projectId});
 
         address terminal = _primaryTerminalOf({projectId: projectId, token: terminalToken});
-        if (terminal == address(0)) revert JBUniswapV4LPSplitHook_InvalidTerminalToken();
+        if (terminal == address(0)) {
+            revert JBUniswapV4LPSplitHook_InvalidTerminalToken({projectId: projectId, terminalToken: terminalToken});
+        }
 
         // Flip the project into post-deploy burn mode before any external calls so reentrancy cannot
         // observe the project as still being in accumulation mode.
@@ -1000,22 +1006,39 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// circulating supply.
     /// @dev Only accepts reserved-token splits (groupId == 1). Reverts if the sender is not the project's controller or
     /// if the project has no ERC-20 token deployed.
-    // slither-disable-next-line unused-return
     function processSplitWith(JBSplitHookContext calldata context) external payable {
-        if (address(context.split.hook) != address(this)) revert JBUniswapV4LPSplitHook_NotHookSpecifiedInContext();
+        if (address(context.split.hook) != address(this)) {
+            revert JBUniswapV4LPSplitHook_NotHookSpecifiedInContext({
+                expectedHook: address(this), actualHook: address(context.split.hook)
+            });
+        }
 
         address controller = _controllerOf(context.projectId);
-        if (controller == address(0)) revert JBUniswapV4LPSplitHook_InvalidProjectId();
-        if (controller != msg.sender) revert JBUniswapV4LPSplitHook_SplitSenderNotValidControllerOrTerminal();
+        if (controller == address(0)) {
+            revert JBUniswapV4LPSplitHook_InvalidProjectId({
+                projectId: context.projectId, controller: controller, projectToken: address(0)
+            });
+        }
+        if (controller != msg.sender) {
+            revert JBUniswapV4LPSplitHook_SplitSenderNotValidControllerOrTerminal({
+                projectId: context.projectId, sender: msg.sender, controller: controller
+            });
+        }
 
-        if (context.groupId != 1) revert JBUniswapV4LPSplitHook_TerminalTokensNotAllowed();
+        if (context.groupId != 1) {
+            revert JBUniswapV4LPSplitHook_TerminalTokensNotAllowed({groupId: context.groupId, requiredGroupId: 1});
+        }
 
         address projectToken = _tokenOf(context.projectId);
 
         if (!hasDeployedPool[context.projectId]) {
             // This hook requires an ERC-20 project token — credits cannot be paired as LP.
             // Check BEFORE accumulating to keep internal accounting clean on revert.
-            if (projectToken == address(0)) revert JBUniswapV4LPSplitHook_InvalidProjectId();
+            if (projectToken == address(0)) {
+                revert JBUniswapV4LPSplitHook_InvalidProjectId({
+                    projectId: context.projectId, controller: controller, projectToken: projectToken
+                });
+            }
 
             // Record the initial weight on first accumulation.
             if (initialWeightOf[context.projectId] == 0) {
@@ -1031,7 +1054,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 IERC20(projectToken).balanceOf(address(this)) - _unavailableFeeTokenBalance(projectToken)
                     < accumulatedProjectTokens[context.projectId]
             ) {
-                revert JBUniswapV4LPSplitHook_InsufficientBalance();
+                revert JBUniswapV4LPSplitHook_InsufficientBalance({
+                    available: IERC20(projectToken).balanceOf(address(this))
+                        - _unavailableFeeTokenBalance(projectToken),
+                    required: accumulatedProjectTokens[context.projectId]
+                });
             }
         } else {
             _burnReceivedTokens({projectId: context.projectId, projectToken: projectToken});
@@ -1045,7 +1072,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param terminalToken The terminal token paired with the project token in the pool.
     /// @param decreaseAmount0Min Minimum amount of token0 to recover from the burned position (slippage protection).
     /// @param decreaseAmount1Min Minimum amount of token1 to recover from the burned position (slippage protection).
-    // slither-disable-next-line reentrancy-eth,reentrancy-benign,reentrancy-events
     function rebalanceLiquidity(
         uint256 projectId,
         address terminalToken,
@@ -1059,10 +1085,16 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         });
 
         address terminal = _primaryTerminalOf({projectId: projectId, token: terminalToken});
-        if (terminal == address(0)) revert JBUniswapV4LPSplitHook_InvalidTerminalToken();
+        if (terminal == address(0)) {
+            revert JBUniswapV4LPSplitHook_InvalidTerminalToken({projectId: projectId, terminalToken: terminalToken});
+        }
 
         uint256 tokenId = tokenIdOf[projectId][terminalToken];
-        if (tokenId == 0) revert JBUniswapV4LPSplitHook_InvalidStageForAction();
+        if (tokenId == 0) {
+            revert JBUniswapV4LPSplitHook_InvalidStageForAction({
+                projectId: projectId, terminalToken: terminalToken, tokenId: tokenId
+            });
+        }
 
         address projectToken = _tokenOf(projectId);
         PoolKey memory key = poolKeysOf[projectId][terminalToken];
@@ -1071,7 +1103,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             projectId: projectId, projectToken: projectToken, terminalToken: terminalToken, tokenId: tokenId, key: key
         });
 
-        // Snapshot balances before burn to isolate per-project recovered amounts (H-32).
+        // Snapshot balances before burn to isolate per-project recovered amounts ().
         uint256 projBalBefore = IERC20(projectToken).balanceOf(address(this));
         uint256 termBalBefore = _getTerminalTokenBalance(terminalToken);
 
@@ -1084,7 +1116,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         // Cache controller and ruleset once for _mintRebalancedPosition and its callees.
         address controller = _controllerOf(projectId);
-        // slither-disable-next-line unused-return
         (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
 
         _mintRebalancedPosition({
@@ -1109,7 +1140,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     }
 
     /// @notice Deposit tokens into a project's primary terminal balance via `addToBalanceOf`.
-    // slither-disable-next-line arbitrary-send-eth,incorrect-equality
     function _addToProjectBalance(uint256 projectId, address token, uint256 amount, bool isNative) internal {
         if (amount == 0) return;
 
@@ -1136,7 +1166,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param minCashOutReturn Minimum cash out return (slippage protection).
     /// @param controller The project's controller address (pre-fetched to avoid redundant lookups).
     /// @param ruleset The project's current ruleset (pre-fetched to avoid redundant lookups).
-    // slither-disable-next-line reentrancy-eth,reentrancy-benign,reentrancy-events,unused-return
     function _addUniswapLiquidity(
         uint256 projectId,
         address projectToken,
@@ -1231,7 +1260,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 : actualTerminalTokenAmount;
 
             // A derived or caller-provided minimum is still enforced against the reconciled spendable amount.
-            if (terminalTokenAmount < effectiveMinReturn) revert JBUniswapV4LPSplitHook_InsufficientBalance();
+            if (terminalTokenAmount < effectiveMinReturn) {
+                revert JBUniswapV4LPSplitHook_InsufficientBalance({
+                    available: terminalTokenAmount, required: effectiveMinReturn
+                });
+            }
         }
 
         uint256 projectTokenAmount = projectTokenBalance - cashOutAmount;
@@ -1255,10 +1288,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         // Revert if the computed liquidity is zero — minting a position with no liquidity would
         // waste gas and leave the project in a deployed state with a useless (empty) LP position.
-        // slither-disable-next-line incorrect-equality
-        if (liquidity == 0) revert JBUniswapV4LPSplitHook_ZeroLiquidity();
+        if (liquidity == 0) revert JBUniswapV4LPSplitHook_ZeroLiquidity({amount0: amount0, amount1: amount1});
 
-        // Snapshot balances before minting to isolate per-project leftovers (H-32).
+        // Snapshot balances before minting to isolate per-project leftovers ().
         uint256 projBalBeforeMint = IERC20(projectToken).balanceOf(address(this));
         uint256 termBalBeforeMint = _getTerminalTokenBalance(terminalToken);
 
@@ -1275,7 +1307,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // inside modifyLiquidities, so (nextTokenId - 1) is the ID that was just minted.
         tokenIdOf[projectId][terminalToken] = _nextTokenId() - 1;
 
-        // Per-project leftover handling via snapshot-delta (H-32).
+        // Per-project leftover handling via snapshot-delta ().
         // Safe subtraction: V4 SWEEP may return dust beyond what was settled.
         uint256 postProjBal = IERC20(projectToken).balanceOf(address(this));
         uint256 postTermBal = _getTerminalTokenBalance(terminalToken);
@@ -1306,7 +1338,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     }
 
     /// @notice Align tick to tick spacing using proper floor semantics for negative ticks
-    // slither-disable-next-line divide-before-multiply
     function _alignTickToSpacing(int24 tick, int24 spacing) internal pure returns (int24 alignedTick) {
         // Intentional: rounding tick down to nearest spacing boundary
         // forge-lint: disable-next-line(divide-before-multiply)
@@ -1344,11 +1375,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // TAKE_PAIR params: (currency0, currency1, recipient).
         burnParams[1] = abi.encode(key.currency0, key.currency1, address(this));
 
-        _modifyLiquidities(abi.encode(burnActions, burnParams), 0);
+        _modifyLiquidities({unlockData: abi.encode(burnActions, burnParams), value: 0});
     }
 
     /// @notice Burn project tokens held by this contract through the project's controller.
-    // slither-disable-next-line incorrect-equality,reentrancy-events
     function _burnProjectTokens(uint256 projectId, address projectToken, uint256 amount, string memory memo) internal {
         if (amount == 0) return;
 
@@ -1497,7 +1527,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             if (tickUpper > maxUsable) tickUpper = maxUsable;
 
             // Final validation: if clamping collapsed the range, revert rather than create an invalid position.
-            if (tickLower >= tickUpper) revert JBUniswapV4LPSplitHook_InvalidTickBounds();
+            if (tickLower >= tickUpper) {
+                revert JBUniswapV4LPSplitHook_InvalidTickBounds({tickLower: tickLower, tickUpper: tickUpper});
+            }
         }
     }
 
@@ -1510,7 +1542,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param terminalToken The terminal token (e.g. ETH or USDC) paired with the project token.
     /// @param tokenId The Uniswap V4 position NFT token ID to collect fees from.
     /// @param key The pool key identifying the Uniswap V4 pool.
-    // slither-disable-next-line reentrancy-eth,reentrancy-benign,reentrancy-events
     function _collectAndRouteFees(
         uint256 projectId,
         address projectToken,
@@ -1534,7 +1565,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // TAKE_PAIR params: (currency0, currency1, recipient).
         feeParams[1] = abi.encode(key.currency0, key.currency1, address(this));
 
-        _modifyLiquidities(abi.encode(feeActions, feeParams), 0);
+        _modifyLiquidities({unlockData: abi.encode(feeActions, feeParams), value: 0});
 
         // Diff balances to determine exactly how much was collected as fees.
         uint256 feeAmount0 = _currencyBalance(key.currency0) - bal0Before;
@@ -1712,7 +1743,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param controller The project's controller address (pre-fetched to avoid redundant lookups).
     /// @param ruleset The project's current ruleset (pre-fetched to avoid redundant lookups).
     /// @return key The pool key identifying the newly created Uniswap V4 pool.
-    // slither-disable-next-line reentrancy-benign,reentrancy-events,unused-return
     function _createAndInitializePool(
         uint256 projectId,
         address projectToken,
@@ -1777,7 +1807,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param minCashOutReturn Minimum cash out return (slippage protection).
     /// @param controller The project's controller address (pre-fetched to avoid redundant lookups).
     /// @param ruleset The project's current ruleset (pre-fetched to avoid redundant lookups).
-    // slither-disable-next-line reentrancy-events
     function _deployPoolAndAddLiquidity(
         uint256 projectId,
         address projectToken,
@@ -1873,7 +1902,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // SWEEP leftover currency1 back to this contract
         params[4] = abi.encode(key.currency1, address(this));
 
-        _modifyLiquidities(abi.encode(actions, params), ethValue);
+        _modifyLiquidities({unlockData: abi.encode(actions, params), value: ethValue});
     }
 
     /// @notice Mint a new LP position with tick bounds recalculated from current issuance and cash-out rates.
@@ -1888,7 +1917,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param key The pool key identifying the Uniswap V4 pool.
     /// @param controller The project's controller address (pre-fetched to avoid redundant lookups).
     /// @param ruleset The project's current ruleset (pre-fetched to avoid redundant lookups).
-    // slither-disable-next-line reentrancy-eth,reentrancy-benign,reentrancy-events
     function _mintRebalancedPosition(
         uint256 projectId,
         address projectToken,
@@ -1932,7 +1960,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         });
 
         if (liquidity > 0) {
-            // Snapshot balances before minting to isolate per-project leftovers (H-32).
+            // Snapshot balances before minting to isolate per-project leftovers ().
             uint256 projBalBeforeMint = IERC20(projectToken).balanceOf(address(this));
             uint256 termBalBeforeMint = _getTerminalTokenBalance(terminalToken);
 
@@ -1949,7 +1977,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             // inside modifyLiquidities, so (nextTokenId - 1) is the ID that was just minted.
             tokenIdOf[projectId][terminalToken] = _nextTokenId() - 1;
 
-            // Per-project leftover handling via snapshot-delta (H-32).
+            // Per-project leftover handling via snapshot-delta ().
             // Safe subtraction: V4 SWEEP may return dust beyond what was settled.
             uint256 postProjBal = IERC20(projectToken).balanceOf(address(this));
             uint256 postTermBal = _getTerminalTokenBalance(terminalToken);
@@ -1980,7 +2008,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             // Revert to prevent bricking the project's LP — the old position was already
             // burned by the BURN_POSITION action above, so this protects the invariant
             // that tokenIdOf is always nonzero for deployed projects.
-            revert JBUniswapV4LPSplitHook_InsufficientLiquidity();
+            revert JBUniswapV4LPSplitHook_InsufficientLiquidity({liquidity: liquidity});
         }
     }
 
@@ -1994,7 +2022,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @notice Grant the PositionManager a time-limited Permit2 allowance so it can pull tokens during SETTLE.
     function _approveViaPermit2(address token, uint256 amount) internal {
         IERC20(token).forceApprove({spender: address(PERMIT2), value: amount});
-        if (amount > type(uint160).max) revert JBUniswapV4LPSplitHook_Permit2AmountOverflow();
+        if (amount > type(uint160).max) {
+            revert JBUniswapV4LPSplitHook_Permit2AmountOverflow({
+                token: token, amount: amount, maxAmount: type(uint160).max
+            });
+        }
         PERMIT2.approve({
             token: token,
             spender: address(POSITION_MANAGER),
@@ -2007,7 +2039,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Identify which side of the collected LP fees is the terminal token and route it to the project; burn the
     /// project-token side.
-    // slither-disable-next-line reentrancy-eth,reentrancy-events,incorrect-equality
     function _routeCollectedFees(
         uint256 projectId,
         address projectToken,
@@ -2037,7 +2068,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// approach — calling `previewPayFor` and using the result as a minimum — was considered but
     /// deemed unnecessary given the existing hook-level protection. Fees are small amounts routed
     /// to the protocol fee project; MEV extraction is economically insignificant relative to gas costs.
-    // slither-disable-next-line arbitrary-send-eth,reentrancy-eth,reentrancy-benign,reentrancy-events,incorrect-equality,unused-return
     function _routeFeesToProject(uint256 projectId, address terminalToken, uint256 amount) internal {
         if (amount == 0) return;
 

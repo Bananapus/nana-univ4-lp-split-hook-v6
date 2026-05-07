@@ -10,13 +10,13 @@ import {DeployScript} from "../../script/Deploy.s.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
 
-contract CodexNemesisDeployScriptHarness is DeployScript {
+contract RegressionDeployScriptHarness is DeployScript {
     function exposedGetPoolManager() external view returns (IPoolManager) {
         return _getPoolManager();
     }
 }
 
-contract CodexNemesisRound2HookPoC is LPSplitHookV4TestBase {
+contract RegressionRound2HookRegression is LPSplitHookV4TestBase {
     function test_permissionlessDeployCanPermanentlyLockWrongTerminalToken() public {
         MockERC20 altTerminalToken = new MockERC20("Alt Terminal", "ALT", 18);
 
@@ -59,9 +59,9 @@ contract CodexNemesisRound2HookPoC is LPSplitHookV4TestBase {
     }
 }
 
-contract CodexNemesisRound2DeployScriptPoC is Test {
+contract RegressionRound2DeployScriptRegression is Test {
     function test_deployScriptDoesNotSupportOptimismSepolia() public {
-        CodexNemesisDeployScriptHarness harness = new CodexNemesisDeployScriptHarness();
+        RegressionDeployScriptHarness harness = new RegressionDeployScriptHarness();
 
         vm.chainId(11_155_420);
         vm.expectRevert(bytes("Unsupported chain"));

@@ -164,10 +164,10 @@ contract MintThenReenterFeeTerminal {
     function addToBalanceOf(uint256, address, uint256, bool, string calldata, bytes calldata) external payable {}
 }
 
-contract CodexNemesisPoC is LPSplitHookV4TestBase {
+contract RegressionRegression is LPSplitHookV4TestBase {
     /// @notice Verifies that a paused credit controller does NOT block ERC-20 fee token claims.
     /// The independent try-catch blocks allow each claim path to succeed or fail independently.
-    function test_codex_claimFeeTokens_pausedCreditsDoNotBlockERC20Claims() public {
+    function test_regression_claimFeeTokens_pausedCreditsDoNotBlockERC20Claims() public {
         _accumulateAndDeploy(PROJECT_ID, 1000e18);
 
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
@@ -215,7 +215,7 @@ contract CodexNemesisPoC is LPSplitHookV4TestBase {
 
     /// @notice Verifies that the pre-increment pattern in _routeFeesToProject protects freshly minted
     /// fee tokens from being burned by a re-entrant collectAndRouteLPFees call.
-    function test_codex_feePayReentrancy_preIncrementProtectsFeeTokens() public {
+    function test_regression_feePayReentrancy_preIncrementProtectsFeeTokens() public {
         BurningController burning = new BurningController();
         burning.setPrices(address(prices));
         burning.setWeight(PROJECT_ID, DEFAULT_WEIGHT);

@@ -15,7 +15,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
-contract CodexPriceMathHook is JBUniswapV4LPSplitHook {
+contract RegressionPriceMathHook is JBUniswapV4LPSplitHook {
     constructor(
         address _directory,
         IJBPermissions _permissions,
@@ -96,13 +96,13 @@ contract CodexPriceMathHook is JBUniswapV4LPSplitHook {
     }
 }
 
-contract CodexPreinitializedPoolPricePoC is LPSplitHookV4TestBase {
-    CodexPriceMathHook internal mathHook;
+contract RegressionPreinitializedPoolPriceRegression is LPSplitHookV4TestBase {
+    RegressionPriceMathHook internal mathHook;
 
     function setUp() public override {
         super.setUp();
 
-        mathHook = new CodexPriceMathHook(
+        mathHook = new RegressionPriceMathHook(
             address(directory),
             IJBPermissions(address(permissions)),
             address(jbTokens),
@@ -113,7 +113,7 @@ contract CodexPreinitializedPoolPricePoC is LPSplitHookV4TestBase {
         mathHook.initialize(FEE_PROJECT_ID, FEE_PERCENT);
     }
 
-    /// @notice After M-4 fix: pre-initialized pool at unexpected price no longer reverts.
+    /// @notice After fix: pre-initialized pool at unexpected price no longer reverts.
     ///         The hook accepts the existing price and adds liquidity (possibly out-of-range).
     function test_preinitializedPoolAtUnexpectedPrice_DeploySucceeds() public {
         uint256 totalProjectTokens = 100e18;
@@ -141,7 +141,7 @@ contract CodexPreinitializedPoolPricePoC is LPSplitHookV4TestBase {
 
         positionManager.initializePool(key, attackerSqrtPrice);
 
-        // M-4 fix: deployment succeeds instead of reverting.
+        // fix: deployment succeeds instead of reverting.
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, 0);
 
