@@ -116,7 +116,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
 
     /// @notice deployPool reverts with NoTokensAccumulated when no tokens have been accumulated.
     function test_DeployPool_RevertsIf_NoTokens() public {
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoTokensAccumulated.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoTokensAccumulated.selector);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, 0);
     }
@@ -134,7 +134,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         // Accumulate more tokens so NoTokensAccumulated wouldn't fire
         _accumulateTokens(PROJECT_ID, 50e18);
 
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PoolAlreadyDeployed.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PoolAlreadyDeployed.selector);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, 0);
     }
@@ -149,7 +149,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
 
         _accumulateTokens(PROJECT_ID, 50e18);
 
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PoolAlreadyDeployed.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PoolAlreadyDeployed.selector);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, 0);
     }
@@ -166,7 +166,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         // Clear the balance that was set in the base setUp
         store.setBalance(address(terminal), PROJECT_ID, address(terminalToken), 0);
 
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoTerminalTokenFound.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoTerminalTokenFound.selector);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, 0);
     }

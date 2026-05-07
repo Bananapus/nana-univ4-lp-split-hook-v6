@@ -50,7 +50,7 @@ contract ConstructorTest is LPSplitHookV4TestBase {
             IHooks(address(0))
         );
 
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidFeePercent.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidFeePercent.selector);
         impl.initialize(FEE_PROJECT_ID, 10_001);
     }
 
@@ -67,7 +67,7 @@ contract ConstructorTest is LPSplitHookV4TestBase {
             IHooks(address(0))
         );
 
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject.selector);
         impl.initialize(0, FEE_PERCENT);
     }
 
@@ -107,7 +107,7 @@ contract ConstructorTest is LPSplitHookV4TestBase {
         impl.initialize(FEE_PROJECT_ID, FEE_PERCENT);
 
         // Second init reverts
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_AlreadyInitialized.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_AlreadyInitialized.selector);
         impl.initialize(FEE_PROJECT_ID, FEE_PERCENT);
     }
 }

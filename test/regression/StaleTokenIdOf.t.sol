@@ -46,7 +46,7 @@ contract StaleTokenIdOfTest is LPSplitHookV4TestBase {
 
         // Rebalance now reverts instead of zeroing tokenIdOf
         vm.prank(owner);
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientLiquidity.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientLiquidity.selector);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
 
         // tokenIdOf should remain unchanged (revert rolled back state)

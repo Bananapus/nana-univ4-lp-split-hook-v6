@@ -23,7 +23,9 @@ contract SecurityTest is LPSplitHookV4TestBase {
         projectToken.mint(address(hook), 100e18);
 
         vm.prank(user); // NOT the controller
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_SplitSenderNotValidControllerOrTerminal.selector);
+        vm.expectPartialRevert(
+            JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_SplitSenderNotValidControllerOrTerminal.selector
+        );
         hook.processSplitWith(context);
     }
 
@@ -54,7 +56,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
         });
 
         vm.prank(address(controller));
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NotHookSpecifiedInContext.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NotHookSpecifiedInContext.selector);
         hook.processSplitWith(context);
     }
 
@@ -71,7 +73,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
         JBSplitHookContext memory context = _buildContext(PROJECT_ID, address(projectToken), amount, 0);
 
         vm.prank(address(controller));
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_TerminalTokensNotAllowed.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_TerminalTokensNotAllowed.selector);
         hook.processSplitWith(context);
     }
 

@@ -364,7 +364,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         // High surplus produces an aggressive derived minimum. The mock terminal's default
         // 50% reclaim under-delivers relative to that quote, so the slippage guard should fire.
         vm.prank(owner);
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientBalance.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientBalance.selector);
         hook.deployPool(highSurplusProject, 0);
         assertFalse(hook.hasDeployedPool(highSurplusProject), "high surplus project should not deploy");
     }

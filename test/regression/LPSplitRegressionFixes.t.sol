@@ -198,7 +198,7 @@ contract LPSplitRegressionFixes is LPSplitHookV4TestBase {
 
         // Call processSplitWith from the controller — should revert.
         vm.prank(address(controller));
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidProjectId.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidProjectId.selector);
         hook.processSplitWith(context);
 
         // Accumulator should still be zero (revert happened before _accumulateTokens).

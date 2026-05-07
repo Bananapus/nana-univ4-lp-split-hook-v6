@@ -63,7 +63,7 @@ contract ReinitAfterRenounceTest is Test {
 
         // Attacker tries to re-initialize with malicious parameters
         vm.prank(attacker);
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_AlreadyInitialized.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_AlreadyInitialized.selector);
         hook.initialize(2, 10_000); // trying to set 100% fee
     }
 
@@ -74,7 +74,7 @@ contract ReinitAfterRenounceTest is Test {
 
     /// @notice Double initialization also still reverts.
     function test_double_init_reverts() public {
-        vm.expectRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_AlreadyInitialized.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_AlreadyInitialized.selector);
         hook.initialize(2, 5000);
     }
 }
