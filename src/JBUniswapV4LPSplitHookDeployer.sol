@@ -69,7 +69,7 @@ contract JBUniswapV4LPSplitHookDeployer is IJBUniswapV4LPSplitHookDeployer {
 
         IJBUniswapV4LPSplitHook(address(hook)).initialize({feeProjectId: feeProjectId, feePercent: feePercent});
 
-        emit HookDeployed(feeProjectId, feePercent, hook, msg.sender);
+        emit HookDeployed({feeProjectId: feeProjectId, feePercent: feePercent, hook: hook, caller: msg.sender});
 
         // Increment the nonce. Both CREATE and CREATE2 opcodes increment the deployer's EVM nonce,
         // so _nonce must advance for both paths to stay in sync with the EVM nonce.
