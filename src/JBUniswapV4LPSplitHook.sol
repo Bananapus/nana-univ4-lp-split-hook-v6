@@ -87,7 +87,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     error JBUniswapV4LPSplitHook_TerminalNotFound(uint256 projectId, address token);
     error JBUniswapV4LPSplitHook_TerminalTokensNotAllowed(uint256 groupId, uint256 requiredGroupId);
     error JBUniswapV4LPSplitHook_UnclaimedFeeTokenChanged(address previousToken, address nextToken);
-    error JBUniswapV4LPSplitHook_ZeroAddressNotAllowed(bytes32 argument);
     error JBUniswapV4LPSplitHook_ZeroLiquidity(uint256 amount0, uint256 amount1);
 
     //*********************************************************************//
@@ -250,13 +249,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     )
         JBPermissioned(permissions)
     {
-        if (directory == address(0)) revert JBUniswapV4LPSplitHook_ZeroAddressNotAllowed("DIRECTORY");
-        if (tokens == address(0)) revert JBUniswapV4LPSplitHook_ZeroAddressNotAllowed("TOKENS");
-        if (address(poolManager) == address(0)) revert JBUniswapV4LPSplitHook_ZeroAddressNotAllowed("POOL_MANAGER");
-        if (address(positionManager) == address(0)) {
-            revert JBUniswapV4LPSplitHook_ZeroAddressNotAllowed("POSITION_MANAGER");
-        }
-
         DIRECTORY = directory;
         ORACLE_HOOK = oracleHook;
         PERMIT2 = permit2;

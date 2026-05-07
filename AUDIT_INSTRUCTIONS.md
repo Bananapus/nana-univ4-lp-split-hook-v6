@@ -1,8 +1,8 @@
-# Review Guide
+# Audit Instructions
 
-This repo turns reserved project tokens into a Uniswap V4 LP position. Review it as a treasury-management hook with meaningful external-call, pricing, and lifecycle risk.
+This repo turns reserved project tokens into a Uniswap V4 LP position. Audit it as a treasury-management hook with meaningful external-call, pricing, and lifecycle risk.
 
-## Review Objective
+## Audit Objective
 
 Find issues that:
 
