@@ -121,9 +121,9 @@ contract RegressionPreinitializedPoolPriceRegression is LPSplitHookV4TestBase {
         mathHook.initialize(FEE_PROJECT_ID, FEE_PERCENT);
     }
 
-    /// @notice After fix: pre-initialized pool at unexpected price no longer reverts.
-    ///         The hook accepts the existing price and adds liquidity (possibly out-of-range).
-    function test_preinitializedPoolAtUnexpectedPrice_DeploySucceeds() public {
+    /// @notice Pre-initialized pool at an out-of-bounds price now causes a revert,
+    ///         protecting against frontrunning attacks that set extreme prices.
+    function test_preinitializedPoolAtUnexpectedPrice_Reverts() public {
         uint256 totalProjectTokens = 100e18;
         _accumulateTokens(PROJECT_ID, totalProjectTokens);
 
@@ -149,12 +149,9 @@ contract RegressionPreinitializedPoolPriceRegression is LPSplitHookV4TestBase {
 
         positionManager.initializePool(key, attackerSqrtPrice);
 
-        // fix: deployment succeeds instead of reverting.
         vm.prank(owner);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
         hook.deployPool(PROJECT_ID, 0);
-
-        assertTrue(hook.hasDeployedPool(PROJECT_ID), "project should deploy successfully with attacker price");
-        assertGt(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "LP position should be created");
     }
 
     function test_preinitializedPoolWithinBandAcceptedByDeployment() public {

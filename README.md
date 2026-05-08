@@ -48,7 +48,7 @@ It does not own the project's issuance logic itself.
 ## Integration Traps
 
 - this hook governs post-issuance liquidity, so it should not be used to infer how project tokens were originally priced or minted
-- first-pool deployment assumptions are economically sensitive because outside actors can initialize the pool first
+- first-pool deployment validates any pre-initialized pool price against the project's economic tick bounds and reverts if out of range
 - LP management depends on both live market state and live Juicebox economics
 - newly received reserved tokens are intentionally burned after deployment instead of added pro rata to the LP
 
@@ -105,4 +105,4 @@ script/
 ## For AI Agents
 
 - Treat this repo as reserved-token liquidity management, not as the swap router itself.
-- Read the deployment-stage, rebalance, and preinitialized-pool tests before summarizing failure modes.
+- Read the deployment-stage, rebalance, frontrun-validation, and preinitialized-pool tests before summarizing failure modes.

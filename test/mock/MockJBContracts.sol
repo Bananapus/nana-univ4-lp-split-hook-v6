@@ -594,6 +594,21 @@ contract MockJBTerminalStore {
         return (surplus * cashOutCount) / 1e18;
     }
 
+    /// @dev Matches IJBTerminalStore.currentTotalSurplusOf(uint256,uint256,uint256)
+    ///      Used by the `scopeCashOutsToLocalBalances: false` path in _getCashOutRate.
+    function currentTotalSurplusOf(
+        uint256 projectId,
+        uint256,
+        /* decimals */
+        uint256 /* currency */
+    )
+        external
+        view
+        returns (uint256)
+    {
+        return surplusPerToken[projectId];
+    }
+
     /// @dev Matches IJBTerminalStore.currentTotalReclaimableSurplusOf(uint256,uint256,uint256,uint256)
     function currentTotalReclaimableSurplusOf(
         uint256 projectId,
