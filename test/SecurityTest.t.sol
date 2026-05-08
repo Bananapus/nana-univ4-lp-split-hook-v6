@@ -357,11 +357,13 @@ contract SecurityTest is LPSplitHookV4TestBase {
 
         // Now send more tokens via processSplitWith -- should burn, not accumulate
         uint256 additionalAmount = 200e18;
-        projectToken.mint(address(hook), additionalAmount);
+        projectToken.mint(address(controller), additionalAmount);
 
+        vm.startPrank(address(controller));
+        projectToken.approve(address(hook), additionalAmount);
         JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, additionalAmount);
-        vm.prank(address(controller));
         hook.processSplitWith(context);
+        vm.stopPrank();
 
         // accumulatedProjectTokens should NOT increase (tokens were burned, not accumulated)
         // After _accumulateAndDeploy, the accumulated balance is consumed by deployPool,

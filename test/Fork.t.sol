@@ -120,7 +120,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         jbController.mintTokensOf({
             projectId: projectId,
             tokenCount: 100_000e18,
-            beneficiary: address(hook),
+            beneficiary: address(jbController),
             memo: "",
             useReservedPercent: false
         });
@@ -139,8 +139,10 @@ contract LPSplitHookForkTest is ForkDeployHelper {
                 hook: IJBSplitHook(address(hook))
             })
         });
-        vm.prank(address(jbController));
+        vm.startPrank(address(jbController));
+        IERC20(address(projectToken)).approve(address(hook), 100_000e18);
         hook.processSplitWith(context);
+        vm.stopPrank();
     }
 
     function test_fork_tokensAccumulated() public view {
@@ -169,7 +171,11 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         hook.deployPool(projectId, 0);
         vm.prank(multisig);
         jbController.mintTokensOf({
-            projectId: projectId, tokenCount: 50_000e18, beneficiary: address(hook), memo: "", useReservedPercent: false
+            projectId: projectId,
+            tokenCount: 50_000e18,
+            beneficiary: address(jbController),
+            memo: "",
+            useReservedPercent: false
         });
         uint256 supplyBefore = IERC20(address(projectToken)).totalSupply();
         JBSplitHookContext memory context = JBSplitHookContext({
@@ -187,8 +193,10 @@ contract LPSplitHookForkTest is ForkDeployHelper {
                 hook: IJBSplitHook(address(hook))
             })
         });
-        vm.prank(address(jbController));
+        vm.startPrank(address(jbController));
+        IERC20(address(projectToken)).approve(address(hook), 50_000e18);
         hook.processSplitWith(context);
+        vm.stopPrank();
         assertEq(hook.accumulatedProjectTokens(projectId), 0, "should not accumulate after deploy");
         uint256 supplyAfter = IERC20(address(projectToken)).totalSupply();
         assertLt(supplyAfter, supplyBefore, "total supply should decrease from burn");

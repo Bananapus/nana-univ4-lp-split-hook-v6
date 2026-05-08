@@ -123,12 +123,14 @@ contract NativeETHTest is LPSplitHookV4TestBase {
 
         // --- Accumulate project tokens (simulates reserved-token split) ---
         uint256 accAmount = 100e18;
-        projectToken.mint(address(hook), accAmount);
+        projectToken.mint(address(controller), accAmount);
 
         // Build a split-hook context for reserved tokens (groupId = 1)
         // with the project token as the token field.
-        vm.prank(address(controller));
+        vm.startPrank(address(controller));
+        projectToken.approve(address(hook), accAmount);
         hook.processSplitWith(_buildReservedContext(PROJECT_ID, accAmount));
+        vm.stopPrank();
 
         // Verify accumulation was recorded
         assertEq(hook.accumulatedProjectTokens(PROJECT_ID), accAmount, "Accumulated tokens should match minted amount");
@@ -170,10 +172,12 @@ contract NativeETHTest is LPSplitHookV4TestBase {
 
         // Accumulate project tokens
         uint256 accAmount = 100e18;
-        projectToken.mint(address(hook), accAmount);
+        projectToken.mint(address(controller), accAmount);
 
-        vm.prank(address(controller));
+        vm.startPrank(address(controller));
+        projectToken.approve(address(hook), accAmount);
         hook.processSplitWith(_buildReservedContext(PROJECT_ID, accAmount));
+        vm.stopPrank();
 
         assertEq(hook.accumulatedProjectTokens(PROJECT_ID), accAmount);
 

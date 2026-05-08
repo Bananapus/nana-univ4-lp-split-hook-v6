@@ -225,11 +225,12 @@ contract AccumulationStageTest is LPSplitHookV4TestBase {
 
         // Now processSplitWith should burn instead of accumulate
         uint256 newAmount = 50e18;
-        projectToken.mint(address(hook), newAmount);
+        projectToken.mint(address(controller), newAmount);
+        vm.startPrank(address(controller));
+        projectToken.approve(address(hook), newAmount);
         JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, newAmount);
-
-        vm.prank(address(controller));
         hook.processSplitWith(context);
+        vm.stopPrank();
 
         // Verify tokens were burned
         assertGt(controller.burnCallCount(), burnCountBefore, "burnTokensOf should be called after deployment");
@@ -265,22 +266,18 @@ contract AccumulationStageTest is LPSplitHookV4TestBase {
     // 13. processSplitWith -- reverts for credit tokens (address(0))
     // -----------------------------------------------------------------------
 
-    /// @notice processSplitWith reverts when the project token is address(0) (credits, no ERC-20 deployed).
-    ///         The hook requires an ERC-20 project token because credits cannot be paired as Uniswap V4 LP.
+    /// @notice processSplitWith reverts when the controller has no tokens to transfer.
+    ///         The hook uses the canonical project token (from TOKENS.tokenOf) and pulls via
+    ///         safeTransferFrom. If the controller has insufficient balance or allowance, the
+    ///         ERC-20 transfer reverts.
     function test_ProcessSplit_RevertsIf_CreditToken() public {
         uint256 amount = 100e18;
 
-        // Build context with token = address(0) — simulating a project that only has credits
+        // Build context with token = address(0) — but the hook resolves the canonical token
+        // (a real ERC-20) via _tokenOf. The controller has no tokens, so safeTransferFrom reverts.
         JBSplitHookContext memory context = _buildContext(PROJECT_ID, address(0), amount, 1);
 
-        // With fix, the hook uses the canonical token (from TOKENS.tokenOf), not context.token.
-        // Since the project has a real ERC-20, the canonical token is non-zero, but no actual tokens
-        // were transferred, so the balance check catches the mismatch.
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientBalance.selector, 0, amount
-            )
-        );
+        vm.expectRevert();
         vm.prank(address(controller));
         hook.processSplitWith(context);
     }
@@ -296,24 +293,25 @@ contract AccumulationStageTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 100e18);
         assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 100e18);
 
-        // Now simulate a custom controller that calls processSplitWith WITHOUT transferring tokens first.
-        // The hook's balance is 100e18 but after this call the accumulator would be 200e18.
-        // We burn tokens from the hook to create the deficit.
+        // Drain tokens from the hook to create a deficit between accumulated and actual balance.
         vm.prank(address(hook));
         // forge-lint: disable-next-line(erc20-unchecked-transfer)
         projectToken.transfer(address(0xdead), 50e18);
 
         // Hook balance is now 50e18 but accumulator is 100e18.
-        // Another accumulation of 1e18 would push accumulator to 101e18 > balance of 51e18 (if transferred).
-        // But we simulate no transfer — just the call.
-        JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, 1e18);
+        // Another accumulation of 1e18 transfers 1e18 in (hook balance -> 51e18),
+        // pushing the accumulator to 101e18 > 51e18, triggering InsufficientBalance.
+        projectToken.mint(address(controller), 1e18);
 
+        vm.startPrank(address(controller));
+        projectToken.approve(address(hook), 1e18);
+        JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, 1e18);
         vm.expectRevert(
             abi.encodeWithSelector(
-                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientBalance.selector, 50e18, 101e18
+                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientBalance.selector, 51e18, 101e18
             )
         );
-        vm.prank(address(controller));
         hook.processSplitWith(context);
+        vm.stopPrank();
     }
 }

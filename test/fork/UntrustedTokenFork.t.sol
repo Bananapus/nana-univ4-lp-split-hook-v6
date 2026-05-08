@@ -22,6 +22,7 @@ import {IPermit2} from "@uniswap/permit2/src/interfaces/IPermit2.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
 import {LibClone} from "solady/src/utils/LibClone.sol";
 
@@ -57,7 +58,11 @@ contract UntrustedTokenFork is ForkDeployHelper {
         jbController.deployERC20For(pid, "Project Token", "PTK", bytes32(0));
         vm.prank(multisig);
         jbController.mintTokensOf({
-            projectId: pid, tokenCount: 100_000e18, beneficiary: address(hook), memo: "", useReservedPercent: false
+            projectId: pid,
+            tokenCount: 100_000e18,
+            beneficiary: address(jbController),
+            memo: "",
+            useReservedPercent: false
         });
         address bogusToken = address(0xDEAD);
         JBSplitHookContext memory context = JBSplitHookContext({
@@ -76,8 +81,10 @@ contract UntrustedTokenFork is ForkDeployHelper {
             })
         });
         address controller = address(jbDirectory.controllerOf(pid));
-        vm.prank(controller);
+        vm.startPrank(controller);
+        IERC20(address(jbTokens.tokenOf(pid))).approve(address(hook), 100_000e18);
         hook.processSplitWith(context);
+        vm.stopPrank();
         assertEq(hook.accumulatedProjectTokens(pid), 100_000e18, "Should accumulate using canonical token");
     }
 

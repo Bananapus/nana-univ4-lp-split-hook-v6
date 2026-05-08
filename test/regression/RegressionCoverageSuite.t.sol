@@ -163,15 +163,15 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
     // ─── Helper: accumulate tokens via the custom controller ─
 
     function _accumulateViaController(uint256 projectId, uint256 amount) internal {
-        // Mint project tokens to the hook.
-        projectToken.mint(address(hook), amount);
+        // Mint project tokens to the controller and approve the hook.
+        projectToken.mint(address(tsController), amount);
 
+        vm.startPrank(address(tsController));
+        projectToken.approve(address(hook), amount);
         // Build a reserved-token split context (groupId = 1).
         JBSplitHookContext memory context = _buildReservedContext(projectId, amount);
-
-        // The controller calls processSplitWith.
-        vm.prank(address(tsController));
         hook.processSplitWith(context);
+        vm.stopPrank();
     }
 
     /// @notice Deploy a project with `useTotalSurplusForCashOuts: true` and verify
@@ -237,10 +237,12 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
         store.setBalance(address(terminal), projectB, address(terminalToken), 10e18);
 
         // Accumulate and deploy.
-        projectToken.mint(address(hook), 100e18);
+        projectToken.mint(address(tsController), 100e18);
+        vm.startPrank(address(tsController));
+        projectToken.approve(address(hook), 100e18);
         JBSplitHookContext memory ctxB = _buildContext(projectB, address(projectToken), 100e18, 1);
-        vm.prank(address(tsController));
         hook.processSplitWith(ctxB);
+        vm.stopPrank();
 
         vm.prank(owner);
         hook.deployPool(projectB, 0);
@@ -286,10 +288,12 @@ contract FeeTokensExcludedFromRebalanceTest is LPSplitHookV4TestBase {
 
     /// @notice Helper: accumulate with the burning controller as caller.
     function _accumulateForProject(uint256 projectId, uint256 amount) internal {
-        projectToken.mint(address(hook), amount);
+        projectToken.mint(address(burnController), amount);
+        vm.startPrank(address(burnController));
+        projectToken.approve(address(hook), amount);
         JBSplitHookContext memory ctx = _buildReservedContext(projectId, amount);
-        vm.prank(address(burnController));
         hook.processSplitWith(ctx);
+        vm.stopPrank();
     }
 
     /// @notice Deploy a pool, generate LP fee tokens, then rebalance. The reserved
@@ -385,10 +389,12 @@ contract FeeTokensExcludedFromSplitBalanceCheckTest is LPSplitHookV4TestBase {
         // ── Step 1: Deploy project 1's pool and generate fee tokens. ──
 
         // Accumulate and deploy for project 1.
-        projectToken.mint(address(hook), 100e18);
+        projectToken.mint(address(burnController), 100e18);
+        vm.startPrank(address(burnController));
+        projectToken.approve(address(hook), 100e18);
         JBSplitHookContext memory ctx1 = _buildReservedContext(PROJECT_ID, 100e18);
-        vm.prank(address(burnController));
         hook.processSplitWith(ctx1);
+        vm.stopPrank();
 
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, 0);
@@ -433,10 +439,12 @@ contract FeeTokensExcludedFromSplitBalanceCheckTest is LPSplitHookV4TestBase {
 
         // ── Step 3: Accumulate project tokens for project 3. ──
 
-        // Mint fee-project tokens to the hook (simulating the controller transfer).
+        // Mint fee-project tokens to the controller and approve the hook.
         uint256 accumAmount = 50e18;
-        feeProjectToken.mint(address(hook), accumAmount);
+        feeProjectToken.mint(address(burnController), accumAmount);
 
+        vm.startPrank(address(burnController));
+        feeProjectToken.approve(address(hook), accumAmount);
         // Build context: project 3, token = feeProjectToken, groupId = 1.
         JBSplitHookContext memory ctx3 = _buildContext(projectB, address(feeProjectToken), accumAmount, 1);
 
@@ -444,8 +452,8 @@ contract FeeTokensExcludedFromSplitBalanceCheckTest is LPSplitHookV4TestBase {
         //   balanceOf(this) - _totalOutstandingFeeTokenClaims >= accumulatedProjectTokens
         // Without the subtraction, this would revert because balanceOf includes
         // project 1's reserved fee tokens that do not belong to project 3.
-        vm.prank(address(burnController));
         hook.processSplitWith(ctx3);
+        vm.stopPrank();
 
         // ── Step 4: Verify accumulation succeeded. ──
         assertEq(

@@ -1035,6 +1035,15 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         address projectToken = _tokenOf(context.projectId);
 
+        // Pull the allocated tokens from the controller via the granted allowance.
+        // Use balance delta to handle fee-on-transfer tokens correctly.
+        uint256 received;
+        if (context.amount > 0 && projectToken != address(0)) {
+            uint256 balanceBefore = IERC20(projectToken).balanceOf(address(this));
+            IERC20(projectToken).safeTransferFrom({from: msg.sender, to: address(this), value: context.amount});
+            received = IERC20(projectToken).balanceOf(address(this)) - balanceBefore;
+        }
+
         if (!hasDeployedPool[context.projectId]) {
             // This hook requires an ERC-20 project token — credits cannot be paired as LP.
             // Check BEFORE accumulating to keep internal accounting clean on revert.
@@ -1049,11 +1058,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(context.projectId);
                 initialWeightOf[context.projectId] = ruleset.weight;
             }
-            _accumulateTokens({projectId: context.projectId, amount: context.amount});
+            _accumulateTokens({projectId: context.projectId, amount: received});
 
             // Defense-in-depth: verify actual ERC-20 balance (minus outstanding fee token claims)
-            // covers accumulated total. The standard controller transfers tokens before calling
-            // processSplitWith, but custom controllers may not — this guards against accounting drift.
+            // covers accumulated total. Guards against accounting drift from custom controllers.
             if (
                 IERC20(projectToken).balanceOf(address(this)) - _unavailableFeeTokenBalance(projectToken)
                     < accumulatedProjectTokens[context.projectId]

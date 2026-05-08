@@ -218,10 +218,12 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
 
         // Send more tokens via processSplitWith -- should burn, not accumulate
         uint256 newAmount = 50e18;
-        projectToken.mint(address(hook), newAmount);
+        projectToken.mint(address(controller), newAmount);
+        vm.startPrank(address(controller));
+        projectToken.approve(address(hook), newAmount);
         JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, newAmount);
-        vm.prank(address(controller));
         hook.processSplitWith(context);
+        vm.stopPrank();
 
         assertGt(controller.burnCallCount(), burnCountBefore, "Tokens should be burned after pool deployed");
     }
@@ -242,10 +244,12 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
 
         // Accumulate tokens
         uint256 amount = 100e18;
-        projectToken.mint(address(hook), amount);
+        projectToken.mint(address(controller), amount);
+        vm.startPrank(address(controller));
+        projectToken.approve(address(hook), amount);
         JBSplitHookContext memory context = _buildContext(freshProjectId, address(projectToken), amount, 1);
-        vm.prank(address(controller));
         hook.processSplitWith(context);
+        vm.stopPrank();
 
         assertEq(
             hook.accumulatedProjectTokens(freshProjectId),

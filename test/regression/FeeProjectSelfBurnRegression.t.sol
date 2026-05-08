@@ -215,12 +215,13 @@ contract FeeProjectSelfBurnRegression is LPSplitHookV4TestBase {
     }
 
     function _accumulateTokensFor(uint256 projectId, MockERC20 token, uint256 amount) internal {
-        token.mint(address(hook), amount);
+        token.mint(address(burningController), amount);
 
+        vm.startPrank(address(burningController));
+        token.approve(address(hook), amount);
         JBSplitHookContext memory context = _buildContext(projectId, address(token), amount, 1);
-
-        vm.prank(address(burningController));
         hook.processSplitWith(context);
+        vm.stopPrank();
     }
 
     /// @notice Verifies that _totalOutstandingFeeTokenClaims prevents the fee project's own pool

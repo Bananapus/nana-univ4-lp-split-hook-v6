@@ -553,12 +553,13 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
 
     /// @notice Accumulate tokens for a specific project via processSplitWith.
     function _accumulateTokensForProject(uint256 projectId, uint256 amount) internal {
-        projectToken.mint(address(hook), amount);
+        projectToken.mint(address(controller), amount);
 
+        vm.startPrank(address(controller));
+        projectToken.approve(address(hook), amount);
         JBSplitHookContext memory context = _buildReservedContext(projectId, amount);
-
-        vm.prank(address(controller));
         hook.processSplitWith(context);
+        vm.stopPrank();
     }
 
     /// @notice Sort tokens (mirrors hook's _sortTokens).
