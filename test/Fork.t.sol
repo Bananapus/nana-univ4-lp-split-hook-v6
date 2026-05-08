@@ -171,7 +171,11 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         hook.deployPool(projectId, 0);
         vm.prank(multisig);
         jbController.mintTokensOf({
-            projectId: projectId, tokenCount: 50_000e18, beneficiary: address(jbController), memo: "", useReservedPercent: false
+            projectId: projectId,
+            tokenCount: 50_000e18,
+            beneficiary: address(jbController),
+            memo: "",
+            useReservedPercent: false
         });
         uint256 supplyBefore = IERC20(address(projectToken)).totalSupply();
         JBSplitHookContext memory context = JBSplitHookContext({

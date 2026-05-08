@@ -58,7 +58,11 @@ contract UntrustedTokenFork is ForkDeployHelper {
         jbController.deployERC20For(pid, "Project Token", "PTK", bytes32(0));
         vm.prank(multisig);
         jbController.mintTokensOf({
-            projectId: pid, tokenCount: 100_000e18, beneficiary: address(jbController), memo: "", useReservedPercent: false
+            projectId: pid,
+            tokenCount: 100_000e18,
+            beneficiary: address(jbController),
+            memo: "",
+            useReservedPercent: false
         });
         address bogusToken = address(0xDEAD);
         JBSplitHookContext memory context = JBSplitHookContext({

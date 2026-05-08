@@ -78,7 +78,11 @@ contract Integration_BurnPathCrossProject is ForkDeployHelper {
         uint256 burnAmount = 50_000e18;
         vm.prank(multisig);
         jbController.mintTokensOf({
-            projectId: pidA, tokenCount: burnAmount, beneficiary: address(jbController), memo: "", useReservedPercent: false
+            projectId: pidA,
+            tokenCount: burnAmount,
+            beneficiary: address(jbController),
+            memo: "",
+            useReservedPercent: false
         });
         JBSplitHookContext memory burnCtx = JBSplitHookContext({
             token: address(pTokenA),
