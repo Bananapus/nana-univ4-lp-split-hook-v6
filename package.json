@@ -25,8 +25,9 @@
   },
   "dependencies": {
     "@bananapus/address-registry-v6": "0.0.25",
-    "@bananapus/core-v6": "0.0.43",
+    "@bananapus/core-v6": "0.0.44",
     "@bananapus/permission-ids-v6": "0.0.22",
+    "@bananapus/suckers-v6": "0.0.37",
     "@bananapus/univ4-router-v6": "0.0.23",
     "@openzeppelin/contracts": "5.6.1",
     "@prb/math": "4.1.1",

@@ -438,7 +438,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     }
 
     /// @notice Calculate the cash out rate (price floor).
-    /// @dev Uses total surplus when the project's `useTotalSurplusForCashOuts` flag is set,
+    /// @dev Uses total surplus when the project's `scopeCashOutsToLocalBalances` flag is not set,
     /// otherwise uses local (single-terminal) surplus to match the actual cashout behavior.
     /// @param projectId The ID of the project.
     /// @param terminalToken The terminal token address.
@@ -464,7 +464,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // Get the store for surplus queries.
         IJBTerminalStore store = terminal.STORE();
 
-        if (ruleset.useTotalSurplusForCashOuts()) {
+        if (!ruleset.scopeCashOutsToLocalBalances()) {
             // Use total surplus across all terminals.
             try store.currentTotalReclaimableSurplusOf({
                 projectId: projectId,
