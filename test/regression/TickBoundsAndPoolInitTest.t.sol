@@ -15,6 +15,7 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 
 /// @notice Wrapper that exposes internal tick calculation functions for testing.
 contract TickBoundsTestableHook is JBUniswapV4LPSplitHook {
@@ -29,7 +30,7 @@ contract TickBoundsTestableHook is JBUniswapV4LPSplitHook {
         IAllowanceTransfer _permit2
     )
         JBUniswapV4LPSplitHook(
-            _directory, _permissions, _tokens, _poolManager, _positionManager, _permit2, IHooks(address(0))
+            _directory, _permissions, _tokens, _poolManager, _positionManager, _permit2, IHooks(address(0)), IJBSuckerRegistry(address(0))
         )
     {}
 

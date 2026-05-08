@@ -8,6 +8,7 @@ import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTran
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
+import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 
 /// @notice Tests for JBUniswapV4LPSplitHook constructor and initialize() behavior.
 /// @dev Verifies all immutables are set correctly by the constructor (5 params),
@@ -47,7 +48,8 @@ contract ConstructorTest is LPSplitHookV4TestBase {
             IPoolManager(address(1)),
             IPositionManager(address(positionManager)),
             IAllowanceTransfer(address(0)),
-            IHooks(address(0))
+            IHooks(address(0)),
+            IJBSuckerRegistry(address(0))
         );
 
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidFeePercent.selector);
@@ -64,7 +66,8 @@ contract ConstructorTest is LPSplitHookV4TestBase {
             IPoolManager(address(1)),
             IPositionManager(address(positionManager)),
             IAllowanceTransfer(address(0)),
-            IHooks(address(0))
+            IHooks(address(0)),
+            IJBSuckerRegistry(address(0))
         );
 
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject.selector);
@@ -81,7 +84,8 @@ contract ConstructorTest is LPSplitHookV4TestBase {
             IPoolManager(address(1)),
             IPositionManager(address(positionManager)),
             IAllowanceTransfer(address(0)),
-            IHooks(address(0))
+            IHooks(address(0)),
+            IJBSuckerRegistry(address(0))
         );
 
         impl.initialize(0, 0);
@@ -100,7 +104,8 @@ contract ConstructorTest is LPSplitHookV4TestBase {
             IPoolManager(address(1)),
             IPositionManager(address(positionManager)),
             IAllowanceTransfer(address(0)),
-            IHooks(address(0))
+            IHooks(address(0)),
+            IJBSuckerRegistry(address(0))
         );
 
         // First init succeeds

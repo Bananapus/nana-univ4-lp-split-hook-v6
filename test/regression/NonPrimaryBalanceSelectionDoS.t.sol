@@ -10,6 +10,7 @@ import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingCo
 import {LibClone} from "solady/src/utils/LibClone.sol";
 
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
+import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
 
@@ -27,7 +28,7 @@ contract HighestValueSelectionHarness is JBUniswapV4LPSplitHook {
         IAllowanceTransfer permit2,
         IHooks oracleHook
     )
-        JBUniswapV4LPSplitHook(directory, permissions, tokens, poolManager, positionManager, permit2, oracleHook)
+        JBUniswapV4LPSplitHook(directory, permissions, tokens, poolManager, positionManager, permit2, oracleHook, IJBSuckerRegistry(address(0)))
     {}
 
     function findHighestValueTerminalTokenOf(uint256 projectId, address controller) external view returns (address) {

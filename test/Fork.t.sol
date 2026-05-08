@@ -31,6 +31,7 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
+import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 import {LibClone} from "solady/src/utils/LibClone.sol";
 
 contract ExposedJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
@@ -43,7 +44,7 @@ contract ExposedJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
         IAllowanceTransfer permit2,
         IHooks oracleHook
     )
-        JBUniswapV4LPSplitHook(directory, permissions, tokens, poolManager, positionManager, permit2, oracleHook)
+        JBUniswapV4LPSplitHook(directory, permissions, tokens, poolManager, positionManager, permit2, oracleHook, IJBSuckerRegistry(address(0)))
     {}
 
     function exposed_calculateTickBounds(

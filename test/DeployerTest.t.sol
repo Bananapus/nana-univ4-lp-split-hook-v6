@@ -16,6 +16,7 @@ import {JBUniswapV4LPSplitHookDeployer} from "../src/JBUniswapV4LPSplitHookDeplo
 import {IJBUniswapV4LPSplitHook} from "../src/interfaces/IJBUniswapV4LPSplitHook.sol";
 
 import {MockJBDirectory, MockJBPermissions} from "./mock/MockJBContracts.sol";
+import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 
 contract DeployerTest is Test {
     JBUniswapV4LPSplitHook hookImpl;
@@ -47,7 +48,8 @@ contract DeployerTest is Test {
             IPoolManager(address(2)), // pool manager placeholder
             IPositionManager(address(3)), // position manager placeholder
             IAllowanceTransfer(address(0)),
-            IHooks(address(0))
+            IHooks(address(0)),
+            IJBSuckerRegistry(address(0))
         );
 
         addressRegistry = new JBAddressRegistry();
