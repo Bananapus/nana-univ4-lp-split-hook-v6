@@ -260,9 +260,9 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
     // 9. Deploy with very low weight (extreme price floor)
     // -----------------------------------------------------------------------
 
-    /// @notice With a very low weight, the expected price is extreme but deployment should
-    ///         succeed when no pre-initialized pool exists at a conflicting price.
-    function test_ExtremePrice_VeryLowWeight_DeploysWithMaxRange() public {
+    /// @notice With a very low weight, deployment reverts because the pre-existing pool
+    ///         (initialized during setUp) is at a price outside this project's economic bounds.
+    function test_ExtremePrice_VeryLowWeight_RevertsOutOfBounds() public {
         uint256 lowWeightProject = 4;
         _setupProject(lowWeightProject);
 
@@ -274,17 +274,17 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         _accumulateTokensForProject(lowWeightProject, 1000e18);
 
         vm.prank(owner);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
         hook.deployPool(lowWeightProject, 0);
-        assertTrue(hook.hasDeployedPool(lowWeightProject), "low weight project should deploy successfully");
     }
 
     // -----------------------------------------------------------------------
     // 9b. Deploy with moderately low weight (nonzero issuance)
     // -----------------------------------------------------------------------
 
-    /// @notice Even a low but nonzero issuance rate should be blocked when it would
-    ///         reuse a pool initialized at a materially different price.
-    function test_ExtremePrice_LowButViableWeight() public {
+    /// @notice A low but nonzero issuance rate is blocked because the pre-existing pool
+    ///         (initialized during setUp) is at a price outside this project's economic bounds.
+    function test_ExtremePrice_LowButViableWeight_RevertsOutOfBounds() public {
         uint256 lowWeightProject = 40;
         _setupProject(lowWeightProject);
 
@@ -295,10 +295,9 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
 
         _accumulateTokensForProject(lowWeightProject, 1000e18);
 
-        // After tick re-clamp fix, low weights deploy with clamped tick bounds.
         vm.prank(owner);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
         hook.deployPool(lowWeightProject, 0);
-        assertTrue(hook.hasDeployedPool(lowWeightProject), "low weight project should deploy with clamped ticks");
     }
 
     // -----------------------------------------------------------------------
@@ -373,9 +372,9 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
     // 12. Deploy with weight equal to 1 (minimal issuance)
     // -----------------------------------------------------------------------
 
-    /// @notice Weight=1 (minimal issuance) produces an extreme price but should still deploy
-    ///         successfully when no pre-initialized pool exists.
-    function test_ExtremePrice_WeightEqualOne_DeploysWithMaxRange() public {
+    /// @notice Weight=1 (minimal issuance) produces an extreme price. Deployment reverts because
+    ///         the pre-existing pool (initialized during setUp) is at a price outside this project's bounds.
+    function test_ExtremePrice_WeightEqualOne_RevertsOutOfBounds() public {
         uint256 minWeightProject = 7;
         _setupProject(minWeightProject);
 
@@ -385,17 +384,17 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         _accumulateTokensForProject(minWeightProject, 500e18);
 
         vm.prank(owner);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
         hook.deployPool(minWeightProject, 0);
-        assertTrue(hook.hasDeployedPool(minWeightProject), "min weight project should deploy successfully");
     }
 
     // -----------------------------------------------------------------------
     // 13. Deploy with max reserved percent
     // -----------------------------------------------------------------------
 
-    /// @notice With maximum reserved percent, deployment should succeed — the computed price is valid
-    ///         even at 100% reserved since there is no pre-initialized pool to conflict with.
-    function test_ExtremePrice_MaxReservedPercent_DeploysWithMaxRange() public {
+    /// @notice With maximum reserved percent, deployment reverts because the pre-existing pool
+    ///         (initialized during setUp) is at a price outside this project's economic bounds.
+    function test_ExtremePrice_MaxReservedPercent_RevertsOutOfBounds() public {
         uint256 maxReservedProject = 8;
         _setupProject(maxReservedProject);
 
@@ -405,17 +404,17 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         _accumulateTokensForProject(maxReservedProject, 500e18);
 
         vm.prank(owner);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
         hook.deployPool(maxReservedProject, 0);
-        assertTrue(hook.hasDeployedPool(maxReservedProject), "max reserved project should deploy successfully");
     }
 
     // -----------------------------------------------------------------------
     // 13b. Deploy with high (but not max) reserved percent
     // -----------------------------------------------------------------------
 
-    /// @notice With 99% reserved, deployment should still reject reuse of a mismatched
-    ///         preinitialized pool.
-    function test_ExtremePrice_HighReservedPercent_Deploys() public {
+    /// @notice With 99% reserved, deployment reverts because the pre-existing pool
+    ///         (initialized during setUp) is at a price outside this project's economic bounds.
+    function test_ExtremePrice_HighReservedPercent_RevertsOutOfBounds() public {
         uint256 highReservedProject = 80;
         _setupProject(highReservedProject);
 
@@ -424,11 +423,9 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
 
         _accumulateTokensForProject(highReservedProject, 500e18);
 
-        // After tick re-clamp fix, extreme reserved percents deploy successfully
-        // with clamped tick bounds.
         vm.prank(owner);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
         hook.deployPool(highReservedProject, 0);
-        assertTrue(hook.hasDeployedPool(highReservedProject), "pool should deploy with high reserved percent");
     }
 
     // -----------------------------------------------------------------------

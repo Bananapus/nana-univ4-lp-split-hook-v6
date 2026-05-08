@@ -67,6 +67,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     //*********************************************************************//
 
     error JBUniswapV4LPSplitHook_AlreadyInitialized(bool initialized);
+    /// @notice Thrown when a pre-initialized pool's price falls outside the project's economic tick range.
+    /// @dev This prevents frontrunning attacks where an attacker initializes the pool at an extreme price.
+    error JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds(
+        uint160 existingPrice, uint160 lowerBound, uint160 upperBound
+    );
     error JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject(uint256 feePercent, uint256 feeProjectId);
     error JBUniswapV4LPSplitHook_InsufficientBalance(uint256 available, uint256 required);
     error JBUniswapV4LPSplitHook_InsufficientLiquidity(uint128 liquidity);
@@ -1796,12 +1801,31 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             ruleset: ruleset
         });
 
-        // If the pool was already initialized (e.g. by an attacker or another deployer), accept the
-        // existing price and proceed. Liquidity will be added within the hook's configured tick bounds
-        // regardless of the current pool price — if the price is out of band the position will be
-        // single-sided and arbitrageurs will quickly move the price back into range.
+        // If the pool was already initialized (e.g. by an attacker or another deployer), validate that
+        // the existing price falls within the project's economic tick range before accepting it.
+        // This prevents frontrunning attacks where an attacker initializes the pool at an extreme
+        // price, which would cause either a DoS (zero liquidity) or value extraction (single-sided
+        // position at a manipulated price).
         uint160 existingSqrtPriceX96 = _getSqrtPriceX96(key);
         if (existingSqrtPriceX96 != 0) {
+            // Compute the project's economic tick bounds (cashout floor to issuance ceiling).
+            (int24 tickLower, int24 tickUpper) = _calculateTickBounds({
+                projectId: projectId,
+                terminalToken: terminalToken,
+                projectToken: projectToken,
+                controller: controller,
+                ruleset: ruleset
+            });
+
+            // Reject existing prices outside the project's valid range.
+            uint160 sqrtPriceLower = TickMath.getSqrtPriceAtTick(tickLower);
+            uint160 sqrtPriceUpper = TickMath.getSqrtPriceAtTick(tickUpper);
+            if (existingSqrtPriceX96 < sqrtPriceLower || existingSqrtPriceX96 > sqrtPriceUpper) {
+                revert JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds({
+                    existingPrice: existingSqrtPriceX96, lowerBound: sqrtPriceLower, upperBound: sqrtPriceUpper
+                });
+            }
+
             // Use the existing pool price for downstream liquidity calculations.
             sqrtPriceX96 = existingSqrtPriceX96;
         }

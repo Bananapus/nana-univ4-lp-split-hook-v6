@@ -6,12 +6,21 @@ pragma solidity 0.8.28;
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
 import {MockJBController} from "../mock/MockJBContracts.sol";
+import {MockSuckerRegistry} from "../mock/MockSuckerRegistry.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
+import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
+import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
+import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
+import {LibClone} from "solady/src/utils/LibClone.sol";
 
 // ═══════════════════════════════════════════════════════════════════════
 // TotalSurplusController — like MockJBController but supports the
@@ -115,6 +124,14 @@ contract TotalSurplusController {
         });
     }
 
+    /// @dev Returns the total supply of a project's tokens including pending reserved tokens.
+    ///      Required by `_getCashOutRate` when `scopeCashOutsToLocalBalances` is false.
+    function totalTokenSupplyWithReservedTokensOf(uint256 projectId) external view returns (uint256) {
+        address token = tokens[projectId];
+        if (token == address(0)) return 0;
+        return MockERC20(token).totalSupply();
+    }
+
     /// @dev Burn shim — burns the project's ERC-20 token.
     function burnTokensOf(address holder, uint256 projectId, uint256 amount, string calldata) external {
         // Burn the token from the holder (tests must set the token via setToken).
@@ -136,6 +153,22 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
     function setUp() public override {
         // Run base setup (creates directory, tokens, mocks, hook clone).
         super.setUp();
+
+        // Redeploy hook with a real mock sucker registry so the `scopeCashOutsToLocalBalances: false`
+        // path can call SUCKER_REGISTRY.remoteSurplusOf / remoteTotalSupplyOf without reverting.
+        MockSuckerRegistry mockRegistry = new MockSuckerRegistry();
+        JBUniswapV4LPSplitHook hookImpl = new JBUniswapV4LPSplitHook(
+            address(directory),
+            IJBPermissions(address(permissions)),
+            address(jbTokens),
+            IPoolManager(address(poolManager)),
+            IPositionManager(address(positionManager)),
+            IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
+            IHooks(address(0)),
+            IJBSuckerRegistry(address(mockRegistry))
+        );
+        hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
+        hook.initialize(FEE_PROJECT_ID, FEE_PERCENT);
 
         // Deploy the custom controller that can flip the metadata flag.
         tsController = new TotalSurplusController();
@@ -266,6 +299,21 @@ contract FeeTokensExcludedFromRebalanceTest is LPSplitHookV4TestBase {
     function setUp() public override {
         super.setUp();
 
+        // Redeploy hook with a real mock sucker registry so the total-surplus path works.
+        MockSuckerRegistry mockRegistry = new MockSuckerRegistry();
+        JBUniswapV4LPSplitHook hookImpl = new JBUniswapV4LPSplitHook(
+            address(directory),
+            IJBPermissions(address(permissions)),
+            address(jbTokens),
+            IPoolManager(address(poolManager)),
+            IPositionManager(address(positionManager)),
+            IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
+            IHooks(address(0)),
+            IJBSuckerRegistry(address(mockRegistry))
+        );
+        hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
+        hook.initialize(FEE_PROJECT_ID, FEE_PERCENT);
+
         // We need a controller that can actually burn tokens so rebalance works.
         burnController = new TotalSurplusController();
         burnController.setPrices(address(prices));
@@ -363,6 +411,21 @@ contract FeeTokensExcludedFromSplitBalanceCheckTest is LPSplitHookV4TestBase {
 
     function setUp() public override {
         super.setUp();
+
+        // Redeploy hook with a real mock sucker registry so the total-surplus path works.
+        MockSuckerRegistry mockRegistry = new MockSuckerRegistry();
+        JBUniswapV4LPSplitHook hookImpl = new JBUniswapV4LPSplitHook(
+            address(directory),
+            IJBPermissions(address(permissions)),
+            address(jbTokens),
+            IPoolManager(address(poolManager)),
+            IPositionManager(address(positionManager)),
+            IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
+            IHooks(address(0)),
+            IJBSuckerRegistry(address(mockRegistry))
+        );
+        hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
+        hook.initialize(FEE_PROJECT_ID, FEE_PERCENT);
 
         burnController = new TotalSurplusController();
         burnController.setPrices(address(prices));

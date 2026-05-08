@@ -282,7 +282,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         });
     }
 
-    function test_fork_deployPool_existingPoolOutsideBand_succeeds() public {
+    function test_fork_deployPool_existingPoolOutsideBand_reverts() public {
         address projToken = address(projectToken);
         Currency termCurrency = Currency.wrap(address(0)); // native ETH
         Currency projCurrency = Currency.wrap(projToken);
@@ -301,9 +301,8 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         (uint160 sqrtPriceBefore,,,) = V4_POOL_MANAGER.getSlot0(poolId);
         assertEq(sqrtPriceBefore, externalSqrtPrice, "pool should be at external price");
         vm.prank(multisig);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
         hook.deployPool(projectId, 0);
-        assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should be deployed");
-        assertGt(hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN), 0, "position NFT should be minted");
     }
 
     function test_fork_deployPool_existingPoolWithinBand_succeeds() public {

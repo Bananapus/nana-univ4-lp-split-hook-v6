@@ -91,9 +91,9 @@ contract RegressionFixM4Test is LPSplitHookV4TestBase {
     // 1. Pool already initialized at a different price — deployPool succeeds
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice When an attacker pre-initializes the pool at a wildly different price,
-    ///         deployPool should succeed instead of reverting.
-    function test_M4_PreInitializedPoolAtDifferentPrice_DeploySucceeds() public {
+    /// @notice When the pool is pre-initialized at a different but in-bounds price,
+    ///         deployPool accepts it and succeeds.
+    function test_M4_PreInitializedPoolAtInBoundsPrice_DeploySucceeds() public {
         uint256 totalProjectTokens = 100e18;
         _accumulateTokens(PROJECT_ID, totalProjectTokens);
 
@@ -112,17 +112,17 @@ contract RegressionFixM4Test is LPSplitHookV4TestBase {
             hooks: IHooks(address(0))
         });
 
-        // Pre-initialize the pool at a very different price (far outside expected bounds).
-        // Use a tick well above the expected range.
-        int24 attackerTick = int24(50_000); // far from typical Juicebox price
-        uint160 attackerSqrtPrice = TickMath.getSqrtPriceAtTick(attackerTick);
-        positionManager.initializePool(key, attackerSqrtPrice);
+        // Pre-initialize the pool at a price within the project's economic bounds.
+        // Tick 50,000 falls within the cashout-to-issuance range for default test config.
+        int24 inBoundsTick = int24(50_000);
+        uint160 inBoundsSqrtPrice = TickMath.getSqrtPriceAtTick(inBoundsTick);
+        positionManager.initializePool(key, inBoundsSqrtPrice);
 
         // Verify pool is initialized.
         bytes32 poolId = keccak256(abi.encode(key));
         assertTrue(positionManager.poolInitialized(poolId), "precondition: pool should be pre-initialized");
 
-        // deployPool should succeed (fix: no revert on pre-initialized pools).
+        // deployPool should succeed — the pre-initialized price is within bounds.
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, 0);
 
@@ -186,9 +186,9 @@ contract RegressionFixM4Test is LPSplitHookV4TestBase {
     // ─────────────────────────────────────────────────────────────────────
 
     /// @notice When the pool is pre-initialized at a price outside the LP tick bounds,
-    ///         the hook adds single-sided (out-of-range) liquidity. The LP position is created
-    ///         and the PositionManager mint is called exactly once.
-    function test_M4_OutOfRangeLiquidity_AddedCorrectly() public {
+    ///         deployment now reverts with ExistingPoolPriceOutOfBounds instead of adding
+    ///         single-sided liquidity at a manipulated price.
+    function test_M4_OutOfRangeLiquidity_RevertsOutOfBounds() public {
         uint256 totalProjectTokens = 100e18;
         _accumulateTokens(PROJECT_ID, totalProjectTokens);
 
@@ -208,26 +208,14 @@ contract RegressionFixM4Test is LPSplitHookV4TestBase {
         });
 
         // Pre-initialize at an extreme price (far below expected LP range).
-        // This simulates an attacker setting a very low price — the liquidity will be
-        // single-sided (all in one token).
+        // This simulates an attacker setting a very low price.
         int24 extremeTick = int24(-50_000);
         uint160 extremeSqrtPrice = TickMath.getSqrtPriceAtTick(extremeTick);
         positionManager.initializePool(key, extremeSqrtPrice);
 
-        uint256 mintCountBefore = positionManager.mintCallCount();
-
-        // deployPool should succeed with out-of-range liquidity.
         vm.prank(owner);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
         hook.deployPool(PROJECT_ID, 0);
-
-        // The position should still be minted.
-        assertEq(
-            positionManager.mintCallCount(),
-            mintCountBefore + 1,
-            "PositionManager mint should be called once for out-of-range position"
-        );
-        assertTrue(hook.hasDeployedPool(PROJECT_ID), "project should have a deployed pool");
-        assertGt(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "LP position NFT should exist");
     }
 }
 

@@ -17,7 +17,6 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
-import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
 
 contract RegressionMathHook is JBUniswapV4LPSplitHook {
     constructor(
@@ -125,14 +124,14 @@ contract RegressionPreinitializedRangeRegression is LPSplitHookV4TestBase {
         vm.deal(address(terminal), 1000 ether);
     }
 
-    /// @notice Verify the fix: below-range positions now cash out ALL project tokens
-    ///         (terminal is token0, so only token0 is needed for one-sided liquidity).
-    function test_PreinitializedBelowRange_DeploysWithFullTerminalSideCashOut() public {
+    /// @notice A pool pre-initialized below the LP range now reverts with
+    ///         ExistingPoolPriceOutOfBounds, preventing single-sided out-of-range deployment.
+    function test_PreinitializedBelowRange_RevertsOutOfBounds() public {
         uint256 totalProjectTokens = 100e18;
 
         _accumulateTokens(PROJECT_ID, totalProjectTokens);
 
-        (int24 tickLower, int24 tickUpper) =
+        (int24 tickLower,) =
             mathHook.exposed_calculateTickBounds(PROJECT_ID, JBConstants.NATIVE_TOKEN, address(projectToken));
         uint160 sqrtPriceBelowRange = TickMath.getSqrtPriceAtTick(tickLower - hook.TICK_SPACING());
 
@@ -145,41 +144,8 @@ contract RegressionPreinitializedRangeRegression is LPSplitHookV4TestBase {
         });
         positionManager.initializePool(key, sqrtPriceBelowRange);
 
-        uint256 actualCashOut = mathHook.exposed_computeOptimalCashOutAmount(
-            PROJECT_ID,
-            JBConstants.NATIVE_TOKEN,
-            address(projectToken),
-            totalProjectTokens,
-            sqrtPriceBelowRange,
-            tickLower,
-            tickUpper
-        );
-
-        // Post-fix: below-range with terminalIsToken0 returns totalProjectTokens (not half).
-        assertEq(actualCashOut, totalProjectTokens, "below-range branch now cashes out all project tokens");
-
         vm.prank(owner);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
         hook.deployPool(PROJECT_ID, 0);
-
-        assertEq(terminal.lastCashOutAmount(), actualCashOut, "deployPool used the full cash-out amount");
-
-        // With the full cash-out, all project tokens become terminal tokens (token0).
-        // Below-range liquidity only uses token0, so this is the optimal deployment.
-        uint256 cashOutRate = mathHook.exposed_getCashOutRate(PROJECT_ID, JBConstants.NATIVE_TOKEN);
-        uint256 terminalFromCashOut = (actualCashOut * cashOutRate) / 1e18;
-
-        uint160 sqrtPriceA = TickMath.getSqrtPriceAtTick(tickLower);
-        uint160 sqrtPriceB = TickMath.getSqrtPriceAtTick(tickUpper);
-
-        // Since all tokens are cashed out, amount1 (project tokens) = 0.
-        uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts({
-            sqrtPriceX96: sqrtPriceBelowRange,
-            sqrtPriceAX96: sqrtPriceA,
-            sqrtPriceBX96: sqrtPriceB,
-            amount0: terminalFromCashOut,
-            amount1: 0
-        });
-
-        assertGt(liquidity, 0, "full terminal-side deployment mints non-zero liquidity");
     }
 }
