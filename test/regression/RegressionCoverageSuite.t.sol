@@ -30,9 +30,9 @@ contract TotalSurplusController {
     mapping(uint256 projectId => uint32 baseCurrency) public baseCurrencies;
     mapping(uint256 projectId => address token) public tokens;
 
-    // ─── Toggle for scopeCashOutsToLocalBalances (inverted: stored as useTotalSurplus)
+    // ─── Toggle for scopeCashOutsToLocalBalances
     // ───────────────
-    mapping(uint256 projectId => bool flag) public useTotalSurplus;
+    mapping(uint256 projectId => bool flag) public scopeCashOutsToLocalBalances;
 
     // ─── Setters
     // ─────────────────────────────────────────────
@@ -56,8 +56,8 @@ contract TotalSurplusController {
         tokens[projectId] = token;
     }
 
-    function setUseTotalSurplus(uint256 projectId, bool _flag) external {
-        useTotalSurplus[projectId] = _flag;
+    function setScopeCashOutsToLocalBalances(uint256 projectId, bool _flag) external {
+        scopeCashOutsToLocalBalances[projectId] = _flag;
     }
 
     // ─── View shims
@@ -78,7 +78,7 @@ contract TotalSurplusController {
         uint32 baseCurr = baseCurrencies[projectId];
         if (baseCurr == 0) baseCurr = 1;
 
-        // Build metadata — invert the useTotalSurplus flag to get scopeCashOutsToLocalBalances.
+        // Build metadata with scopeCashOutsToLocalBalances flag.
         metadata = JBRulesetMetadata({
             reservedPercent: reservedPercents[projectId],
             cashOutTaxRate: 0,
@@ -94,7 +94,7 @@ contract TotalSurplusController {
             allowAddPriceFeed: false,
             ownerMustSendPayouts: false,
             holdFees: false,
-            scopeCashOutsToLocalBalances: !useTotalSurplus[projectId],
+            scopeCashOutsToLocalBalances: scopeCashOutsToLocalBalances[projectId],
             useDataHookForPay: false,
             useDataHookForCashOut: false,
             dataHook: address(0),
@@ -180,7 +180,7 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
     ///         the total-surplus code path without reverting).
     function test_DeployPool_WithUseTotalSurplusForCashOuts() public {
         // Enable the flag on the project's ruleset metadata.
-        tsController.setUseTotalSurplus(PROJECT_ID, true);
+        tsController.setScopeCashOutsToLocalBalances(PROJECT_ID, false);
 
         // Accumulate project tokens.
         uint256 amount = 100e18;
@@ -219,7 +219,7 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
         tsController.setReservedPercent(projectB, DEFAULT_RESERVED_PERCENT);
         tsController.setBaseCurrency(projectB, 1);
         tsController.setToken(projectB, address(projectToken));
-        tsController.setUseTotalSurplus(projectB, true);
+        tsController.setScopeCashOutsToLocalBalances(projectB, false);
 
         _setDirectoryController(projectB, address(tsController));
         _setDirectoryTerminal(projectB, address(terminalToken), address(terminal));
