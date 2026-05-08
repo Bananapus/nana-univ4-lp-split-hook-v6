@@ -139,10 +139,12 @@ contract FeeTokenTerminalAccountingRegression is LPSplitHookV4TestBase {
     }
 
     function test_FeeClaimsAreTrackedWhenTerminalTokenEqualsFeeProjectToken() public {
-        projectToken.mint(address(hook), 100e18);
+        projectToken.mint(address(controller), 100e18);
 
-        vm.prank(address(controller));
+        vm.startPrank(address(controller));
+        projectToken.approve(address(hook), 100e18);
         hook.processSplitWith(_buildContext(PROJECT_ID, address(projectToken), 100e18, 1));
+        vm.stopPrank();
 
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, 0);

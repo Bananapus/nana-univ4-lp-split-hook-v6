@@ -222,10 +222,12 @@ contract FeeClaimReserveCaptureRegression is LPSplitHookV4TestBase {
     }
 
     function test_overreportedCashOutCannotConsumeOtherProjectsFeeClaims() public {
-        projectToken.mint(address(hook), 100e18);
+        projectToken.mint(address(controller), 100e18);
 
-        vm.prank(address(controller));
+        vm.startPrank(address(controller));
+        projectToken.approve(address(hook), 100e18);
         hook.processSplitWith(_buildContext(PROJECT_ID, address(projectToken), 100e18, 1));
+        vm.stopPrank();
 
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, 0);
@@ -252,10 +254,12 @@ contract FeeClaimReserveCaptureRegression is LPSplitHookV4TestBase {
 
         maliciousTerminal.setCashOutAmounts(claimableFeeTokens, 0);
 
-        projectTokenB.mint(address(hook), 100e18);
+        projectTokenB.mint(address(controller), 100e18);
 
-        vm.prank(address(controller));
+        vm.startPrank(address(controller));
+        projectTokenB.approve(address(hook), 100e18);
         hook.processSplitWith(_buildContext(PROJECT_B, address(projectTokenB), 100e18, 1));
+        vm.stopPrank();
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientBalance.selector);

@@ -78,7 +78,7 @@ contract Integration_BurnPathCrossProject is ForkDeployHelper {
         uint256 burnAmount = 50_000e18;
         vm.prank(multisig);
         jbController.mintTokensOf({
-            projectId: pidA, tokenCount: burnAmount, beneficiary: address(hook), memo: "", useReservedPercent: false
+            projectId: pidA, tokenCount: burnAmount, beneficiary: address(jbController), memo: "", useReservedPercent: false
         });
         JBSplitHookContext memory burnCtx = JBSplitHookContext({
             token: address(pTokenA),
@@ -95,8 +95,10 @@ contract Integration_BurnPathCrossProject is ForkDeployHelper {
                 hook: IJBSplitHook(address(hook))
             })
         });
-        vm.prank(address(jbController));
+        vm.startPrank(address(jbController));
+        IERC20(address(pTokenA)).approve(address(hook), burnAmount);
         hook.processSplitWith(burnCtx);
+        vm.stopPrank();
         assertEq(hook.accumulatedProjectTokens(pidA), 0, "A accumulated stays 0 after burn");
         assertEq(hook.accumulatedProjectTokens(pidB), bAccBefore, "B accumulated unchanged");
         assertEq(IERC20(address(pTokenB)).balanceOf(address(hook)), bBalBefore, "B token balance unchanged");
@@ -166,7 +168,7 @@ contract Integration_BurnPathCrossProject is ForkDeployHelper {
     function _accumulateTokens(uint256 pid, address tokenAddr, uint256 amount) internal {
         vm.prank(multisig);
         jbController.mintTokensOf({
-            projectId: pid, tokenCount: amount, beneficiary: address(hook), memo: "", useReservedPercent: false
+            projectId: pid, tokenCount: amount, beneficiary: address(jbController), memo: "", useReservedPercent: false
         });
         JBSplitHookContext memory context = JBSplitHookContext({
             token: tokenAddr,
@@ -183,8 +185,10 @@ contract Integration_BurnPathCrossProject is ForkDeployHelper {
                 hook: IJBSplitHook(address(hook))
             })
         });
-        vm.prank(address(jbController));
+        vm.startPrank(address(jbController));
+        IERC20(tokenAddr).approve(address(hook), amount);
         hook.processSplitWith(context);
+        vm.stopPrank();
     }
 
     function _payProject(uint256 pid, uint256 amount) internal {

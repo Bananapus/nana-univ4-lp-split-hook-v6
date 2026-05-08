@@ -245,10 +245,12 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 50e18);
 
         // For project 3, manually accumulate (using its own project token)
-        projectToken3.mint(address(hook), 50e18);
+        projectToken3.mint(address(controller), 50e18);
+        vm.startPrank(address(controller));
+        projectToken3.approve(address(hook), 50e18);
         JBSplitHookContext memory ctx3 = _buildContext(PROJECT_3, address(projectToken3), 50e18, 1);
-        vm.prank(address(controller));
         hook.processSplitWith(ctx3);
+        vm.stopPrank();
 
         assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 50e18, "PROJECT_ID accumulated should be 50e18");
         assertEq(hook.accumulatedProjectTokens(PROJECT_3), 50e18, "PROJECT_3 accumulated should be 50e18");
@@ -299,11 +301,12 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         // Send new tokens to hook and call processSplitWith
         // Since projectDeployed is true, tokens should be burned
         uint256 newAmount = 50e18;
-        projectToken.mint(address(hook), newAmount);
+        projectToken.mint(address(controller), newAmount);
+        vm.startPrank(address(controller));
+        projectToken.approve(address(hook), newAmount);
         JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, newAmount);
-
-        vm.prank(address(controller));
         hook.processSplitWith(context);
+        vm.stopPrank();
 
         // Verify tokens were burned (not accumulated)
         assertGt(

@@ -181,7 +181,7 @@ contract ZeroRateFork is ForkDeployHelper {
     function _accumulateTokens(uint256 pid, address tokenAddr, uint256 amount) internal {
         vm.prank(multisig);
         jbController.mintTokensOf({
-            projectId: pid, tokenCount: amount, beneficiary: address(hook), memo: "", useReservedPercent: false
+            projectId: pid, tokenCount: amount, beneficiary: address(jbController), memo: "", useReservedPercent: false
         });
         JBSplitHookContext memory context = JBSplitHookContext({
             token: tokenAddr,
@@ -198,8 +198,10 @@ contract ZeroRateFork is ForkDeployHelper {
                 hook: IJBSplitHook(address(hook))
             })
         });
-        vm.prank(address(jbController));
+        vm.startPrank(address(jbController));
+        IERC20(tokenAddr).approve(address(hook), amount);
         hook.processSplitWith(context);
+        vm.stopPrank();
     }
 
     function _payProject(uint256 pid, uint256 amount) internal {

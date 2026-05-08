@@ -106,8 +106,8 @@ contract LPSplitHookHandler is Test {
         // Skip if pool already deployed for this project (processSplitWith would burn, not accumulate).
         if (hook.hasDeployedPool(projectId)) return;
 
-        // Mint tokens to the hook (simulates controller sending reserved tokens).
-        projectToken.mint(address(hook), amount);
+        // Mint tokens to the controller and approve the hook.
+        projectToken.mint(address(controller), amount);
         totalMintedToHook[projectId] += amount;
 
         // Build the split hook context.
@@ -128,8 +128,10 @@ contract LPSplitHookHandler is Test {
         });
 
         // Call processSplitWith as the controller (the authorized caller).
-        vm.prank(address(controller));
+        vm.startPrank(address(controller));
+        projectToken.approve(address(hook), amount);
         hook.processSplitWith(context);
+        vm.stopPrank();
 
         callCount++;
     }

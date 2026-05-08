@@ -279,7 +279,10 @@ contract RegressionRegression is LPSplitHookV4TestBase {
     }
 
     function _accumulateWith(address sender, uint256 projectId, MockERC20 token, uint256 amount) internal {
-        token.mint(address(hook), amount);
+        token.mint(sender, amount);
+
+        vm.startPrank(sender);
+        token.approve(address(hook), amount);
 
         JBSplitHookContext memory context = JBSplitHookContext({
             token: address(token),
@@ -297,7 +300,7 @@ contract RegressionRegression is LPSplitHookV4TestBase {
             })
         });
 
-        vm.prank(sender);
         hook.processSplitWith(context);
+        vm.stopPrank();
     }
 }

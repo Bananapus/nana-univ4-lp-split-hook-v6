@@ -295,11 +295,13 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
     function test_e2e_deployPool_whenTerminalIsToken0() public {
         // Accumulate project tokens.
         uint256 accAmount = 100e18;
-        highProjectToken.mint(address(hook), accAmount);
+        highProjectToken.mint(address(controller), accAmount);
 
         // Build context for the test project.
-        vm.prank(address(controller));
+        vm.startPrank(address(controller));
+        highProjectToken.approve(address(hook), accAmount);
         hook.processSplitWith(_buildContext(TEST_PROJECT_ID, address(highProjectToken), accAmount, 1));
+        vm.stopPrank();
 
         assertEq(hook.accumulatedProjectTokens(TEST_PROJECT_ID), accAmount, "Tokens should be accumulated");
 

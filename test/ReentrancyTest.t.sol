@@ -92,9 +92,10 @@ contract ReentrantControllerTerminal is MockJBController {
             shouldReenterOnCashOut = false; // prevent infinite recursion
             reentrancyAttempted = true;
 
-            // Mint project tokens to hook for the re-entrant processSplitWith call
+            // Mint project tokens to this contract (the controller) and approve the hook
             uint256 reentryAmount = 10e18;
-            _projectToken.mint(address(hook), reentryAmount);
+            _projectToken.mint(address(this), reentryAmount);
+            _projectToken.approve(address(hook), reentryAmount);
 
             // Build processSplitWith context
             JBSplitHookContext memory ctx = JBSplitHookContext({
@@ -306,11 +307,13 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
 
         // 4. Accumulate tokens through the malicious controller
         uint256 accumulateAmount = 1000e18;
-        projectToken.mint(address(hook), accumulateAmount);
+        projectToken.mint(address(malicious), accumulateAmount);
 
+        vm.startPrank(address(malicious)); // malicious IS the controller
+        projectToken.approve(address(hook), accumulateAmount);
         JBSplitHookContext memory accCtx = _buildReservedContext(PROJECT_ID, accumulateAmount);
-        vm.prank(address(malicious)); // malicious IS the controller
         hook.processSplitWith(accCtx);
+        vm.stopPrank();
 
         uint256 accBefore = hook.accumulatedProjectTokens(PROJECT_ID);
         assertEq(accBefore, accumulateAmount, "Pre-condition: tokens accumulated");
