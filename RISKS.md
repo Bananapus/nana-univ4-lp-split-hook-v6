@@ -40,7 +40,7 @@ This file focuses on the lifecycle, pricing, and fee-accounting risks in `JBUnis
 
 - **Rebalance sandwich risk.** Rebalance depends on spot pool price at execution time. A searcher can try to skew the price around the transaction.
 - **Permissionless fee collection timing.** Anyone can trigger some fee-collection paths, so adversarial timing is possible even if direct extraction is limited.
-- **Public pool pre-initialization.** The target pool can be initialized before the hook deploys its first position. The contract accepts the existing price and proceeds — see §7.4.
+- **Public pool pre-initialization.** The target pool can be initialized before the hook deploys its first position. The contract validates the existing price against the project's economic tick bounds and reverts if out of range — see §7.4.
 
 ## 4. Rebalance Risks
 
@@ -83,13 +83,10 @@ Fee routing into the fee project intentionally does not set a local slippage flo
 
 The hook checks for `uint160` overflow before narrowing approval amounts for Permit2.
 
-### 7.4 Pre-initialized pools are accepted regardless of price
+### 7.4 Pre-initialized pools are validated against economic tick bounds
 
-When `deployPool` encounters an already-initialized pool (e.g. by an attacker or another deployer), the hook accepts the existing price and proceeds. It does **not** revert if the price is outside the hook's tick bounds. This is intentional:
+When `deployPool` encounters an already-initialized pool (e.g. by an attacker or another deployer), the hook validates the existing price against the project's economic tick bounds (cashout floor to issuance ceiling). If the price is outside those bounds, `deployPool` reverts with `JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds`.
 
-- Liquidity is added within the hook's configured tick bounds regardless of the current pool price.
-- If the price is out of band, the position will be single-sided (100% of one token).
-- Arbitrageurs will quickly move the price back into range, at which point the position becomes double-sided and earns fees normally.
-- Reverting on out-of-range prices would create a griefing vector: an attacker could front-run `deployPool` by initializing the pool at an extreme price, permanently blocking deployment.
-
-The economic cost of an out-of-range initialization is temporary single-sided exposure, which resolves naturally through arbitrage. This is strictly preferable to a permanent deployment-blocking DoS.
+- An attacker who front-runs pool creation with an extreme price cannot force the project into a single-sided position or extract value.
+- A reverted `deployPool` does not mark the pool as deployed, so the project can retry once the pool is re-initialized at a valid price (e.g. via a different pool key or after pool state is corrected).
+- If the existing price is within the tick bounds, the hook accepts it and proceeds normally.

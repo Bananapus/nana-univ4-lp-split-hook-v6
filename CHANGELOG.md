@@ -16,7 +16,7 @@ This repo was not part of the deployed v5 ecosystem that the top-level changelog
 - This repo is a v6-era Uniswap v4 liquidity hook package, not a deployed-v5 migration target.
 - The current repo includes dedicated deployment, fork, invariant, and regression coverage around concentrated-liquidity behavior, fee routing, rebalance logic, and lifecycle staging.
 - The implementation baseline matches the rest of the v6 tree around Solidity `0.8.28`.
-- Pool deployment tolerates outsider pre-initialization regardless of price to prevent deployment-blocking griefing.
+- Pool deployment validates outsider pre-initialization against the project's economic tick bounds and reverts if the price is out of range.
 
 
 ## Migration notes
