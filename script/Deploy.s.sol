@@ -20,6 +20,7 @@ import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionMa
 
 import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 import {JBUniswapV4LPSplitHookDeployer} from "../src/JBUniswapV4LPSplitHookDeployer.sol";
+import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 
 contract DeployScript is Script, Sphinx {
     /// @notice tracks the deployment of the core contracts for the chain we are deploying to.
@@ -86,7 +87,8 @@ contract DeployScript is Script, Sphinx {
             poolManager,
             positionManager,
             IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
-            router.hook
+            router.hook,
+            IJBSuckerRegistry(address(0))
         );
 
         address hookImplAddress = vm.computeCreate2Address({
@@ -103,7 +105,8 @@ contract DeployScript is Script, Sphinx {
                     poolManager,
                     positionManager,
                     IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
-                    router.hook
+                    router.hook,
+                    IJBSuckerRegistry(address(0))
                 )
             );
         }

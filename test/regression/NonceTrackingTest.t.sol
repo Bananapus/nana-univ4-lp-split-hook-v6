@@ -16,6 +16,7 @@ import {JBUniswapV4LPSplitHookDeployer} from "../../src/JBUniswapV4LPSplitHookDe
 import {IJBUniswapV4LPSplitHook} from "../../src/interfaces/IJBUniswapV4LPSplitHook.sol";
 
 import {MockJBDirectory, MockJBPermissions} from "../mock/MockJBContracts.sol";
+import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 
 /// @notice Regression test for deployer nonce tracking: Verify nonce tracking stays in sync across mixed
 /// CREATE2/CREATE deployments.
@@ -51,7 +52,8 @@ contract RegressionFixM31Test is Test {
             IPoolManager(address(2)), // pool manager placeholder
             IPositionManager(address(3)), // position manager placeholder
             IAllowanceTransfer(address(0)),
-            IHooks(address(0))
+            IHooks(address(0)),
+            IJBSuckerRegistry(address(0))
         );
 
         addressRegistry = new JBAddressRegistry();

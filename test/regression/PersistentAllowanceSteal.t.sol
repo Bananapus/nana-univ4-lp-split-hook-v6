@@ -9,6 +9,7 @@ import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
+import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 import {MockJBDirectory, MockJBPermissions, MockJBProjects, MockJBTokens} from "../mock/MockJBContracts.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
 
@@ -26,7 +27,14 @@ contract AllowanceHarness is JBUniswapV4LPSplitHook {
         IAllowanceTransfer permit2
     )
         JBUniswapV4LPSplitHook(
-            directory, permissions, tokens, poolManager, positionManager, permit2, IHooks(address(0))
+            directory,
+            permissions,
+            tokens,
+            poolManager,
+            positionManager,
+            permit2,
+            IHooks(address(0)),
+            IJBSuckerRegistry(address(0))
         )
     {}
 

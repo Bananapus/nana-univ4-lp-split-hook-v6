@@ -31,6 +31,7 @@ import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingCo
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
 import {JBPermissionIds} from "@bananapus/permission-ids-v6/src/JBPermissionIds.sol";
+import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 
 import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
 
@@ -145,6 +146,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @notice JBProjects (to find project owners)
     IJBProjects public immutable PROJECTS;
 
+    /// @notice The sucker registry for querying remote cross-chain surplus and supply.
+    IJBSuckerRegistry public immutable SUCKER_REGISTRY;
+
     /// @notice JBTokens (to find project tokens)
     address public immutable TOKENS;
 
@@ -245,7 +249,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         IPoolManager poolManager,
         IPositionManager positionManager,
         IAllowanceTransfer permit2,
-        IHooks oracleHook
+        IHooks oracleHook,
+        IJBSuckerRegistry suckerRegistry
     )
         JBPermissioned(permissions)
     {
@@ -255,6 +260,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         POOL_MANAGER = poolManager;
         POSITION_MANAGER = positionManager;
         PROJECTS = IJBDirectory(directory).PROJECTS();
+        SUCKER_REGISTRY = suckerRegistry;
         TOKENS = tokens;
     }
 
@@ -438,8 +444,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     }
 
     /// @notice Calculate the cash out rate (price floor).
-    /// @dev Uses total surplus when the project's `useTotalSurplusForCashOuts` flag is set,
-    /// otherwise uses local (single-terminal) surplus to match the actual cashout behavior.
+    /// @dev Uses total on-chain surplus across all terminals (matching JBTerminalStore._computeCashOutFrom).
+    /// When `scopeCashOutsToLocalBalances` is false, also includes remote cross-chain surplus and supply
+    /// from the sucker registry for accurate omnichain pricing.
     /// @param projectId The ID of the project.
     /// @param terminalToken The terminal token address.
     /// @param controller The project's controller address (pre-fetched to avoid redundant lookups).
@@ -456,47 +463,50 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         view
         returns (uint256 terminalTokensPerProjectToken)
     {
-        // Silence "unused parameter" warning — controller is required by callers for interface consistency.
-        controller;
         // Resolve the project's primary terminal for this token.
         IJBMultiTerminal terminal = IJBMultiTerminal(_primaryTerminalOf({projectId: projectId, token: terminalToken}));
 
         // Get the store for surplus queries.
         IJBTerminalStore store = terminal.STORE();
 
-        if (ruleset.useTotalSurplusForCashOuts()) {
-            // Use total surplus across all terminals.
-            try store.currentTotalReclaimableSurplusOf({
-                projectId: projectId,
-                cashOutCount: _WAD,
-                decimals: _getTokenDecimals(terminalToken),
-                // Safe: truncation to uint32 is the standard Juicebox currency encoding.
-                // forge-lint: disable-next-line(unsafe-typecast)
-                currency: uint256(uint32(uint160(terminalToken)))
-            }) returns (
-                uint256 reclaimableAmount
+        uint256 decimals = _getTokenDecimals(terminalToken);
+        // Safe: truncation to uint32 is the standard Juicebox currency encoding.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        uint256 currency = uint256(uint32(uint160(terminalToken)));
+
+        // If the project doesn't scope cash outs to local balances, include remote cross-chain
+        // surplus and supply in the bonding curve calculation.
+        if (!ruleset.scopeCashOutsToLocalBalances()) {
+            // Get on-chain total surplus across all terminals.
+            try store.currentTotalSurplusOf({projectId: projectId, decimals: decimals, currency: currency}) returns (
+                uint256 surplus
             ) {
-                terminalTokensPerProjectToken = reclaimableAmount;
+                // Get on-chain total supply including pending reserved tokens.
+                uint256 totalSupply = IJBController(controller).totalTokenSupplyWithReservedTokensOf(projectId);
+
+                // Add remote cross-chain surplus and supply.
+                surplus += SUCKER_REGISTRY.remoteSurplusOf({
+                    projectId: projectId, decimals: decimals, currency: currency
+                });
+                totalSupply += SUCKER_REGISTRY.remoteTotalSupplyOf(projectId);
+
+                // Apply the bonding curve with the combined on-chain + remote values.
+                try store.currentReclaimableSurplusOf({
+                    projectId: projectId, cashOutCount: _WAD, totalSupply: totalSupply, surplus: surplus
+                }) returns (
+                    uint256 reclaimableAmount
+                ) {
+                    terminalTokensPerProjectToken = reclaimableAmount;
+                } catch {
+                    terminalTokensPerProjectToken = 0;
+                }
             } catch {
                 terminalTokensPerProjectToken = 0;
             }
         } else {
-            // Build single-element arrays to query only the primary terminal's local surplus.
-            IJBTerminal[] memory terminals = new IJBTerminal[](1);
-            terminals[0] = IJBTerminal(address(terminal));
-            address[] memory tokens = new address[](1);
-            tokens[0] = terminalToken;
-
-            // Use local surplus from only the primary terminal.
-            try store.currentReclaimableSurplusOf({
-                projectId: projectId,
-                cashOutCount: _WAD,
-                terminals: terminals,
-                tokens: tokens,
-                decimals: _getTokenDecimals(terminalToken),
-                // Safe: truncation to uint32 is the standard Juicebox currency encoding.
-                // forge-lint: disable-next-line(unsafe-typecast)
-                currency: uint256(uint32(uint160(terminalToken)))
+            // Scoped to local balances — use total on-chain surplus directly.
+            try store.currentTotalReclaimableSurplusOf({
+                projectId: projectId, cashOutCount: _WAD, decimals: decimals, currency: currency
             }) returns (
                 uint256 reclaimableAmount
             ) {

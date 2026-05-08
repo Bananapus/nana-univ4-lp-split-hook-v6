@@ -11,6 +11,7 @@ import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionMa
 import {LibClone} from "solady/src/utils/LibClone.sol";
 
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
+import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 import {MockPositionManager} from "../mock/MockPositionManager.sol";
 import {MockJBDirectory, MockJBController, MockJBTokens, MockJBPermissions} from "../mock/MockJBContracts.sol";
 
@@ -39,7 +40,8 @@ contract FeeProjectIdValidationTest is Test {
             IPoolManager(address(1)),
             IPositionManager(address(positionManager)),
             IAllowanceTransfer(address(0)),
-            IHooks(address(0))
+            IHooks(address(0)),
+            IJBSuckerRegistry(address(0))
         );
     }
 

@@ -24,6 +24,7 @@ import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionMa
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
+import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 import {LibClone} from "solady/src/utils/LibClone.sol";
 
 contract UntrustedTokenFork is ForkDeployHelper {
@@ -46,7 +47,8 @@ contract UntrustedTokenFork is ForkDeployHelper {
             V4_POOL_MANAGER,
             V4_POSITION_MANAGER,
             IAllowanceTransfer(address(PERMIT2)),
-            IHooks(address(0))
+            IHooks(address(0)),
+            IJBSuckerRegistry(address(0))
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize(feeProjectId, 3800);
@@ -111,7 +113,7 @@ contract UntrustedTokenFork is ForkDeployHelper {
             allowAddPriceFeed: false,
             ownerMustSendPayouts: false,
             holdFees: false,
-            useTotalSurplusForCashOuts: false,
+            scopeCashOutsToLocalBalances: true,
             useDataHookForPay: false,
             useDataHookForCashOut: false,
             dataHook: address(0),

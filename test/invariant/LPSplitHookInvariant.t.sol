@@ -16,6 +16,7 @@ import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionMa
 import {LibClone} from "solady/src/utils/LibClone.sol";
 
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
+import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
 import {MockPositionManager} from "../mock/MockPositionManager.sol";
 import {MockPoolManager} from "../mock/MockPoolManager.sol";
@@ -338,7 +339,8 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
             IPoolManager(address(poolManager)),
             IPositionManager(address(positionManager)),
             IAllowanceTransfer(permit2Addr),
-            IHooks(address(0))
+            IHooks(address(0)),
+            IJBSuckerRegistry(address(0))
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize(FEE_PROJECT_ID, FEE_PERCENT);

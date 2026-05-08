@@ -11,6 +11,7 @@ import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTran
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
+import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
@@ -26,7 +27,14 @@ contract TestableHookForTickBounds is JBUniswapV4LPSplitHook {
         IAllowanceTransfer _permit2
     )
         JBUniswapV4LPSplitHook(
-            _directory, _permissions, _tokens, _poolManager, _positionManager, _permit2, IHooks(address(0))
+            _directory,
+            _permissions,
+            _tokens,
+            _poolManager,
+            _positionManager,
+            _permit2,
+            IHooks(address(0)),
+            IJBSuckerRegistry(address(0))
         )
     {}
 

@@ -15,7 +15,7 @@ import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookCont
 
 // ═══════════════════════════════════════════════════════════════════════
 // TotalSurplusController — like MockJBController but supports the
-// `useTotalSurplusForCashOuts` metadata flag.
+// `scopeCashOutsToLocalBalances` metadata flag.
 // ═══════════════════════════════════════════════════════════════════════
 
 contract TotalSurplusController {
@@ -30,8 +30,9 @@ contract TotalSurplusController {
     mapping(uint256 projectId => uint32 baseCurrency) public baseCurrencies;
     mapping(uint256 projectId => address token) public tokens;
 
-    // ─── Toggle for useTotalSurplusForCashOuts ───────────────
-    mapping(uint256 projectId => bool flag) public useTotalSurplus;
+    // ─── Toggle for scopeCashOutsToLocalBalances
+    // ───────────────
+    mapping(uint256 projectId => bool flag) public scopeCashOutsToLocalBalances;
 
     // ─── Setters
     // ─────────────────────────────────────────────
@@ -55,8 +56,8 @@ contract TotalSurplusController {
         tokens[projectId] = token;
     }
 
-    function setUseTotalSurplus(uint256 projectId, bool _flag) external {
-        useTotalSurplus[projectId] = _flag;
+    function setScopeCashOutsToLocalBalances(uint256 projectId, bool _flag) external {
+        scopeCashOutsToLocalBalances[projectId] = _flag;
     }
 
     // ─── View shims
@@ -67,7 +68,7 @@ contract TotalSurplusController {
         return pricesContract;
     }
 
-    /// @dev Returns a ruleset whose packed metadata includes `useTotalSurplusForCashOuts`.
+    /// @dev Returns a ruleset whose packed metadata includes `scopeCashOutsToLocalBalances`.
     function currentRulesetOf(uint256 projectId)
         external
         view
@@ -77,7 +78,7 @@ contract TotalSurplusController {
         uint32 baseCurr = baseCurrencies[projectId];
         if (baseCurr == 0) baseCurr = 1;
 
-        // Build metadata with the per-project useTotalSurplus flag.
+        // Build metadata with scopeCashOutsToLocalBalances flag.
         metadata = JBRulesetMetadata({
             reservedPercent: reservedPercents[projectId],
             cashOutTaxRate: 0,
@@ -93,7 +94,7 @@ contract TotalSurplusController {
             allowAddPriceFeed: false,
             ownerMustSendPayouts: false,
             holdFees: false,
-            useTotalSurplusForCashOuts: useTotalSurplus[projectId],
+            scopeCashOutsToLocalBalances: scopeCashOutsToLocalBalances[projectId],
             useDataHookForPay: false,
             useDataHookForCashOut: false,
             dataHook: address(0),
@@ -122,12 +123,12 @@ contract TotalSurplusController {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// Test 1: `useTotalSurplusForCashOuts = true` branch
+// Test 1: `scopeCashOutsToLocalBalances = false` branch (total surplus)
 // ═══════════════════════════════════════════════════════════════════════
 
 /// @title UseTotalSurplusCashOutTest
 /// @notice Verifies that `_getCashOutRate` uses `currentTotalReclaimableSurplusOf`
-///         when the project's ruleset has `useTotalSurplusForCashOuts: true`.
+///         when the project's ruleset has `scopeCashOutsToLocalBalances: false`.
 contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
     // Custom controller that supports the total-surplus flag.
     TotalSurplusController internal tsController;
@@ -174,32 +175,32 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
         vm.stopPrank();
     }
 
-    /// @notice Deploy a project with `useTotalSurplusForCashOuts: true` and verify
+    /// @notice Deploy a project with `scopeCashOutsToLocalBalances: false` and verify
     ///         that the pool deploys correctly (proving that `_getCashOutRate` used
     ///         the total-surplus code path without reverting).
     function test_DeployPool_WithUseTotalSurplusForCashOuts() public {
         // Enable the flag on the project's ruleset metadata.
-        tsController.setUseTotalSurplus(PROJECT_ID, true);
+        tsController.setScopeCashOutsToLocalBalances(PROJECT_ID, false);
 
         // Accumulate project tokens.
         uint256 amount = 100e18;
         _accumulateViaController(PROJECT_ID, amount);
 
         // Deploy the pool — this internally calls _getCashOutRate which branches
-        // on `ruleset.useTotalSurplusForCashOuts()`.
+        // on `ruleset.scopeCashOutsToLocalBalances()`.
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, 0);
 
         // The pool should now exist (tokenIdOf != 0).
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        assertGt(tokenId, 0, "pool should be deployed with useTotalSurplusForCashOuts=true");
+        assertGt(tokenId, 0, "pool should be deployed with scopeCashOutsToLocalBalances=false");
 
         // Accumulated project tokens should be cleared after deployment.
         assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "accumulated tokens should be zero after deploy");
     }
 
-    /// @notice Compare behaviour: deploy with `useTotalSurplusForCashOuts = false`
-    ///         (local surplus path) and `true` (total surplus path). Both must succeed.
+    /// @notice Compare behaviour: deploy with `scopeCashOutsToLocalBalances = true`
+    ///         (local surplus path) and `false` (total surplus path). Both must succeed.
     function test_LocalVsTotalSurplus_BothPathsSucceed() public {
         // ── Path A: local surplus (default, flag is false) ──
         // Already false by default. Accumulate and deploy.
@@ -218,7 +219,7 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
         tsController.setReservedPercent(projectB, DEFAULT_RESERVED_PERCENT);
         tsController.setBaseCurrency(projectB, 1);
         tsController.setToken(projectB, address(projectToken));
-        tsController.setUseTotalSurplus(projectB, true);
+        tsController.setScopeCashOutsToLocalBalances(projectB, false);
 
         _setDirectoryController(projectB, address(tsController));
         _setDirectoryTerminal(projectB, address(terminalToken), address(terminal));
