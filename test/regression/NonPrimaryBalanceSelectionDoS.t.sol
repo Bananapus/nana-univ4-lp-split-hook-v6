@@ -28,7 +28,16 @@ contract HighestValueSelectionHarness is JBUniswapV4LPSplitHook {
         IAllowanceTransfer permit2,
         IHooks oracleHook
     )
-        JBUniswapV4LPSplitHook(directory, permissions, tokens, poolManager, positionManager, permit2, oracleHook, IJBSuckerRegistry(address(0)))
+        JBUniswapV4LPSplitHook(
+            directory,
+            permissions,
+            tokens,
+            poolManager,
+            positionManager,
+            permit2,
+            oracleHook,
+            IJBSuckerRegistry(address(0))
+        )
     {}
 
     function findHighestValueTerminalTokenOf(uint256 projectId, address controller) external view returns (address) {

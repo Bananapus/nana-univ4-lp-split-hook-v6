@@ -29,7 +29,14 @@ contract PriceRatioHarness is JBUniswapV4LPSplitHook {
         IAllowanceTransfer _permit2
     )
         JBUniswapV4LPSplitHook(
-            _directory, _permissions, _tokens, _poolManager, _positionManager, _permit2, IHooks(address(0)), IJBSuckerRegistry(address(0))
+            _directory,
+            _permissions,
+            _tokens,
+            _poolManager,
+            _positionManager,
+            _permit2,
+            IHooks(address(0)),
+            IJBSuckerRegistry(address(0))
         )
     {}
 

@@ -27,7 +27,14 @@ contract AllowanceHarness is JBUniswapV4LPSplitHook {
         IAllowanceTransfer permit2
     )
         JBUniswapV4LPSplitHook(
-            directory, permissions, tokens, poolManager, positionManager, permit2, IHooks(address(0)), IJBSuckerRegistry(address(0))
+            directory,
+            permissions,
+            tokens,
+            poolManager,
+            positionManager,
+            permit2,
+            IHooks(address(0)),
+            IJBSuckerRegistry(address(0))
         )
     {}
 

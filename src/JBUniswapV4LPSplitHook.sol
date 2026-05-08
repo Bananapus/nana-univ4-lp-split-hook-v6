@@ -147,7 +147,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     IJBProjects public immutable PROJECTS;
 
     /// @notice The sucker registry for querying remote cross-chain surplus and supply.
-    /// @dev If address(0), remote surplus is not included in cash-out rate calculations.
     IJBSuckerRegistry public immutable SUCKER_REGISTRY;
 
     /// @notice JBTokens (to find project tokens)
@@ -446,8 +445,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Calculate the cash out rate (price floor).
     /// @dev Uses total on-chain surplus across all terminals (matching JBTerminalStore._computeCashOutFrom).
-    /// When `scopeCashOutsToLocalBalances` is false and a sucker registry is configured, also includes
-    /// remote cross-chain surplus and supply for accurate omnichain pricing.
+    /// When `scopeCashOutsToLocalBalances` is false, also includes remote cross-chain surplus and supply
+    /// from the sucker registry for accurate omnichain pricing.
     /// @param projectId The ID of the project.
     /// @param terminalToken The terminal token address.
     /// @param controller The project's controller address (pre-fetched to avoid redundant lookups).
@@ -475,9 +474,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // forge-lint: disable-next-line(unsafe-typecast)
         uint256 currency = uint256(uint32(uint160(terminalToken)));
 
-        // If the project doesn't scope cash outs to local balances and a sucker registry is available,
-        // include remote cross-chain surplus and supply in the bonding curve calculation.
-        if (!ruleset.scopeCashOutsToLocalBalances() && address(SUCKER_REGISTRY) != address(0)) {
+        // If the project doesn't scope cash outs to local balances, include remote cross-chain
+        // surplus and supply in the bonding curve calculation.
+        if (!ruleset.scopeCashOutsToLocalBalances()) {
             // Get on-chain total surplus across all terminals.
             try store.currentTotalSurplusOf({projectId: projectId, decimals: decimals, currency: currency}) returns (
                 uint256 surplus
@@ -505,7 +504,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 terminalTokensPerProjectToken = 0;
             }
         } else {
-            // No omnichain aggregation — use total on-chain surplus directly.
+            // Scoped to local balances — use total on-chain surplus directly.
             try store.currentTotalReclaimableSurplusOf({
                 projectId: projectId, cashOutCount: _WAD, decimals: decimals, currency: currency
             }) returns (
