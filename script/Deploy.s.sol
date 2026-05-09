@@ -21,6 +21,7 @@ import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionMa
 import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 import {JBUniswapV4LPSplitHookDeployer} from "../src/JBUniswapV4LPSplitHookDeployer.sol";
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
+import {SuckerDeployment, SuckerDeploymentLib} from "@bananapus/suckers-v6/script/helpers/SuckerDeploymentLib.sol";
 
 contract DeployScript is Script, Sphinx {
     /// @notice tracks the deployment of the core contracts for the chain we are deploying to.
@@ -31,6 +32,9 @@ contract DeployScript is Script, Sphinx {
 
     /// @notice tracks the deployment of the univ4-router contracts for the chain we are deploying to.
     Univ4RouterDeployment router;
+
+    /// @notice tracks the deployment of the sucker contracts for the chain we are deploying to.
+    SuckerDeployment suckers;
 
     /// @notice the salts used to deploy the contracts.
     bytes32 hookSalt = "JBUniswapV4LPSplitHookV6";
@@ -67,6 +71,11 @@ contract DeployScript is Script, Sphinx {
             )
         );
 
+        // Get the deployment addresses for the suckers for this chain.
+        suckers = SuckerDeploymentLib.getDeployment(
+            vm.envOr("NANA_SUCKERS_DEPLOYMENT_PATH", string("node_modules/@bananapus/suckers-v6/deployments/"))
+        );
+
         // Uniswap V4 PoolManager — per-chain addresses.
         // Verify at https://docs.uniswap.org/contracts/v4/deployments
         poolManager = _getPoolManager();
@@ -88,7 +97,7 @@ contract DeployScript is Script, Sphinx {
             positionManager,
             IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
             router.hook,
-            IJBSuckerRegistry(address(0))
+            suckers.registry
         );
 
         address hookImplAddress = vm.computeCreate2Address({
@@ -106,7 +115,7 @@ contract DeployScript is Script, Sphinx {
                     positionManager,
                     IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
                     router.hook,
-                    IJBSuckerRegistry(address(0))
+                    suckers.registry
                 )
             );
         }
