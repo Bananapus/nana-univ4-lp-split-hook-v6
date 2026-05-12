@@ -2,7 +2,6 @@
 pragma solidity 0.8.28;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {mulDiv, sqrt} from "@prb/math/src/Common.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -772,22 +771,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     function _getTerminalTokenBalance(address terminalToken) internal view returns (uint256 balance) {
         if (_isNativeToken(terminalToken)) return address(this).balance;
         return IERC20(terminalToken).balanceOf(address(this));
-    }
-
-    /// @notice Get token decimals, defaulting to 18 if unavailable.
-    /// @param token The token address to query decimals for.
-    /// @return decimals The token's decimal count (defaults to 18 for native ETH or non-compliant tokens).
-    function _getTokenDecimals(address token) internal view returns (uint8 decimals) {
-        // Native ETH always has 18 decimals.
-        if (_isNativeToken(token)) {
-            return 18;
-        }
-        // Try the ERC-20 decimals() call; fall back to 18 if the token doesn't implement it.
-        try IERC20Metadata(token).decimals() returns (uint8 dec) {
-            return dec;
-        } catch {
-            return 18;
-        }
     }
 
     /// @notice Whether `terminalToken` is Juicebox's native-token sentinel.
