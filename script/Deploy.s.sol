@@ -133,16 +133,17 @@ contract DeployScript is Script, Sphinx {
     }
 
     /// @dev Returns the Uniswap V4 PositionManager address for the current chain.
+    /// @dev Addresses sourced from https://developers.uniswap.org/docs/protocols/v4/deployments — testnet
+    /// PositionManagers are NOT the same as the mainnet address.
     function _getPositionManager() internal view returns (IPositionManager) {
-        // Mainnet, Sepolia, Base Sepolia, Arb Sepolia share the same address.
         if (block.chainid == 1) return IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e); // Mainnet
         if (block.chainid == 10) return IPositionManager(0x3C3Ea4B57a46241e54610e5f022E5c45859A1017); // Optimism
         if (block.chainid == 8453) return IPositionManager(0x7C5f5A4bBd8fD63184577525326123B519429bDc); // Base
         if (block.chainid == 42_161) return IPositionManager(0xd88F38F930b7952f2DB2432Cb002E7abbF3dD869); // Arbitrum
-        if (block.chainid == 11_155_111) return IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e); // Sepolia
-        if (block.chainid == 84_532) return IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e); // Base
+        if (block.chainid == 11_155_111) return IPositionManager(0x429ba70129df741B2Ca2a85BC3A2a3328e5c09b4); // Sepolia
+        if (block.chainid == 84_532) return IPositionManager(0x4B2C77d209D3405F41a037Ec6c77F7F5b8e2ca80); // Base
         // Sepolia
-        if (block.chainid == 421_614) return IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e); // Arb
+        if (block.chainid == 421_614) return IPositionManager(0xAc631556d3d4019C95769033B5E719dD77124BAc); // Arb
         // Sepolia
         revert("Unsupported chain");
     }

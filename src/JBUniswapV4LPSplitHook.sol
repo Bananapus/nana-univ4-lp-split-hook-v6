@@ -2,7 +2,6 @@
 pragma solidity 0.8.28;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {mulDiv, sqrt} from "@prb/math/src/Common.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -474,10 +473,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // Get the store for surplus queries.
         IJBTerminalStore store = terminal.STORE();
 
-        uint256 decimals = _getTokenDecimals(terminalToken);
-        // Safe: truncation to uint32 is the standard Juicebox currency encoding.
-        // forge-lint: disable-next-line(unsafe-typecast)
-        uint256 currency = uint256(uint32(uint160(terminalToken)));
+        // Read the terminal's declared currency for this token. Using `uint32(uint160(terminalToken))` here would
+        // diverge from `_getIssuanceRate`, which reads the accounting context directly. The two paths must agree on
+        // the same currency identifier so issuance and cash-out price the LP bounds against a consistent reference.
+        JBAccountingContext memory accountingContext =
+            terminal.accountingContextForTokenOf({projectId: projectId, token: terminalToken});
+        uint256 decimals = accountingContext.decimals;
+        uint256 currency = uint256(accountingContext.currency);
 
         // If the project doesn't scope cash outs to local balances, include remote cross-chain
         // surplus and supply in the bonding curve calculation.
@@ -769,22 +771,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     function _getTerminalTokenBalance(address terminalToken) internal view returns (uint256 balance) {
         if (_isNativeToken(terminalToken)) return address(this).balance;
         return IERC20(terminalToken).balanceOf(address(this));
-    }
-
-    /// @notice Get token decimals, defaulting to 18 if unavailable.
-    /// @param token The token address to query decimals for.
-    /// @return decimals The token's decimal count (defaults to 18 for native ETH or non-compliant tokens).
-    function _getTokenDecimals(address token) internal view returns (uint8 decimals) {
-        // Native ETH always has 18 decimals.
-        if (_isNativeToken(token)) {
-            return 18;
-        }
-        // Try the ERC-20 decimals() call; fall back to 18 if the token doesn't implement it.
-        try IERC20Metadata(token).decimals() returns (uint8 dec) {
-            return dec;
-        } catch {
-            return 18;
-        }
     }
 
     /// @notice Whether `terminalToken` is Juicebox's native-token sentinel.
@@ -1364,13 +1350,27 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         accumulatedProjectTokens[projectId] = 0;
     }
 
-    /// @notice Align tick to tick spacing using proper floor semantics for negative ticks
+    /// @notice Align tick down to the nearest spacing boundary (floor semantics).
+    /// @dev Used for `tickUpper` so the LP range contracts toward the intended inner band on the upper side.
     function _alignTickToSpacing(int24 tick, int24 spacing) internal pure returns (int24 alignedTick) {
         // Intentional: rounding tick down to nearest spacing boundary
         // forge-lint: disable-next-line(divide-before-multiply)
         int24 rounded = (tick / spacing) * spacing;
         if (tick < 0 && rounded > tick) {
             rounded -= spacing;
+        }
+        return rounded;
+    }
+
+    /// @notice Align tick up to the nearest spacing boundary (ceiling semantics).
+    /// @dev Used for `tickLower` so the LP range contracts toward the intended inner band on the lower side.
+    /// Without this, flooring tickLower would expand the LP range downward by up to one spacing interval,
+    /// exposing project liquidity at prices the bonding curve never sanctioned.
+    function _alignTickToSpacingCeil(int24 tick, int24 spacing) internal pure returns (int24 alignedTick) {
+        // forge-lint: disable-next-line(divide-before-multiply)
+        int24 rounded = (tick / spacing) * spacing;
+        if (rounded < tick) {
+            rounded += spacing;
         }
         return rounded;
     }
@@ -1527,7 +1527,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         tickLower = rawTickA < rawTickB ? rawTickA : rawTickB;
         tickUpper = rawTickA < rawTickB ? rawTickB : rawTickA;
 
-        tickLower = _alignTickToSpacing({tick: tickLower, spacing: TICK_SPACING});
+        // Align ASYMMETRICALLY: tickLower up, tickUpper down. Both moves contract the LP range toward the
+        // intended price band. Flooring both ticks would expand the lower side by up to one spacing interval,
+        // exposing project liquidity at prices below what the bonding curve sanctioned.
+        tickLower = _alignTickToSpacingCeil({tick: tickLower, spacing: TICK_SPACING});
         tickUpper = _alignTickToSpacing({tick: tickUpper, spacing: TICK_SPACING});
 
         // Clamp to valid V4 tick range after alignment.
