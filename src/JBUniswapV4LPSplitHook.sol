@@ -1367,13 +1367,27 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         accumulatedProjectTokens[projectId] = 0;
     }
 
-    /// @notice Align tick to tick spacing using proper floor semantics for negative ticks
+    /// @notice Align tick down to the nearest spacing boundary (floor semantics).
+    /// @dev Used for `tickUpper` so the LP range contracts toward the intended inner band on the upper side.
     function _alignTickToSpacing(int24 tick, int24 spacing) internal pure returns (int24 alignedTick) {
         // Intentional: rounding tick down to nearest spacing boundary
         // forge-lint: disable-next-line(divide-before-multiply)
         int24 rounded = (tick / spacing) * spacing;
         if (tick < 0 && rounded > tick) {
             rounded -= spacing;
+        }
+        return rounded;
+    }
+
+    /// @notice Align tick up to the nearest spacing boundary (ceiling semantics).
+    /// @dev Used for `tickLower` so the LP range contracts toward the intended inner band on the lower side.
+    /// Without this, flooring tickLower would expand the LP range downward by up to one spacing interval,
+    /// exposing project liquidity at prices the bonding curve never sanctioned.
+    function _alignTickToSpacingCeil(int24 tick, int24 spacing) internal pure returns (int24 alignedTick) {
+        // forge-lint: disable-next-line(divide-before-multiply)
+        int24 rounded = (tick / spacing) * spacing;
+        if (rounded < tick) {
+            rounded += spacing;
         }
         return rounded;
     }
@@ -1530,7 +1544,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         tickLower = rawTickA < rawTickB ? rawTickA : rawTickB;
         tickUpper = rawTickA < rawTickB ? rawTickB : rawTickA;
 
-        tickLower = _alignTickToSpacing({tick: tickLower, spacing: TICK_SPACING});
+        // Align ASYMMETRICALLY: tickLower up, tickUpper down. Both moves contract the LP range toward the
+        // intended price band. Flooring both ticks would expand the lower side by up to one spacing interval,
+        // exposing project liquidity at prices below what the bonding curve sanctioned.
+        tickLower = _alignTickToSpacingCeil({tick: tickLower, spacing: TICK_SPACING});
         tickUpper = _alignTickToSpacing({tick: tickUpper, spacing: TICK_SPACING});
 
         // Clamp to valid V4 tick range after alignment.

@@ -272,10 +272,19 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
 
         // Verify tickLower came from the issuance tick (the lower one) and
         // tickUpper came from the cashOut tick (the higher one), after alignment.
-        int24 alignedIssuance = _alignTickToSpacing(tickIssuance, 200);
+        // tickLower is ceil-aligned (rounds up toward the inner band); tickUpper is floor-aligned. Both moves
+        // contract the LP range toward the intended price band, preventing project liquidity from being exposed
+        // outside the bonding-curve-sanctioned range.
+        int24 alignedIssuance = _alignTickToSpacingCeil(tickIssuance, 200);
         int24 alignedCashOut = _alignTickToSpacing(tickCashOut, 200);
-        assertEq(tickLower, alignedIssuance, "tickLower should be the aligned issuance tick (the lower raw tick)");
-        assertEq(tickUpper, alignedCashOut, "tickUpper should be the aligned cashOut tick (the higher raw tick)");
+        assertEq(tickLower, alignedIssuance, "tickLower should be the ceil-aligned issuance tick (the lower raw tick)");
+        assertEq(tickUpper, alignedCashOut, "tickUpper should be the floor-aligned cashOut tick (the higher raw tick)");
+    }
+
+    function _alignTickToSpacingCeil(int24 tick, int24 spacing) internal pure returns (int24) {
+        int24 rounded = (tick / spacing) * spacing;
+        if (rounded < tick) rounded += spacing;
+        return rounded;
     }
 
     /// @notice Confirm tick bounds are correct when terminal is token1 (no inversion).
