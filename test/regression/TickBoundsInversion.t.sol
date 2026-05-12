@@ -275,7 +275,7 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
         // tickLower is ceil-aligned (rounds up toward the inner band); tickUpper is floor-aligned. Both moves
         // contract the LP range toward the intended price band, preventing project liquidity from being exposed
         // outside the bonding-curve-sanctioned range.
-        int24 alignedIssuance = _alignTickToSpacingCeil(tickIssuance, 200);
+        int24 alignedIssuance = _alignTickToSpacingCeil({tick: tickIssuance, spacing: 200});
         int24 alignedCashOut = _alignTickToSpacing(tickCashOut, 200);
         assertEq(tickLower, alignedIssuance, "tickLower should be the ceil-aligned issuance tick (the lower raw tick)");
         assertEq(tickUpper, alignedCashOut, "tickUpper should be the floor-aligned cashOut tick (the higher raw tick)");

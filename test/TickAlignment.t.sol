@@ -30,43 +30,43 @@ contract TickAlignmentTest is Test {
     }
 
     function test_alignDown_positiveNonBoundary_roundsToLowerBoundary() public pure {
-        assertEq(_alignDown(100, SPACING), 60);
-        assertEq(_alignDown(119, SPACING), 60);
+        assertEq(_alignDown({tick: 100, spacing: SPACING}), 60);
+        assertEq(_alignDown({tick: 119, spacing: SPACING}), 60);
     }
 
     function test_alignDown_positiveOnBoundary_returnsItself() public pure {
-        assertEq(_alignDown(60, SPACING), 60);
-        assertEq(_alignDown(120, SPACING), 120);
+        assertEq(_alignDown({tick: 60, spacing: SPACING}), 60);
+        assertEq(_alignDown({tick: 120, spacing: SPACING}), 120);
     }
 
     function test_alignDown_negativeNonBoundary_roundsToMoreNegative() public pure {
-        assertEq(_alignDown(-100, SPACING), -120);
-        assertEq(_alignDown(-1, SPACING), -60);
+        assertEq(_alignDown({tick: -100, spacing: SPACING}), -120);
+        assertEq(_alignDown({tick: -1, spacing: SPACING}), -60);
     }
 
     function test_alignDown_negativeOnBoundary_returnsItself() public pure {
-        assertEq(_alignDown(-60, SPACING), -60);
-        assertEq(_alignDown(-120, SPACING), -120);
+        assertEq(_alignDown({tick: -60, spacing: SPACING}), -60);
+        assertEq(_alignDown({tick: -120, spacing: SPACING}), -120);
     }
 
     function test_alignUp_positiveNonBoundary_roundsToUpperBoundary() public pure {
-        assertEq(_alignUp(100, SPACING), 120);
-        assertEq(_alignUp(61, SPACING), 120);
+        assertEq(_alignUp({tick: 100, spacing: SPACING}), 120);
+        assertEq(_alignUp({tick: 61, spacing: SPACING}), 120);
     }
 
     function test_alignUp_positiveOnBoundary_returnsItself() public pure {
-        assertEq(_alignUp(60, SPACING), 60);
-        assertEq(_alignUp(120, SPACING), 120);
+        assertEq(_alignUp({tick: 60, spacing: SPACING}), 60);
+        assertEq(_alignUp({tick: 120, spacing: SPACING}), 120);
     }
 
     function test_alignUp_negativeNonBoundary_roundsToLessNegative() public pure {
-        assertEq(_alignUp(-100, SPACING), -60);
-        assertEq(_alignUp(-119, SPACING), -60);
+        assertEq(_alignUp({tick: -100, spacing: SPACING}), -60);
+        assertEq(_alignUp({tick: -119, spacing: SPACING}), -60);
     }
 
     function test_alignUp_negativeOnBoundary_returnsItself() public pure {
-        assertEq(_alignUp(-60, SPACING), -60);
-        assertEq(_alignUp(-120, SPACING), -120);
+        assertEq(_alignUp({tick: -60, spacing: SPACING}), -60);
+        assertEq(_alignUp({tick: -120, spacing: SPACING}), -120);
     }
 
     function test_alignmentAsymmetry_contractsRangeOnBothSides() public pure {
@@ -74,8 +74,8 @@ contract TickAlignmentTest is Test {
         // wider on the lower side. With the asymmetric fix, (60, 120) — strictly inside the raw range.
         int24 rawLower = 50;
         int24 rawUpper = 130;
-        int24 alignedLower = _alignUp(rawLower, SPACING);
-        int24 alignedUpper = _alignDown(rawUpper, SPACING);
+        int24 alignedLower = _alignUp({tick: rawLower, spacing: SPACING});
+        int24 alignedUpper = _alignDown({tick: rawUpper, spacing: SPACING});
         assertGe(alignedLower, rawLower, "tickLower must not be below raw");
         assertLe(alignedUpper, rawUpper, "tickUpper must not be above raw");
         assertEq(alignedLower, 60);
