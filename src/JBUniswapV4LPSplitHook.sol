@@ -474,10 +474,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // Get the store for surplus queries.
         IJBTerminalStore store = terminal.STORE();
 
-        uint256 decimals = _getTokenDecimals(terminalToken);
-        // Safe: truncation to uint32 is the standard Juicebox currency encoding.
-        // forge-lint: disable-next-line(unsafe-typecast)
-        uint256 currency = uint256(uint32(uint160(terminalToken)));
+        // Read the terminal's declared currency for this token. Using `uint32(uint160(terminalToken))` here would
+        // diverge from `_getIssuanceRate`, which reads the accounting context directly. The two paths must agree on
+        // the same currency identifier so issuance and cash-out price the LP bounds against a consistent reference.
+        JBAccountingContext memory accountingContext =
+            terminal.accountingContextForTokenOf({projectId: projectId, token: terminalToken});
+        uint256 decimals = accountingContext.decimals;
+        uint256 currency = uint256(accountingContext.currency);
 
         // If the project doesn't scope cash outs to local balances, include remote cross-chain
         // surplus and supply in the bonding curve calculation.
