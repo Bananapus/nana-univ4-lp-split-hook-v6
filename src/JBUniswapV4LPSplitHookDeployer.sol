@@ -27,19 +27,23 @@ contract JBUniswapV4LPSplitHookDeployer is IJBUniswapV4LPSplitHookDeployer {
     /// @notice A registry which stores references to contracts and their deployers.
     IJBAddressRegistry public immutable override ADDRESS_REGISTRY;
 
+    //*********************************************************************//
+    // -------------- internal immutable stored properties -------------- //
+    //*********************************************************************//
+
     /// @notice The address authorized to call `setChainSpecificConstants` exactly once.
     /// @dev Held immutable so the constructor inputs are byte-identical across chains and the CREATE2 address is
     /// unified. Mirrors the `JBOptimismSuckerDeployer.setChainSpecificConstants` pattern in nana-suckers-v6.
-    address public immutable override DEPLOYER;
+    address internal immutable _DEPLOYER;
 
     //*********************************************************************//
     // ------------------------ public properties ------------------------ //
     //*********************************************************************//
 
-    /// @notice The hook implementation that all clones delegate to. Set once by `DEPLOYER` after construction via
+    /// @notice The hook implementation that all clones delegate to. Set once by `_DEPLOYER` after construction via
     /// `setChainSpecificConstants` and never changed thereafter.
     /// @dev Held as public storage (rather than immutable) so the constructor inputs are byte-identical on every chain.
-    /// The chain-specific hook implementation is supplied by `DEPLOYER` in a one-shot call to
+    /// The chain-specific hook implementation is supplied by `_DEPLOYER` in a one-shot call to
     /// `setChainSpecificConstants`. This is the same chain-same pattern used by `JBBuybackHook` and
     /// `JBOptimismSuckerDeployer`, and makes this deployer's CREATE2 address unified across chains.
     JBUniswapV4LPSplitHook public override HOOK;
@@ -59,7 +63,7 @@ contract JBUniswapV4LPSplitHookDeployer is IJBUniswapV4LPSplitHookDeployer {
     /// @param deployer The address authorized to call `setChainSpecificConstants` exactly once.
     constructor(IJBAddressRegistry addressRegistry, address deployer) {
         ADDRESS_REGISTRY = addressRegistry;
-        DEPLOYER = deployer;
+        _DEPLOYER = deployer;
     }
 
     //*********************************************************************//
@@ -107,12 +111,12 @@ contract JBUniswapV4LPSplitHookDeployer is IJBUniswapV4LPSplitHookDeployer {
     }
 
     /// @notice One-shot setter for the chain-specific `JBUniswapV4LPSplitHook` implementation.
-    /// @dev Callable only by `DEPLOYER` and only once (when `HOOK` is still `address(0)`). After this call the value
+    /// @dev Callable only by `_DEPLOYER` and only once (when `HOOK` is still `address(0)`). After this call the value
     /// is effectively immutable for the contract's lifetime. Mirrors the `JBOptimismSuckerDeployer` pattern so the
     /// contract's CREATE2 inputs stay byte-identical across chains and its deployed address is unified.
     /// @param hook The chain-specific `JBUniswapV4LPSplitHook` implementation.
     function setChainSpecificConstants(JBUniswapV4LPSplitHook hook) external override {
-        if (msg.sender != DEPLOYER) revert JBUniswapV4LPSplitHookDeployer_Unauthorized({caller: msg.sender});
+        if (msg.sender != _DEPLOYER) revert JBUniswapV4LPSplitHookDeployer_Unauthorized({caller: msg.sender});
         if (address(HOOK) != address(0)) revert JBUniswapV4LPSplitHookDeployer_AlreadyConfigured();
         HOOK = hook;
     }

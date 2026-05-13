@@ -18,10 +18,6 @@ interface IJBUniswapV4LPSplitHookDeployer {
     /// @return The address registry contract.
     function ADDRESS_REGISTRY() external view returns (IJBAddressRegistry);
 
-    /// @notice The address authorized to call `setChainSpecificConstants` exactly once.
-    /// @return The deployer address (immutable, set at construction).
-    function DEPLOYER() external view returns (address);
-
     /// @notice The implementation contract used as the base for clones.
     /// @return The hook implementation contract.
     function HOOK() external view returns (JBUniswapV4LPSplitHook);
@@ -40,7 +36,8 @@ interface IJBUniswapV4LPSplitHookDeployer {
         returns (IJBUniswapV4LPSplitHook hook);
 
     /// @notice One-shot setter for the chain-specific `JBUniswapV4LPSplitHook` implementation.
-    /// @dev Callable only by `DEPLOYER` and only once (when `HOOK` is still `address(0)`).
+    /// @dev Callable only by the deployer that constructed this contract and only once (when `HOOK` is still
+    /// `address(0)`).
     /// @param hook The chain-specific `JBUniswapV4LPSplitHook` implementation.
     function setChainSpecificConstants(JBUniswapV4LPSplitHook hook) external;
 }
