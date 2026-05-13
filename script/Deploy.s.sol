@@ -120,15 +120,26 @@ contract DeployScript is Script, Sphinx {
             );
         }
 
-        // Thread the actual implementation address from the active deployment path into the deployer constructor.
+        // Thread the actual implementation address from the active deployment path into the deployer.
+        // Deployer construction is chain-same (CREATE2 inputs are byte-identical across chains); the
+        // chain-specific hook implementation is wired in afterwards via setChainSpecificConstants.
         JBUniswapV4LPSplitHook hookImpl = JBUniswapV4LPSplitHook(payable(hookImplAddress));
 
-        if (!_isDeployed(
-                deployerSalt,
-                type(JBUniswapV4LPSplitHookDeployer).creationCode,
-                abi.encode(address(hookImpl), address(registry.registry))
-            )) {
-            new JBUniswapV4LPSplitHookDeployer{salt: deployerSalt}(hookImpl, registry.registry);
+        bytes memory deployerCtorArgs = abi.encode(address(registry.registry), safeAddress());
+        JBUniswapV4LPSplitHookDeployer deployer = JBUniswapV4LPSplitHookDeployer(
+            vm.computeCreate2Address({
+                salt: deployerSalt,
+                initCodeHash: keccak256(
+                    abi.encodePacked(type(JBUniswapV4LPSplitHookDeployer).creationCode, deployerCtorArgs)
+                ),
+                deployer: address(0x4e59b44847b379578588920cA78FbF26c0B4956C)
+            })
+        );
+        if (address(deployer).code.length == 0) {
+            deployer = new JBUniswapV4LPSplitHookDeployer{salt: deployerSalt}(registry.registry, safeAddress());
+        }
+        if (address(deployer.HOOK()) == address(0)) {
+            deployer.setChainSpecificConstants(hookImpl);
         }
     }
 

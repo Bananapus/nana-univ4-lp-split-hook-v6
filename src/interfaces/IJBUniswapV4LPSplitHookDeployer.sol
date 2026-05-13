@@ -34,4 +34,10 @@ interface IJBUniswapV4LPSplitHookDeployer {
     )
         external
         returns (IJBUniswapV4LPSplitHook hook);
+
+    /// @notice One-shot setter for the chain-specific `JBUniswapV4LPSplitHook` implementation.
+    /// @dev Callable only by the deployer that constructed this contract and only once (when `HOOK` is still
+    /// `address(0)`).
+    /// @param hook The chain-specific `JBUniswapV4LPSplitHook` implementation.
+    function setChainSpecificConstants(JBUniswapV4LPSplitHook hook) external;
 }

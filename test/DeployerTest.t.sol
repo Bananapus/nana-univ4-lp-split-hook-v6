@@ -53,7 +53,8 @@ contract DeployerTest is Test {
         );
 
         addressRegistry = new JBAddressRegistry();
-        deployer = new JBUniswapV4LPSplitHookDeployer(hookImpl, IJBAddressRegistry(address(addressRegistry)));
+        deployer = new JBUniswapV4LPSplitHookDeployer(IJBAddressRegistry(address(addressRegistry)), address(this));
+        deployer.setChainSpecificConstants(hookImpl);
     }
 
     // ─── CREATE deployment registers in address registry ─────────────
