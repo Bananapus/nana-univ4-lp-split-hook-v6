@@ -57,7 +57,8 @@ contract RegressionFixM31Test is Test {
         );
 
         addressRegistry = new JBAddressRegistry();
-        deployer = new JBUniswapV4LPSplitHookDeployer(hookImpl, IJBAddressRegistry(address(addressRegistry)));
+        deployer = new JBUniswapV4LPSplitHookDeployer(IJBAddressRegistry(address(addressRegistry)), address(this));
+        deployer.setChainSpecificConstants(hookImpl);
     }
 
     /// @notice Deploy with CREATE2 first, then CREATE, and verify both hooks are correctly
