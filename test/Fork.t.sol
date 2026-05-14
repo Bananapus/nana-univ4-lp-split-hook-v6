@@ -39,21 +39,9 @@ contract ExposedJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
         address directory,
         IJBPermissions permissions,
         address tokens,
-        IPoolManager poolManager,
-        IPositionManager positionManager,
-        IAllowanceTransfer permit2,
-        IHooks oracleHook
+        IAllowanceTransfer permit2
     )
-        JBUniswapV4LPSplitHook(
-            directory,
-            permissions,
-            tokens,
-            poolManager,
-            positionManager,
-            permit2,
-            oracleHook,
-            IJBSuckerRegistry(address(0))
-        )
+        JBUniswapV4LPSplitHook(directory, permissions, tokens, permit2, IJBSuckerRegistry(address(0)))
     {}
 
     function exposed_calculateTickBounds(
@@ -119,13 +107,16 @@ contract LPSplitHookForkTest is ForkDeployHelper {
             address(jbDirectory),
             IJBPermissions(address(jbPermissions)),
             address(jbTokens),
-            V4_POOL_MANAGER,
-            V4_POSITION_MANAGER,
-            IAllowanceTransfer(address(PERMIT2)),
-            IHooks(address(0))
+            IAllowanceTransfer(address(PERMIT2))
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
-        hook.initialize(feeProjectId, 3800); // 38% fee to fee project.
+        hook.initialize({
+            feeProjectId: feeProjectId,
+            feePercent: 3800,
+            poolManager: V4_POOL_MANAGER,
+            positionManager: V4_POSITION_MANAGER,
+            oracleHook: IHooks(address(0))
+        }); // 38% fee to fee project.
         vm.prank(multisig);
         jbController.mintTokensOf({
             projectId: projectId,

@@ -336,14 +336,17 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
             address(directory),
             IJBPermissions(address(permissions)),
             address(jbTokens),
-            IPoolManager(address(poolManager)),
-            IPositionManager(address(positionManager)),
             IAllowanceTransfer(permit2Addr),
-            IHooks(address(0)),
             IJBSuckerRegistry(address(0))
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
-        hook.initialize(FEE_PROJECT_ID, FEE_PERCENT);
+        hook.initialize({
+            feeProjectId: FEE_PROJECT_ID,
+            feePercent: FEE_PERCENT,
+            poolManager: IPoolManager(address(poolManager)),
+            positionManager: IPositionManager(address(positionManager)),
+            oracleHook: IHooks(address(0))
+        });
 
         // Deploy the handler
         handler = new LPSplitHookHandler(hook, projectToken, terminalToken, controller, positionManager, owner);

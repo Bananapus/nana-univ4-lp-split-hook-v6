@@ -161,14 +161,17 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
             address(directory),
             IJBPermissions(address(permissions)),
             address(jbTokens),
-            IPoolManager(address(poolManager)),
-            IPositionManager(address(positionManager)),
             IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
-            IHooks(address(0)),
             IJBSuckerRegistry(address(mockRegistry))
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
-        hook.initialize(FEE_PROJECT_ID, FEE_PERCENT);
+        hook.initialize({
+            feeProjectId: FEE_PROJECT_ID,
+            feePercent: FEE_PERCENT,
+            poolManager: IPoolManager(address(poolManager)),
+            positionManager: IPositionManager(address(positionManager)),
+            oracleHook: IHooks(address(0))
+        });
 
         // Deploy the custom controller that can flip the metadata flag.
         tsController = new TotalSurplusController();
@@ -305,14 +308,17 @@ contract FeeTokensExcludedFromRebalanceTest is LPSplitHookV4TestBase {
             address(directory),
             IJBPermissions(address(permissions)),
             address(jbTokens),
-            IPoolManager(address(poolManager)),
-            IPositionManager(address(positionManager)),
             IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
-            IHooks(address(0)),
             IJBSuckerRegistry(address(mockRegistry))
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
-        hook.initialize(FEE_PROJECT_ID, FEE_PERCENT);
+        hook.initialize({
+            feeProjectId: FEE_PROJECT_ID,
+            feePercent: FEE_PERCENT,
+            poolManager: IPoolManager(address(poolManager)),
+            positionManager: IPositionManager(address(positionManager)),
+            oracleHook: IHooks(address(0))
+        });
 
         // We need a controller that can actually burn tokens so rebalance works.
         burnController = new TotalSurplusController();
@@ -418,14 +424,17 @@ contract FeeTokensExcludedFromSplitBalanceCheckTest is LPSplitHookV4TestBase {
             address(directory),
             IJBPermissions(address(permissions)),
             address(jbTokens),
-            IPoolManager(address(poolManager)),
-            IPositionManager(address(positionManager)),
             IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
-            IHooks(address(0)),
             IJBSuckerRegistry(address(mockRegistry))
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
-        hook.initialize(FEE_PROJECT_ID, FEE_PERCENT);
+        hook.initialize({
+            feeProjectId: FEE_PROJECT_ID,
+            feePercent: FEE_PERCENT,
+            poolManager: IPoolManager(address(poolManager)),
+            positionManager: IPositionManager(address(positionManager)),
+            oracleHook: IHooks(address(0))
+        });
 
         burnController = new TotalSurplusController();
         burnController.setPrices(address(prices));

@@ -167,14 +167,17 @@ contract GeomeanLPForkTest is ForkDeployHelper {
             address(jbDirectory),
             IJBPermissions(address(jbPermissions)),
             address(jbTokens),
-            V4_POOL_MANAGER,
-            V4_POSITION_MANAGER,
             IAllowanceTransfer(address(PERMIT2)),
-            IHooks(address(0)),
             IJBSuckerRegistry(address(0))
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
-        hook.initialize(feeProjectId, 3800);
+        hook.initialize({
+            feeProjectId: feeProjectId,
+            feePercent: 3800,
+            poolManager: V4_POOL_MANAGER,
+            positionManager: V4_POSITION_MANAGER,
+            oracleHook: IHooks(address(0))
+        });
     }
 
     function test_fork_ethPool_varyingAccumulation() public {

@@ -24,20 +24,9 @@ contract PriceRatioHarness is JBUniswapV4LPSplitHook {
         address _directory,
         IJBPermissions _permissions,
         address _tokens,
-        IPoolManager _poolManager,
-        IPositionManager _positionManager,
         IAllowanceTransfer _permit2
     )
-        JBUniswapV4LPSplitHook(
-            _directory,
-            _permissions,
-            _tokens,
-            _poolManager,
-            _positionManager,
-            _permit2,
-            IHooks(address(0)),
-            IJBSuckerRegistry(address(0))
-        )
+        JBUniswapV4LPSplitHook(_directory, _permissions, _tokens, _permit2, IJBSuckerRegistry(address(0)))
     {}
 
     function _fetchControllerAndRuleset(uint256 projectId)
@@ -134,10 +123,15 @@ contract PriceRatioRegression is LPSplitHookV4TestBase {
             address(directory),
             IJBPermissions(address(permissions)),
             address(jbTokens),
-            IPoolManager(address(poolManager)),
-            IPositionManager(address(positionManager)),
             IAllowanceTransfer(address(hook.PERMIT2()))
         );
+        harness.initialize({
+            feeProjectId: 0,
+            feePercent: 0,
+            poolManager: IPoolManager(address(poolManager)),
+            positionManager: IPositionManager(address(positionManager)),
+            oracleHook: IHooks(address(0))
+        });
     }
 
     // ═══════════════════════════════════════════════════════════════════════

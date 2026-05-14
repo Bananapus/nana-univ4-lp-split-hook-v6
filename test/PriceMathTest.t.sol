@@ -19,20 +19,9 @@ contract TestableJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
         address _directory,
         IJBPermissions _permissions,
         address _tokens,
-        IPoolManager _poolManager,
-        IPositionManager _positionManager,
         IAllowanceTransfer _permit2
     )
-        JBUniswapV4LPSplitHook(
-            _directory,
-            _permissions,
-            _tokens,
-            _poolManager,
-            _positionManager,
-            _permit2,
-            IHooks(address(0)),
-            IJBSuckerRegistry(address(0))
-        )
+        JBUniswapV4LPSplitHook(_directory, _permissions, _tokens, _permit2, IJBSuckerRegistry(address(0)))
     {}
 
     /// @dev Helper to fetch controller and ruleset for a project.
@@ -181,14 +170,15 @@ contract PriceMathTest is LPSplitHookV4TestBase {
     function setUp() public override {
         super.setUp();
         testableHook = new TestableJBUniswapV4LPSplitHook(
-            address(directory),
-            IJBPermissions(address(permissions)),
-            address(jbTokens),
-            IPoolManager(address(1)),
-            IPositionManager(address(positionManager)),
-            IAllowanceTransfer(address(0))
+            address(directory), IJBPermissions(address(permissions)), address(jbTokens), IAllowanceTransfer(address(0))
         );
-        testableHook.initialize(FEE_PROJECT_ID, FEE_PERCENT);
+        testableHook.initialize({
+            feeProjectId: FEE_PROJECT_ID,
+            feePercent: FEE_PERCENT,
+            poolManager: IPoolManager(address(1)),
+            positionManager: IPositionManager(address(positionManager)),
+            oracleHook: IHooks(address(0))
+        });
     }
 
     // ─────────────────────────────────────────────────────────────────────

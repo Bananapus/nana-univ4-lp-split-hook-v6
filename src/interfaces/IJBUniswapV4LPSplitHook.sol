@@ -2,6 +2,9 @@
 pragma solidity ^0.8.0;
 
 import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 
 /// @notice Manages a two-stage Uniswap V4 pool deployment process for Juicebox projects, routing LP fees back to the
@@ -74,8 +77,18 @@ interface IJBUniswapV4LPSplitHook {
     /// @param minCashOutReturn Minimum terminal tokens from cash-out (slippage protection, 0 = auto 1% tolerance).
     function deployPool(uint256 projectId, uint256 minCashOutReturn) external;
 
-    /// @notice Initialize per-instance config on a clone.
+    /// @notice Initialize per-instance config + chain-specific Uniswap V4 addresses on a clone. Callable once.
     /// @param feeProjectId Project ID to receive LP fees.
     /// @param feePercent Percentage of LP fees to route to fee project, out of `BPS`.
-    function initialize(uint256 feeProjectId, uint256 feePercent) external;
+    /// @param poolManager The Uniswap V4 PoolManager on this chain.
+    /// @param positionManager The Uniswap V4 PositionManager on this chain.
+    /// @param oracleHook The JB V4 oracle hook deployed against `poolManager` on this chain.
+    function initialize(
+        uint256 feeProjectId,
+        uint256 feePercent,
+        IPoolManager poolManager,
+        IPositionManager positionManager,
+        IHooks oracleHook
+    )
+        external;
 }

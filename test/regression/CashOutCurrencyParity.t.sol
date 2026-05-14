@@ -24,20 +24,9 @@ contract TestableHookForCurrencyParity is JBUniswapV4LPSplitHook {
         address _directory,
         IJBPermissions _permissions,
         address _tokens,
-        IPoolManager _poolManager,
-        IPositionManager _positionManager,
         IAllowanceTransfer _permit2
     )
-        JBUniswapV4LPSplitHook(
-            _directory,
-            _permissions,
-            _tokens,
-            _poolManager,
-            _positionManager,
-            _permit2,
-            IHooks(address(0)),
-            IJBSuckerRegistry(address(0))
-        )
+        JBUniswapV4LPSplitHook(_directory, _permissions, _tokens, _permit2, IJBSuckerRegistry(address(0)))
     {}
 
     function _fetchControllerAndRuleset(uint256 projectId)
@@ -82,11 +71,15 @@ contract CashOutCurrencyParityTest is LPSplitHookV4TestBase {
             _directory: address(directory),
             _permissions: IJBPermissions(address(permissions)),
             _tokens: address(jbTokens),
-            _poolManager: IPoolManager(address(1)),
-            _positionManager: IPositionManager(address(positionManager)),
             _permit2: IAllowanceTransfer(address(0))
         });
-        testableHook.initialize({feeProjectId: FEE_PROJECT_ID, feePercent: FEE_PERCENT});
+        testableHook.initialize({
+            feeProjectId: FEE_PROJECT_ID,
+            feePercent: FEE_PERCENT,
+            poolManager: IPoolManager(address(1)),
+            positionManager: IPositionManager(address(positionManager)),
+            oracleHook: IHooks(address(0))
+        });
 
         terminalTokenA = new MockERC20("TerminalA", "TKA", 18);
         projectTokenA = new MockERC20("ProjectA", "PJA", 18);

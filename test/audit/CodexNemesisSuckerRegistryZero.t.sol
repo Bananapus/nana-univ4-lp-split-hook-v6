@@ -21,15 +21,10 @@ contract CodexNemesisCashOutRateHarness is JBUniswapV4LPSplitHook {
         address directory,
         IJBPermissions permissions,
         address tokens,
-        IPoolManager poolManager,
-        IPositionManager positionManager,
         IAllowanceTransfer permit2,
-        IHooks oracleHook,
         IJBSuckerRegistry suckerRegistry
     )
-        JBUniswapV4LPSplitHook(
-            directory, permissions, tokens, poolManager, positionManager, permit2, oracleHook, suckerRegistry
-        )
+        JBUniswapV4LPSplitHook(directory, permissions, tokens, permit2, suckerRegistry)
     {}
 
     function exposedGetCashOutRate(
@@ -56,13 +51,16 @@ contract CodexNemesisSuckerRegistryZeroTest is LPSplitHookV4TestBase {
             directory: address(directory),
             permissions: IJBPermissions(address(permissions)),
             tokens: address(jbTokens),
-            poolManager: IPoolManager(address(poolManager)),
-            positionManager: IPositionManager(address(positionManager)),
             permit2: IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
-            oracleHook: IHooks(address(0)),
             suckerRegistry: IJBSuckerRegistry(address(0))
         });
-        zeroRegistryHook.initialize(FEE_PROJECT_ID, FEE_PERCENT);
+        zeroRegistryHook.initialize({
+            feeProjectId: FEE_PROJECT_ID,
+            feePercent: FEE_PERCENT,
+            poolManager: IPoolManager(address(poolManager)),
+            positionManager: IPositionManager(address(positionManager)),
+            oracleHook: IHooks(address(0))
+        });
 
         vm.mockCall(
             address(controller),
