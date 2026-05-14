@@ -49,16 +49,18 @@ contract RegressionFixM31Test is Test {
             address(directory),
             IJBPermissions(address(permissions)),
             address(1), // tokens placeholder
-            IPoolManager(address(2)), // pool manager placeholder
-            IPositionManager(address(3)), // position manager placeholder
             IAllowanceTransfer(address(0)),
-            IHooks(address(0)),
             IJBSuckerRegistry(address(0))
         );
 
         addressRegistry = new JBAddressRegistry();
         deployer = new JBUniswapV4LPSplitHookDeployer(IJBAddressRegistry(address(addressRegistry)), address(this));
-        deployer.setChainSpecificConstants(hookImpl);
+        deployer.setChainSpecificConstants({
+            hook: hookImpl,
+            poolManager: IPoolManager(address(2)),
+            positionManager: IPositionManager(address(3)),
+            oracleHook: IHooks(address(0))
+        });
     }
 
     /// @notice Deploy with CREATE2 first, then CREATE, and verify both hooks are correctly

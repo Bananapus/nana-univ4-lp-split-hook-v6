@@ -88,15 +88,14 @@ contract DeployScript is Script, Sphinx {
     }
 
     function deploy() public sphinx {
-        // Shared constructor args for the hook implementation.
+        // Chain-same constructor args — the chain-specific Uniswap V4 addresses are no longer in the constructor;
+        // they are passed into each fresh clone by `JBUniswapV4LPSplitHookDeployer.deployHookFor` via its own
+        // setChainSpecificConstants storage.
         bytes memory hookArgs = abi.encode(
             address(core.directory),
             core.permissions,
             address(core.tokens),
-            poolManager,
-            positionManager,
             IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
-            router.hook,
             suckers.registry
         );
 
@@ -111,10 +110,7 @@ contract DeployScript is Script, Sphinx {
                     address(core.directory),
                     core.permissions,
                     address(core.tokens),
-                    poolManager,
-                    positionManager,
                     IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
-                    router.hook,
                     suckers.registry
                 )
             );
@@ -139,7 +135,9 @@ contract DeployScript is Script, Sphinx {
             deployer = new JBUniswapV4LPSplitHookDeployer{salt: deployerSalt}(registry.registry, safeAddress());
         }
         if (address(deployer.HOOK()) == address(0)) {
-            deployer.setChainSpecificConstants(hookImpl);
+            deployer.setChainSpecificConstants({
+                hook: hookImpl, poolManager: poolManager, positionManager: positionManager, oracleHook: router.hook
+            });
         }
     }
 

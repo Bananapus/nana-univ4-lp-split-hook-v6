@@ -22,20 +22,9 @@ contract AllowanceHarness is JBUniswapV4LPSplitHook {
         address directory,
         IJBPermissions permissions,
         address tokens,
-        IPoolManager poolManager,
-        IPositionManager positionManager,
         IAllowanceTransfer permit2
     )
-        JBUniswapV4LPSplitHook(
-            directory,
-            permissions,
-            tokens,
-            poolManager,
-            positionManager,
-            permit2,
-            IHooks(address(0)),
-            IJBSuckerRegistry(address(0))
-        )
+        JBUniswapV4LPSplitHook(directory, permissions, tokens, permit2, IJBSuckerRegistry(address(0)))
     {}
 
     function exposed_addToProjectBalance(uint256 projectId, address token, uint256 amount, bool isNative) external {
@@ -70,10 +59,15 @@ contract PersistentAllowanceStealTest is Test {
             address(directory),
             IJBPermissions(address(permissions)),
             address(tokens),
-            IPoolManager(address(0xBEEF)),
-            IPositionManager(address(0xCAFE)),
             IAllowanceTransfer(address(0xF00D))
         );
+        hook.initialize({
+            feeProjectId: 0,
+            feePercent: 0,
+            poolManager: IPoolManager(address(0xBEEF)),
+            positionManager: IPositionManager(address(0xCAFE)),
+            oracleHook: IHooks(address(0))
+        });
     }
 
     function test_revertsIfTerminalKeepsTemporaryAllowance() public {

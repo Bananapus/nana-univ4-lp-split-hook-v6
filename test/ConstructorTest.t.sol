@@ -45,15 +45,18 @@ contract ConstructorTest is LPSplitHookV4TestBase {
             address(directory),
             IJBPermissions(address(permissions)),
             address(jbTokens),
-            IPoolManager(address(1)),
-            IPositionManager(address(positionManager)),
             IAllowanceTransfer(address(0)),
-            IHooks(address(0)),
             IJBSuckerRegistry(address(0))
         );
 
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidFeePercent.selector);
-        impl.initialize(FEE_PROJECT_ID, 10_001);
+        impl.initialize({
+            feeProjectId: FEE_PROJECT_ID,
+            feePercent: 10_001,
+            poolManager: IPoolManager(address(1)),
+            positionManager: IPositionManager(address(positionManager)),
+            oracleHook: IHooks(address(0))
+        });
     }
 
     /// @notice initialize() reverts when feeProjectId is 0 but feePercent > 0.
@@ -63,15 +66,18 @@ contract ConstructorTest is LPSplitHookV4TestBase {
             address(directory),
             IJBPermissions(address(permissions)),
             address(jbTokens),
-            IPoolManager(address(1)),
-            IPositionManager(address(positionManager)),
             IAllowanceTransfer(address(0)),
-            IHooks(address(0)),
             IJBSuckerRegistry(address(0))
         );
 
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject.selector);
-        impl.initialize(0, FEE_PERCENT);
+        impl.initialize({
+            feeProjectId: 0,
+            feePercent: FEE_PERCENT,
+            poolManager: IPoolManager(address(1)),
+            positionManager: IPositionManager(address(positionManager)),
+            oracleHook: IHooks(address(0))
+        });
     }
 
     /// @notice When both feeProjectId and feePercent are 0, initialize() succeeds (no fees configured).
@@ -81,14 +87,17 @@ contract ConstructorTest is LPSplitHookV4TestBase {
             address(directory),
             IJBPermissions(address(permissions)),
             address(jbTokens),
-            IPoolManager(address(1)),
-            IPositionManager(address(positionManager)),
             IAllowanceTransfer(address(0)),
-            IHooks(address(0)),
             IJBSuckerRegistry(address(0))
         );
 
-        impl.initialize(0, 0);
+        impl.initialize({
+            feeProjectId: 0,
+            feePercent: 0,
+            poolManager: IPoolManager(address(1)),
+            positionManager: IPositionManager(address(positionManager)),
+            oracleHook: IHooks(address(0))
+        });
 
         assertEq(impl.FEE_PROJECT_ID(), 0, "FEE_PROJECT_ID should be 0");
         assertEq(impl.FEE_PERCENT(), 0, "FEE_PERCENT should be 0");
@@ -101,18 +110,27 @@ contract ConstructorTest is LPSplitHookV4TestBase {
             address(directory),
             IJBPermissions(address(permissions)),
             address(jbTokens),
-            IPoolManager(address(1)),
-            IPositionManager(address(positionManager)),
             IAllowanceTransfer(address(0)),
-            IHooks(address(0)),
             IJBSuckerRegistry(address(0))
         );
 
         // First init succeeds
-        impl.initialize(FEE_PROJECT_ID, FEE_PERCENT);
+        impl.initialize({
+            feeProjectId: FEE_PROJECT_ID,
+            feePercent: FEE_PERCENT,
+            poolManager: IPoolManager(address(1)),
+            positionManager: IPositionManager(address(positionManager)),
+            oracleHook: IHooks(address(0))
+        });
 
         // Second init reverts
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_AlreadyInitialized.selector);
-        impl.initialize(FEE_PROJECT_ID, FEE_PERCENT);
+        impl.initialize({
+            feeProjectId: FEE_PROJECT_ID,
+            feePercent: FEE_PERCENT,
+            poolManager: IPoolManager(address(1)),
+            positionManager: IPositionManager(address(positionManager)),
+            oracleHook: IHooks(address(0))
+        });
     }
 }

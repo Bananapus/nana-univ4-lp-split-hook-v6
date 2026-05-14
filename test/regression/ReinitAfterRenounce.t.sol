@@ -45,38 +45,57 @@ contract ReinitAfterRenounceTest is Test {
             address(directory),
             IJBPermissions(address(permissions)),
             address(jbTokens),
-            IPoolManager(address(1)),
-            IPositionManager(address(positionManager)),
             IAllowanceTransfer(address(0)),
-            IHooks(address(0)),
             IJBSuckerRegistry(address(0))
         );
 
         // Clone and initialize
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
-        hook.initialize(2, 3800); // feeProjectId=2, feePercent=38%
+        hook.initialize({
+            feeProjectId: 2,
+            feePercent: 3800,
+            poolManager: IPoolManager(address(1)),
+            positionManager: IPositionManager(address(positionManager)),
+            oracleHook: IHooks(address(0))
+        }); // feeProjectId=2, feePercent=38%
     }
 
     /// @notice Re-initialization should revert.
     function test_reinitialize_reverts() public {
         assertEq(hook.FEE_PROJECT_ID(), 2);
         assertEq(hook.FEE_PERCENT(), 3800);
-        assertTrue(hook.initialized());
+        // POOL_MANAGER doubles as the "initialized" sentinel — non-zero after `initialize`.
+        assertTrue(address(hook.POOL_MANAGER()) != address(0));
 
         // Attacker tries to re-initialize with malicious parameters
         vm.prank(attacker);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_AlreadyInitialized.selector);
-        hook.initialize(2, 10_000); // trying to set 100% fee
+        hook.initialize({
+            feeProjectId: 2,
+            feePercent: 10_000,
+            poolManager: IPoolManager(address(1)),
+            positionManager: IPositionManager(address(positionManager)),
+            oracleHook: IHooks(address(0))
+        }); // trying to set 100% fee
     }
 
-    /// @notice The `initialized` flag is set to true after first initialization.
+    /// @notice POOL_MANAGER acts as the initialization sentinel — non-zero after first initialization.
     function test_initialized_flag_set() public view {
-        assertTrue(hook.initialized(), "initialized should be true after initialize()");
+        assertTrue(
+            address(hook.POOL_MANAGER()) != address(0),
+            "POOL_MANAGER should be non-zero after initialize() - it is the one-shot sentinel"
+        );
     }
 
     /// @notice Double initialization also still reverts.
     function test_double_init_reverts() public {
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_AlreadyInitialized.selector);
-        hook.initialize(2, 5000);
+        hook.initialize({
+            feeProjectId: 2,
+            feePercent: 5000,
+            poolManager: IPoolManager(address(1)),
+            positionManager: IPositionManager(address(positionManager)),
+            oracleHook: IHooks(address(0))
+        });
     }
 }

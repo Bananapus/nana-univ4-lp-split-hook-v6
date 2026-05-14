@@ -3,6 +3,9 @@ pragma solidity 0.8.28;
 
 import {IJBAddressRegistry} from "@bananapus/address-registry-v6/src/interfaces/IJBAddressRegistry.sol";
 import {LibClone} from "solady/src/utils/LibClone.sol";
+import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 
 import {JBUniswapV4LPSplitHook} from "./JBUniswapV4LPSplitHook.sol";
 import {IJBUniswapV4LPSplitHook} from "./interfaces/IJBUniswapV4LPSplitHook.sol";
@@ -48,6 +51,17 @@ contract JBUniswapV4LPSplitHookDeployer is IJBUniswapV4LPSplitHookDeployer {
     /// `JBOptimismSuckerDeployer`, and makes this deployer's CREATE2 address unified across chains.
     JBUniswapV4LPSplitHook public override HOOK;
 
+    /// @notice The Uniswap V4 oracle hook clones should use, set once by `_DEPLOYER` via `setChainSpecificConstants`.
+    /// @dev Passed into each freshly cloned hook's `setChainSpecificConstants` inside `deployHookFor`.
+    IHooks public override ORACLE_HOOK;
+
+    /// @notice The Uniswap V4 PoolManager clones should use, set once by `_DEPLOYER` via `setChainSpecificConstants`.
+    IPoolManager public override POOL_MANAGER;
+
+    /// @notice The Uniswap V4 PositionManager clones should use, set once by `_DEPLOYER` via
+    /// `setChainSpecificConstants`.
+    IPositionManager public override POSITION_MANAGER;
+
     //*********************************************************************//
     // -------------------- internal stored properties ------------------- //
     //*********************************************************************//
@@ -92,7 +106,14 @@ contract JBUniswapV4LPSplitHookDeployer is IJBUniswapV4LPSplitHookDeployer {
                 })
         );
 
-        IJBUniswapV4LPSplitHook(address(hook)).initialize({feeProjectId: feeProjectId, feePercent: feePercent});
+        // Initialize the clone atomically with project + chain-specific config so no one can frontrun the values.
+        hook.initialize({
+            feeProjectId: feeProjectId,
+            feePercent: feePercent,
+            poolManager: POOL_MANAGER,
+            positionManager: POSITION_MANAGER,
+            oracleHook: ORACLE_HOOK
+        });
 
         emit HookDeployed({feeProjectId: feeProjectId, feePercent: feePercent, hook: hook, caller: msg.sender});
 
@@ -110,14 +131,29 @@ contract JBUniswapV4LPSplitHookDeployer is IJBUniswapV4LPSplitHookDeployer {
             });
     }
 
-    /// @notice One-shot setter for the chain-specific `JBUniswapV4LPSplitHook` implementation.
-    /// @dev Callable only by `_DEPLOYER` and only once (when `HOOK` is still `address(0)`). After this call the value
-    /// is effectively immutable for the contract's lifetime. Mirrors the `JBOptimismSuckerDeployer` pattern so the
-    /// contract's CREATE2 inputs stay byte-identical across chains and its deployed address is unified.
+    /// @notice One-shot setter for the chain-specific hook implementation + Uniswap V4 addresses.
+    /// @dev Callable only by `_DEPLOYER` and only once (when `HOOK` is still `address(0)`). After this call all four
+    /// values are effectively immutable for the contract's lifetime. Mirrors the `JBOptimismSuckerDeployer` pattern
+    /// so the contract's CREATE2 inputs stay byte-identical across chains and its deployed address is unified. The
+    /// stored V4 addresses are passed into every freshly cloned hook by `deployHookFor`.
     /// @param hook The chain-specific `JBUniswapV4LPSplitHook` implementation.
-    function setChainSpecificConstants(JBUniswapV4LPSplitHook hook) external override {
+    /// @param poolManager The Uniswap V4 PoolManager on this chain.
+    /// @param positionManager The Uniswap V4 PositionManager on this chain.
+    /// @param oracleHook The JB V4 oracle hook deployed against `poolManager` on this chain.
+    function setChainSpecificConstants(
+        JBUniswapV4LPSplitHook hook,
+        IPoolManager poolManager,
+        IPositionManager positionManager,
+        IHooks oracleHook
+    )
+        external
+        override
+    {
         if (msg.sender != _DEPLOYER) revert JBUniswapV4LPSplitHookDeployer_Unauthorized({caller: msg.sender});
         if (address(HOOK) != address(0)) revert JBUniswapV4LPSplitHookDeployer_AlreadyConfigured();
         HOOK = hook;
+        POOL_MANAGER = poolManager;
+        POSITION_MANAGER = positionManager;
+        ORACLE_HOOK = oracleHook;
     }
 }

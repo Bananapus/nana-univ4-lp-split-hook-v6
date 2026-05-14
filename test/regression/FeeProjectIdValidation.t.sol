@@ -37,10 +37,7 @@ contract FeeProjectIdValidationTest is Test {
             address(directory),
             IJBPermissions(address(permissions)),
             address(jbTokens),
-            IPoolManager(address(1)),
-            IPositionManager(address(positionManager)),
             IAllowanceTransfer(address(0)),
-            IHooks(address(0)),
             IJBSuckerRegistry(address(0))
         );
     }
@@ -50,14 +47,26 @@ contract FeeProjectIdValidationTest is Test {
         JBUniswapV4LPSplitHook clone = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
 
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject.selector);
-        clone.initialize(0, 3800); // feeProjectId=0, feePercent=38%
+        clone.initialize({
+            feeProjectId: 0,
+            feePercent: 3800,
+            poolManager: IPoolManager(address(1)),
+            positionManager: IPositionManager(address(positionManager)),
+            oracleHook: IHooks(address(0))
+        }); // feeProjectId=0, feePercent=38%
     }
 
     /// @notice initialize succeeds when feePercent == 0 and feeProjectId == 0 (no fees configured).
     function test_initialize_succeeds_zero_feePercent_zero_feeProjectId() public {
         JBUniswapV4LPSplitHook clone = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
 
-        clone.initialize(0, 0); // both zero is fine
+        clone.initialize({
+            feeProjectId: 0,
+            feePercent: 0,
+            poolManager: IPoolManager(address(1)),
+            positionManager: IPositionManager(address(positionManager)),
+            oracleHook: IHooks(address(0))
+        }); // both zero is fine
 
         assertEq(clone.FEE_PERCENT(), 0);
         assertEq(clone.FEE_PROJECT_ID(), 0);
@@ -71,7 +80,13 @@ contract FeeProjectIdValidationTest is Test {
 
         JBUniswapV4LPSplitHook clone = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
 
-        clone.initialize(2, 3800); // feeProjectId=2, feePercent=38%
+        clone.initialize({
+            feeProjectId: 2,
+            feePercent: 3800,
+            poolManager: IPoolManager(address(1)),
+            positionManager: IPositionManager(address(positionManager)),
+            oracleHook: IHooks(address(0))
+        }); // feeProjectId=2, feePercent=38%
 
         assertEq(clone.FEE_PERCENT(), 3800);
         assertEq(clone.FEE_PROJECT_ID(), 2);

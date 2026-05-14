@@ -19,21 +19,10 @@ contract CashOutRateHook is JBUniswapV4LPSplitHook {
         address _directory,
         IJBPermissions _permissions,
         address _tokens,
-        IPoolManager _poolManager,
-        IPositionManager _positionManager,
         IAllowanceTransfer _permit2,
         IJBSuckerRegistry _suckerRegistry
     )
-        JBUniswapV4LPSplitHook(
-            _directory,
-            _permissions,
-            _tokens,
-            _poolManager,
-            _positionManager,
-            _permit2,
-            IHooks(address(0)),
-            _suckerRegistry
-        )
+        JBUniswapV4LPSplitHook(_directory, _permissions, _tokens, _permit2, _suckerRegistry)
     {}
 
     // forge-lint: disable-next-line(mixed-case-function)
@@ -71,12 +60,16 @@ contract ScopeCashOutsLPHookTest is LPSplitHookV4TestBase {
             address(directory),
             IJBPermissions(address(permissions)),
             address(jbTokens),
-            IPoolManager(address(poolManager)),
-            IPositionManager(address(positionManager)),
             IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
             IJBSuckerRegistry(SUCKER_REGISTRY_ADDR)
         );
-        cashOutHook.initialize(FEE_PROJECT_ID, FEE_PERCENT);
+        cashOutHook.initialize({
+            feeProjectId: FEE_PROJECT_ID,
+            feePercent: FEE_PERCENT,
+            poolManager: IPoolManager(address(poolManager)),
+            positionManager: IPositionManager(address(positionManager)),
+            oracleHook: IHooks(address(0))
+        });
 
         // Mock controller.totalTokenSupplyWithReservedTokensOf (needed for unscoped path)
         vm.mockCall(

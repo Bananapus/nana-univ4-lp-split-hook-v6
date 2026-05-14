@@ -65,7 +65,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     // --------------------------- custom errors ------------------------- //
     //*********************************************************************//
 
-    error JBUniswapV4LPSplitHook_AlreadyInitialized(bool initialized);
+    error JBUniswapV4LPSplitHook_AlreadyInitialized();
     /// @notice Thrown when a pre-initialized pool's price falls outside the project's economic tick range.
     /// @dev This prevents frontrunning attacks where an attacker initializes the pool at an extreme price.
     error JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds(
@@ -135,17 +135,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @notice JBDirectory (to find important control contracts for given projectId)
     address public immutable DIRECTORY;
 
-    /// @notice The oracle hook used for all JB V4 pools (provides TWAP via observe()).
-    IHooks public immutable ORACLE_HOOK;
-
     /// @notice The Permit2 utility used to approve tokens for PositionManager.
     IAllowanceTransfer public immutable PERMIT2;
-
-    /// @notice The Uniswap V4 pool manager contract that coordinates all pool operations.
-    IPoolManager public immutable POOL_MANAGER;
-
-    /// @notice The Uniswap V4 position manager contract that handles liquidity position NFTs.
-    IPositionManager public immutable POSITION_MANAGER;
 
     /// @notice JBProjects (to find project owners)
     IJBProjects public immutable PROJECTS;
@@ -156,15 +147,32 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @notice JBTokens (to find project tokens)
     address public immutable TOKENS;
 
+    //*********************************************************************//
+    // --------------------- public stored properties -------------------- //
+    //*********************************************************************//
+
+    /// @notice The oracle hook used for all JB V4 pools (provides TWAP via observe()).
+    /// @dev Set once per clone via `initialize` (alongside `FEE_PROJECT_ID` + `FEE_PERCENT`). Held as storage rather
+    /// than immutable because `JBUniswapV4Hook` is chain-different by design (inherits Uniswap's
+    /// `BaseHook → ImmutableState`). Keeping it out of the constructor lets this implementation's CREATE2 inputs be
+    /// byte-identical on every chain.
+    IHooks public ORACLE_HOOK;
+
+    /// @notice The Uniswap V4 pool manager contract that coordinates all pool operations.
+    /// @dev Set once per clone via `initialize`. Held as storage rather than immutable so the implementation's
+    /// constructor inputs are byte-identical on every chain (the V4 PoolManager varies per chain).
+    IPoolManager public POOL_MANAGER;
+
+    /// @notice The Uniswap V4 position manager contract that handles liquidity position NFTs.
+    /// @dev Set once per clone via `initialize`. Held as storage rather than immutable so the implementation's
+    /// constructor inputs are byte-identical on every chain (the V4 PositionManager varies per chain).
+    IPositionManager public POSITION_MANAGER;
+
     /// @notice Project ID to receive LP fees
     uint256 public FEE_PROJECT_ID;
 
     /// @notice Percentage of LP fees to route to fee project (in basis points, e.g., 3800 = 38%)
     uint256 public FEE_PERCENT;
-
-    //*********************************************************************//
-    // --------------------- public stored properties -------------------- //
-    //*********************************************************************//
 
     /// @notice The accumulated project-token balance currently held for each project before its first pool deployment.
     /// @dev `processSplitWith` accumulates project tokens here while the project is still in pre-deployment mode.
@@ -217,9 +225,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @custom:param terminalToken The terminal token paired with the project's token in the deployed pool.
     mapping(uint256 projectId => mapping(address terminalToken => uint256 tokenId)) public tokenIdOf;
 
-    /// @notice Whether this clone instance has been initialized.
-    bool public initialized;
-
     //*********************************************************************//
     // -------------------- internal stored properties ------------------- //
     //*********************************************************************//
@@ -239,42 +244,51 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     // ---------------------------- constructor -------------------------- //
     //*********************************************************************//
 
-    /// @param directory JBDirectory address
-    /// @param permissions JBPermissions address
-    /// @param tokens JBTokens address
-    /// @param poolManager Uniswap V4 PoolManager address
-    /// @param positionManager Uniswap V4 PositionManager address
+    /// @param directory JBDirectory address.
+    /// @param permissions JBPermissions address.
+    /// @param tokens JBTokens address.
     /// @param permit2 The Permit2 utility.
-    /// @param oracleHook The oracle hook for all JB V4 pools (provides TWAP via observe()).
+    /// @param suckerRegistry The sucker registry for cross-chain surplus/supply queries.
     constructor(
         address directory,
         IJBPermissions permissions,
         address tokens,
-        IPoolManager poolManager,
-        IPositionManager positionManager,
         IAllowanceTransfer permit2,
-        IHooks oracleHook,
         IJBSuckerRegistry suckerRegistry
     )
         JBPermissioned(permissions)
     {
         DIRECTORY = directory;
-        ORACLE_HOOK = oracleHook;
         PERMIT2 = permit2;
-        POOL_MANAGER = poolManager;
-        POSITION_MANAGER = positionManager;
         PROJECTS = IJBDirectory(directory).PROJECTS();
         SUCKER_REGISTRY = suckerRegistry;
         TOKENS = tokens;
     }
 
-    /// @notice Initialize per-instance config on a clone. Can only be called once.
-    /// @dev The implementation contract can be initialized by anyone, but this is harmless —
-    ///      each clone gets its own storage, so the implementation's state is never used.
+    /// @notice Initialize per-instance config + chain-specific Uniswap V4 addresses on a clone. Callable once.
+    /// @dev The implementation contract can be initialized by anyone, but this is harmless — each clone gets its own
+    /// storage, so the implementation's state is never used. In normal production use, the deployer factory's
+    /// `deployHookFor` atomically clones + initializes in the same transaction, so the call site for `initialize`
+    /// is uncontested.
     /// @param feeProjectId Project ID to receive LP fees.
     /// @param feePercent Percentage of LP fees to route to fee project, out of `BPS` (e.g., 3800 = 38%).
-    function initialize(uint256 feeProjectId, uint256 feePercent) external {
-        if (initialized) revert JBUniswapV4LPSplitHook_AlreadyInitialized({initialized: initialized});
+    /// @param poolManager The Uniswap V4 PoolManager on this chain.
+    /// @param positionManager The Uniswap V4 PositionManager on this chain.
+    /// @param oracleHook The JB V4 oracle hook deployed against `poolManager` on this chain.
+    function initialize(
+        uint256 feeProjectId,
+        uint256 feePercent,
+        IPoolManager poolManager,
+        IPositionManager positionManager,
+        IHooks oracleHook
+    )
+        external
+    {
+        // POOL_MANAGER doubles as the "already initialized" sentinel: every legitimate initialize sets it non-zero.
+        // Reject a zero poolManager up front so callers cannot accidentally leave the sentinel uninitialized and
+        // re-enter `initialize` with different fee settings on the same clone.
+        if (address(POOL_MANAGER) != address(0)) revert JBUniswapV4LPSplitHook_AlreadyInitialized();
+        if (address(poolManager) == address(0)) revert JBUniswapV4LPSplitHook_AlreadyInitialized();
 
         if (feePercent > BPS) {
             revert JBUniswapV4LPSplitHook_InvalidFeePercent({feePercent: feePercent, maxFeePercent: BPS});
@@ -297,9 +311,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             }
         }
 
-        initialized = true;
         FEE_PROJECT_ID = feeProjectId;
         FEE_PERCENT = feePercent;
+        POOL_MANAGER = poolManager;
+        POSITION_MANAGER = positionManager;
+        ORACLE_HOOK = oracleHook;
     }
 
     /// @notice Accept ETH transfers (needed for cashOut with native ETH and V4 TAKE operations).

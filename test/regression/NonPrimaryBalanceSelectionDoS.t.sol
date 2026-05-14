@@ -23,21 +23,9 @@ contract HighestValueSelectionHarness is JBUniswapV4LPSplitHook {
         address directory,
         IJBPermissions permissions,
         address tokens,
-        IPoolManager poolManager,
-        IPositionManager positionManager,
-        IAllowanceTransfer permit2,
-        IHooks oracleHook
+        IAllowanceTransfer permit2
     )
-        JBUniswapV4LPSplitHook(
-            directory,
-            permissions,
-            tokens,
-            poolManager,
-            positionManager,
-            permit2,
-            oracleHook,
-            IJBSuckerRegistry(address(0))
-        )
+        JBUniswapV4LPSplitHook(directory, permissions, tokens, permit2, IJBSuckerRegistry(address(0)))
     {}
 
     function findHighestValueTerminalTokenOf(uint256 projectId, address controller) external view returns (address) {
@@ -131,13 +119,16 @@ contract NonPrimaryBalanceSelectionDoSTest is LPSplitHookV4TestBase {
             address(directory),
             IJBPermissions(address(permissions)),
             address(jbTokens),
-            IPoolManager(address(poolManager)),
-            IPositionManager(address(positionManager)),
-            IAllowanceTransfer(address(0x000000000022D473030F116dDEE9F6B43aC78BA3)),
-            IHooks(address(0))
+            IAllowanceTransfer(address(0x000000000022D473030F116dDEE9F6B43aC78BA3))
         );
         harness = HighestValueSelectionHarness(payable(LibClone.clone(address(harnessImpl))));
-        harness.initialize(FEE_PROJECT_ID, FEE_PERCENT);
+        harness.initialize({
+            feeProjectId: FEE_PROJECT_ID,
+            feePercent: FEE_PERCENT,
+            poolManager: IPoolManager(address(poolManager)),
+            positionManager: IPositionManager(address(positionManager)),
+            oracleHook: IHooks(address(0))
+        });
     }
 
     function test_nonPrimaryBalancesDoNotOutrankUsablePrimaryBalances() public {
