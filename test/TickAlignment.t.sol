@@ -13,6 +13,7 @@ contract TickAlignmentTest is Test {
 
     /// @dev Mirrors `JBUniswapV4LPSplitHook._alignTickToSpacing` (floor).
     function _alignDown(int24 tick, int24 spacing) internal pure returns (int24) {
+        // forge-lint: disable-next-line(divide-before-multiply)
         int24 rounded = (tick / spacing) * spacing;
         if (tick < 0 && rounded > tick) {
             rounded -= spacing;
@@ -22,6 +23,7 @@ contract TickAlignmentTest is Test {
 
     /// @dev Mirrors `JBUniswapV4LPSplitHook._alignTickToSpacingCeil` (ceiling).
     function _alignUp(int24 tick, int24 spacing) internal pure returns (int24) {
+        // forge-lint: disable-next-line(divide-before-multiply)
         int24 rounded = (tick / spacing) * spacing;
         if (rounded < tick) {
             rounded += spacing;

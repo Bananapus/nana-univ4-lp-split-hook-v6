@@ -98,6 +98,7 @@ contract CodexNemesisSuckerRegistryZeroTest is LPSplitHookV4TestBase {
             ownerMustSendPayouts: false,
             holdFees: false,
             scopeCashOutsToLocalBalances: scopeCashOutsToLocalBalances,
+            pauseCrossProjectFeeFreeInflows: false,
             useDataHookForPay: false,
             useDataHookForCashOut: false,
             dataHook: address(0),

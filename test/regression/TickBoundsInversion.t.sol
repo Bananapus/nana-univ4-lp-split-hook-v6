@@ -272,6 +272,7 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
     }
 
     function _alignTickToSpacingCeil(int24 tick, int24 spacing) internal pure returns (int24) {
+        // forge-lint: disable-next-line(divide-before-multiply)
         int24 rounded = (tick / spacing) * spacing;
         if (rounded < tick) rounded += spacing;
         return rounded;
