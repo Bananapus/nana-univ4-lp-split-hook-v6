@@ -104,6 +104,7 @@ contract TotalSurplusController {
             ownerMustSendPayouts: false,
             holdFees: false,
             scopeCashOutsToLocalBalances: scopeCashOutsToLocalBalances[projectId],
+            pauseCrossProjectFeeFreeInflows: false,
             useDataHookForPay: false,
             useDataHookForCashOut: false,
             dataHook: address(0),
