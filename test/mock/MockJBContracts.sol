@@ -638,7 +638,7 @@ contract MockREVDeployer {
         _operators[projectId][operator] = isOperator;
     }
 
-    function isSplitOperatorOf(uint256 projectId, address operator) external view returns (bool) {
+    function isOperatorOf(uint256 projectId, address operator) external view returns (bool) {
         return _operators[projectId][operator];
     }
 }
