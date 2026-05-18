@@ -24,19 +24,19 @@ interface IJBUniswapV4LPSplitHookDeployer {
 
     /// @notice The implementation contract used as the base for clones.
     /// @return The hook implementation contract.
-    function HOOK() external view returns (JBUniswapV4LPSplitHook);
+    function hookImplementation() external view returns (JBUniswapV4LPSplitHook);
 
     /// @notice The Uniswap V4 oracle hook clones should use.
     /// @return The oracle hook address.
-    function ORACLE_HOOK() external view returns (IHooks);
+    function oracleHook() external view returns (IHooks);
 
     /// @notice The Uniswap V4 PoolManager clones should use.
     /// @return The pool manager.
-    function POOL_MANAGER() external view returns (IPoolManager);
+    function poolManager() external view returns (IPoolManager);
 
     /// @notice The Uniswap V4 PositionManager clones should use.
     /// @return The position manager.
-    function POSITION_MANAGER() external view returns (IPositionManager);
+    function positionManager() external view returns (IPositionManager);
 
     /// @notice Deploy a new hook clone for a fee project.
     /// @param feeProjectId The project ID to receive LP fees.
@@ -52,17 +52,17 @@ interface IJBUniswapV4LPSplitHookDeployer {
         returns (IJBUniswapV4LPSplitHook hook);
 
     /// @notice One-shot setter for the chain-specific hook implementation + Uniswap V4 addresses.
-    /// @dev Callable only by the deployer that constructed this contract and only once (when `HOOK` is still
-    /// `address(0)`).
-    /// @param hook The chain-specific `JBUniswapV4LPSplitHook` implementation.
-    /// @param poolManager The Uniswap V4 PoolManager on this chain.
-    /// @param positionManager The Uniswap V4 PositionManager on this chain.
-    /// @param oracleHook The JB V4 oracle hook deployed against `poolManager` on this chain.
+    /// @dev Callable only by the deployer that constructed this contract and only once (when `hookImplementation` is
+    /// still `address(0)`).
+    /// @param newHookImplementation The chain-specific `JBUniswapV4LPSplitHook` implementation.
+    /// @param newPoolManager The Uniswap V4 PoolManager on this chain.
+    /// @param newPositionManager The Uniswap V4 PositionManager on this chain.
+    /// @param newOracleHook The JB V4 oracle hook deployed against `newPoolManager` on this chain.
     function setChainSpecificConstants(
-        JBUniswapV4LPSplitHook hook,
-        IPoolManager poolManager,
-        IPositionManager positionManager,
-        IHooks oracleHook
+        JBUniswapV4LPSplitHook newHookImplementation,
+        IPoolManager newPoolManager,
+        IPositionManager newPositionManager,
+        IHooks newOracleHook
     )
         external;
 }

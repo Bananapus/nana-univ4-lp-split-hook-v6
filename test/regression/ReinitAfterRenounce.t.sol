@@ -52,37 +52,37 @@ contract ReinitAfterRenounceTest is Test {
         // Clone and initialize
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize({
-            feeProjectId: 2,
-            feePercent: 3800,
-            poolManager: IPoolManager(address(1)),
-            positionManager: IPositionManager(address(positionManager)),
-            oracleHook: IHooks(address(0))
+            initialFeeProjectId: 2,
+            initialFeePercent: 3800,
+            newPoolManager: IPoolManager(address(1)),
+            newPositionManager: IPositionManager(address(positionManager)),
+            newOracleHook: IHooks(address(0))
         }); // feeProjectId=2, feePercent=38%
     }
 
     /// @notice Re-initialization should revert.
     function test_reinitialize_reverts() public {
-        assertEq(hook.FEE_PROJECT_ID(), 2);
-        assertEq(hook.FEE_PERCENT(), 3800);
+        assertEq(hook.feeProjectId(), 2);
+        assertEq(hook.feePercent(), 3800);
         // POOL_MANAGER doubles as the "initialized" sentinel — non-zero after `initialize`.
-        assertTrue(address(hook.POOL_MANAGER()) != address(0));
+        assertTrue(address(hook.poolManager()) != address(0));
 
         // Attacker tries to re-initialize with malicious parameters
         vm.prank(attacker);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_AlreadyInitialized.selector);
         hook.initialize({
-            feeProjectId: 2,
-            feePercent: 10_000,
-            poolManager: IPoolManager(address(1)),
-            positionManager: IPositionManager(address(positionManager)),
-            oracleHook: IHooks(address(0))
+            initialFeeProjectId: 2,
+            initialFeePercent: 10_000,
+            newPoolManager: IPoolManager(address(1)),
+            newPositionManager: IPositionManager(address(positionManager)),
+            newOracleHook: IHooks(address(0))
         }); // trying to set 100% fee
     }
 
     /// @notice POOL_MANAGER acts as the initialization sentinel — non-zero after first initialization.
     function test_initialized_flag_set() public view {
         assertTrue(
-            address(hook.POOL_MANAGER()) != address(0),
+            address(hook.poolManager()) != address(0),
             "POOL_MANAGER should be non-zero after initialize() - it is the one-shot sentinel"
         );
     }
@@ -91,11 +91,11 @@ contract ReinitAfterRenounceTest is Test {
     function test_double_init_reverts() public {
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_AlreadyInitialized.selector);
         hook.initialize({
-            feeProjectId: 2,
-            feePercent: 5000,
-            poolManager: IPoolManager(address(1)),
-            positionManager: IPositionManager(address(positionManager)),
-            oracleHook: IHooks(address(0))
+            initialFeeProjectId: 2,
+            initialFeePercent: 5000,
+            newPoolManager: IPoolManager(address(1)),
+            newPositionManager: IPositionManager(address(positionManager)),
+            newOracleHook: IHooks(address(0))
         });
     }
 }

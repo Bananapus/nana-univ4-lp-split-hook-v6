@@ -88,11 +88,11 @@ contract UnpricedTokenSkipTest is LPSplitHookV4TestBase {
         );
         harness = FindHighestValueHarness(payable(LibClone.clone(address(harnessImpl))));
         harness.initialize({
-            feeProjectId: FEE_PROJECT_ID,
-            feePercent: FEE_PERCENT,
-            poolManager: IPoolManager(address(poolManager)),
-            positionManager: IPositionManager(address(positionManager)),
-            oracleHook: IHooks(address(0))
+            initialFeeProjectId: FEE_PROJECT_ID,
+            initialFeePercent: FEE_PERCENT,
+            newPoolManager: IPoolManager(address(poolManager)),
+            newPositionManager: IPositionManager(address(positionManager)),
+            newOracleHook: IHooks(address(0))
         });
     }
 

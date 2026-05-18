@@ -62,11 +62,11 @@ contract PersistentAllowanceStealTest is Test {
             IAllowanceTransfer(address(0xF00D))
         );
         hook.initialize({
-            feeProjectId: 0,
-            feePercent: 0,
-            poolManager: IPoolManager(address(0xBEEF)),
-            positionManager: IPositionManager(address(0xCAFE)),
-            oracleHook: IHooks(address(0))
+            initialFeeProjectId: 0,
+            initialFeePercent: 0,
+            newPoolManager: IPoolManager(address(0xBEEF)),
+            newPositionManager: IPositionManager(address(0xCAFE)),
+            newOracleHook: IHooks(address(0))
         });
     }
 

@@ -52,10 +52,10 @@ contract DeployerTest is Test {
         addressRegistry = new JBAddressRegistry();
         deployer = new JBUniswapV4LPSplitHookDeployer(IJBAddressRegistry(address(addressRegistry)), address(this));
         deployer.setChainSpecificConstants({
-            hook: hookImpl,
-            poolManager: IPoolManager(address(2)),
-            positionManager: IPositionManager(address(3)),
-            oracleHook: IHooks(address(0))
+            newHookImplementation: hookImpl,
+            newPoolManager: IPoolManager(address(2)),
+            newPositionManager: IPositionManager(address(3)),
+            newOracleHook: IHooks(address(0))
         });
     }
 
@@ -106,8 +106,8 @@ contract DeployerTest is Test {
         IJBUniswapV4LPSplitHook hook = deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, bytes32(0));
 
         JBUniswapV4LPSplitHook concreteHook = JBUniswapV4LPSplitHook(payable(address(hook)));
-        assertEq(concreteHook.FEE_PROJECT_ID(), FEE_PROJECT_ID, "feeProjectId not set");
-        assertEq(concreteHook.FEE_PERCENT(), FEE_PERCENT, "feePercent not set");
+        assertEq(concreteHook.feeProjectId(), FEE_PROJECT_ID, "feeProjectId not set");
+        assertEq(concreteHook.feePercent(), FEE_PERCENT, "feePercent not set");
     }
 
     // ─── HookDeployed event is emitted
@@ -144,6 +144,6 @@ contract DeployerTest is Test {
     // ───────────────────────────────────────────
 
     function test_HOOK_returnsImplementation() public view {
-        assertEq(address(deployer.HOOK()), address(hookImpl));
+        assertEq(address(deployer.hookImplementation()), address(hookImpl));
     }
 }

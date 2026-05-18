@@ -56,11 +56,11 @@ contract Integration_BurnPathCrossProject is ForkDeployHelper {
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize({
-            feeProjectId: feeProjectId,
-            feePercent: 3800,
-            poolManager: V4_POOL_MANAGER,
-            positionManager: V4_POSITION_MANAGER,
-            oracleHook: IHooks(address(0))
+            initialFeeProjectId: feeProjectId,
+            initialFeePercent: 3800,
+            newPoolManager: V4_POOL_MANAGER,
+            newPositionManager: V4_POSITION_MANAGER,
+            newOracleHook: IHooks(address(0))
         });
     }
 

@@ -76,11 +76,11 @@ contract LPSplitRegressionFixes is LPSplitHookV4TestBase {
             IAllowanceTransfer(address(hook.PERMIT2()))
         );
         harness.initialize({
-            feeProjectId: 0,
-            feePercent: 0,
-            poolManager: IPoolManager(address(poolManager)),
-            positionManager: IPositionManager(address(positionManager)),
-            oracleHook: IHooks(address(0))
+            initialFeeProjectId: 0,
+            initialFeePercent: 0,
+            newPoolManager: IPoolManager(address(poolManager)),
+            newPositionManager: IPositionManager(address(positionManager)),
+            newOracleHook: IHooks(address(0))
         });
 
         // Set up project 99 with a controller but NO ERC-20 token (for ).
