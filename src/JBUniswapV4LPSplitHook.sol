@@ -1483,7 +1483,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             });
 
             if (issuanceRate == 0) {
-                // No floor and no ceiling — full range LP.
+                // No floor and no ceiling — full range LP. The project has no economic anchor (no surplus to set a
+                // floor, no issuance to set a ceiling) so any market-set price is acceptable. Liquidity is intended
+                // to track the prevailing market in this state rather than enforce a project-defined band.
                 tickLower = _alignTickToSpacing({tick: TickMath.MIN_TICK, spacing: TICK_SPACING}) + TICK_SPACING;
                 tickUpper = _alignTickToSpacing({tick: TickMath.MAX_TICK, spacing: TICK_SPACING}) - TICK_SPACING;
                 return (tickLower, tickUpper);
@@ -1836,10 +1838,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 ruleset: ruleset
             });
 
-            // Reject existing prices outside the project's valid range.
+            // Reject existing prices outside or AT the boundary of the project's valid range. Boundary equality is
+            // treated as out-of-bounds because a preinitialization at exactly `sqrtPriceAtTick(tickLower)` or
+            // `sqrtPriceAtTick(tickUpper)` is the cheapest manipulation that still passes a loose comparison and
+            // sites the LP at the extreme of the economic band, single-siding the initial liquidity.
             uint160 sqrtPriceLower = TickMath.getSqrtPriceAtTick(tickLower);
             uint160 sqrtPriceUpper = TickMath.getSqrtPriceAtTick(tickUpper);
-            if (existingSqrtPriceX96 < sqrtPriceLower || existingSqrtPriceX96 > sqrtPriceUpper) {
+            if (existingSqrtPriceX96 <= sqrtPriceLower || existingSqrtPriceX96 >= sqrtPriceUpper) {
                 revert JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds({
                     existingPrice: existingSqrtPriceX96, lowerBound: sqrtPriceLower, upperBound: sqrtPriceUpper
                 });
