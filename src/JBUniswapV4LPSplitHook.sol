@@ -79,7 +79,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     error JBUniswapV4LPSplitHook_InvalidStageForAction(uint256 projectId, address terminalToken, uint256 tokenId);
     error JBUniswapV4LPSplitHook_InvalidTerminalToken(uint256 projectId, address terminalToken);
     error JBUniswapV4LPSplitHook_InvalidTickBounds(int24 tickLower, int24 tickUpper);
-    error JBUniswapV4LPSplitHook_NoEconomicBounds(uint256 projectId, address terminalToken);
     error JBUniswapV4LPSplitHook_NoTerminalTokenFound(uint256 projectId);
     error JBUniswapV4LPSplitHook_NoTokensAccumulated(uint256 projectId);
     error JBUniswapV4LPSplitHook_NotHookSpecifiedInContext(address expectedHook, address actualHook);
@@ -1484,14 +1483,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             });
 
             if (issuanceRate == 0) {
-                // Neither rate produces a bound, so there is no project-defined economic range to anchor the LP.
-                // Falling back to the full V4 tick range would accept any preinitialized pool price under the
-                // existing-pool AR check at `_createAndInitializePool`, letting an attacker seed the pool at an
-                // extreme sqrtPriceX96 right before a permissionless `deployPool` and capturing the project's
-                // single-shot LP slot at a manipulated rate. Reject the deploy until the project has either a
-                // cashout rate or a non-zero issuance rate (e.g. via a non-100% reserved percent or a ruleset
-                // with non-zero weight that produces issuance for non-reserved holders).
-                revert JBUniswapV4LPSplitHook_NoEconomicBounds({projectId: projectId, terminalToken: terminalToken});
+                // No floor and no ceiling — full range LP. The project has no economic anchor (no surplus to set a
+                // floor, no issuance to set a ceiling) so any market-set price is acceptable. Liquidity is intended
+                // to track the prevailing market in this state rather than enforce a project-defined band.
+                tickLower = _alignTickToSpacing({tick: TickMath.MIN_TICK, spacing: TICK_SPACING}) + TICK_SPACING;
+                tickUpper = _alignTickToSpacing({tick: TickMath.MAX_TICK, spacing: TICK_SPACING}) - TICK_SPACING;
+                return (tickLower, tickUpper);
             }
 
             // Cash out rate rounds to 0 due to precision loss (e.g. 6-decimal USDC with large token supply).

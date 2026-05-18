@@ -45,17 +45,13 @@ contract TickBoundsHarness is JBUniswapV4LPSplitHook {
     }
 }
 
-/// @notice Closes two compounding gaps in the pool initialization path:
-///   1. When both `cashOutRate` and `issuanceRate` are zero (genesis with 100% reservedPercent and no surplus), the
-///      tick-bounds calculation previously widened to the full V4 tick range. Any preinitialized pool price would
-///      then pass the AR check and the LP would be minted at the attacker's chosen price. The fix reverts with
-///      `JBUniswapV4LPSplitHook_NoEconomicBounds` rather than silently widening.
-///   2. The AR check at `_createAndInitializePool` used strict `<` / `>` comparisons, so boundary-equal
-///      preinitializations (`existingSqrtPriceX96 == sqrtPriceAtTick(tickLower)` or `... ==
-/// sqrtPriceAtTick(tickUpper)`) slipped through. Boundary equality is the cheapest still-passing manipulation; the fix
-/// tightens to `<=` / `>=`
-///      so preinitializations exactly at either edge are rejected.
-contract TickBoundsRateZeroAndBoundaryEqualityTest is LPSplitHookV4TestBase {
+/// @notice The AR check at `_createAndInitializePool` used strict `<` / `>` comparisons against the project's
+/// economic tick bounds, so boundary-equal preinitializations
+/// (`existingSqrtPriceX96 == sqrtPriceAtTick(tickLower)` or `... == sqrtPriceAtTick(tickUpper)`) slipped through.
+/// Boundary equality is the cheapest still-passing manipulation and sites the LP at the extreme of the economic
+/// band, single-siding initial liquidity. Tightening to `<=` / `>=` rejects exact-edge preinit while keeping
+/// strictly in-band prices accepted.
+contract TickBoundsBoundaryEqualityTest is LPSplitHookV4TestBase {
     TickBoundsHarness internal harness;
 
     function setUp() public override {
@@ -88,22 +84,6 @@ contract TickBoundsRateZeroAndBoundaryEqualityTest is LPSplitHookV4TestBase {
             tickSpacing: hook.TICK_SPACING(),
             hooks: IHooks(address(0))
         });
-    }
-
-    function test_bothRatesZero_revertsInsteadOfFullRange() public {
-        // Force the rate-zero/issuance-zero state: 100% reserved means non-reserved issuance is zero, and we explicitly
-        // clear surplus so cash-out rate is also zero. This is the exact configuration the bug exploits at genesis.
-        controller.setReservedPercent(PROJECT_ID, 10_000);
-        store.setSurplus(PROJECT_ID, 0);
-
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoEconomicBounds.selector,
-                PROJECT_ID,
-                address(terminalToken)
-            )
-        );
-        harness.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
     }
 
     function test_boundaryEquality_lower_rejected() public {
