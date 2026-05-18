@@ -74,11 +74,11 @@ contract CashOutCurrencyParityTest is LPSplitHookV4TestBase {
             _permit2: IAllowanceTransfer(address(0))
         });
         testableHook.initialize({
-            feeProjectId: FEE_PROJECT_ID,
-            feePercent: FEE_PERCENT,
-            poolManager: IPoolManager(address(1)),
-            positionManager: IPositionManager(address(positionManager)),
-            oracleHook: IHooks(address(0))
+            initialFeeProjectId: FEE_PROJECT_ID,
+            initialFeePercent: FEE_PERCENT,
+            newPoolManager: IPoolManager(address(1)),
+            newPositionManager: IPositionManager(address(positionManager)),
+            newOracleHook: IHooks(address(0))
         });
 
         terminalTokenA = new MockERC20("TerminalA", "TKA", 18);

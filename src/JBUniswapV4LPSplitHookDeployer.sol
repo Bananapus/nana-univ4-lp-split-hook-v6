@@ -49,18 +49,18 @@ contract JBUniswapV4LPSplitHookDeployer is IJBUniswapV4LPSplitHookDeployer {
     /// The chain-specific hook implementation is supplied by `_DEPLOYER` in a one-shot call to
     /// `setChainSpecificConstants`. This is the same chain-same pattern used by `JBBuybackHook` and
     /// `JBOptimismSuckerDeployer`, and makes this deployer's CREATE2 address unified across chains.
-    JBUniswapV4LPSplitHook public override HOOK;
+    JBUniswapV4LPSplitHook public override hookImplementation;
 
     /// @notice The Uniswap V4 oracle hook clones should use, set once by `_DEPLOYER` via `setChainSpecificConstants`.
     /// @dev Passed into each freshly cloned hook's `setChainSpecificConstants` inside `deployHookFor`.
-    IHooks public override ORACLE_HOOK;
+    IHooks public override oracleHook;
 
     /// @notice The Uniswap V4 PoolManager clones should use, set once by `_DEPLOYER` via `setChainSpecificConstants`.
-    IPoolManager public override POOL_MANAGER;
+    IPoolManager public override poolManager;
 
     /// @notice The Uniswap V4 PositionManager clones should use, set once by `_DEPLOYER` via
     /// `setChainSpecificConstants`.
-    IPositionManager public override POSITION_MANAGER;
+    IPositionManager public override positionManager;
 
     //*********************************************************************//
     // -------------------- internal stored properties ------------------- //
@@ -100,19 +100,19 @@ contract JBUniswapV4LPSplitHookDeployer is IJBUniswapV4LPSplitHookDeployer {
     {
         hook = IJBUniswapV4LPSplitHook(
             salt == bytes32(0)
-                ? LibClone.clone(address(HOOK))
+                ? LibClone.clone(address(hookImplementation))
                 : LibClone.cloneDeterministic({
-                    implementation: address(HOOK), salt: keccak256(abi.encode(msg.sender, salt))
+                    implementation: address(hookImplementation), salt: keccak256(abi.encode(msg.sender, salt))
                 })
         );
 
         // Initialize the clone atomically with project + chain-specific config so no one can frontrun the values.
         hook.initialize({
-            feeProjectId: feeProjectId,
-            feePercent: feePercent,
-            poolManager: POOL_MANAGER,
-            positionManager: POSITION_MANAGER,
-            oracleHook: ORACLE_HOOK
+            initialFeeProjectId: feeProjectId,
+            initialFeePercent: feePercent,
+            newPoolManager: poolManager,
+            newPositionManager: positionManager,
+            newOracleHook: oracleHook
         });
 
         emit HookDeployed({feeProjectId: feeProjectId, feePercent: feePercent, hook: hook, caller: msg.sender});
@@ -127,33 +127,34 @@ contract JBUniswapV4LPSplitHookDeployer is IJBUniswapV4LPSplitHookDeployer {
             : ADDRESS_REGISTRY.registerAddress({
                 deployer: address(this),
                 salt: keccak256(abi.encode(msg.sender, salt)),
-                bytecode: LibClone.initCode(address(HOOK))
+                bytecode: LibClone.initCode(address(hookImplementation))
             });
     }
 
     /// @notice One-shot setter for the chain-specific hook implementation + Uniswap V4 addresses.
-    /// @dev Callable only by `_DEPLOYER` and only once (when `HOOK` is still `address(0)`). After this call all four
-    /// values are effectively immutable for the contract's lifetime. Mirrors the `JBOptimismSuckerDeployer` pattern
-    /// so the contract's CREATE2 inputs stay byte-identical across chains and its deployed address is unified. The
-    /// stored V4 addresses are passed into every freshly cloned hook by `deployHookFor`.
-    /// @param hook The chain-specific `JBUniswapV4LPSplitHook` implementation.
-    /// @param poolManager The Uniswap V4 PoolManager on this chain.
-    /// @param positionManager The Uniswap V4 PositionManager on this chain.
-    /// @param oracleHook The JB V4 oracle hook deployed against `poolManager` on this chain.
+    /// @dev Callable only by `_DEPLOYER` and only once (when `hookImplementation` is still `address(0)`). After this
+    /// call all four values are effectively immutable for the contract's lifetime. Mirrors the
+    /// `JBOptimismSuckerDeployer` pattern so the contract's CREATE2 inputs stay byte-identical across chains and its
+    /// deployed address is unified. The stored V4 addresses are passed into every freshly cloned hook by
+    /// `deployHookFor`.
+    /// @param newHookImplementation The chain-specific `JBUniswapV4LPSplitHook` implementation.
+    /// @param newPoolManager The Uniswap V4 PoolManager on this chain.
+    /// @param newPositionManager The Uniswap V4 PositionManager on this chain.
+    /// @param newOracleHook The JB V4 oracle hook deployed against `newPoolManager` on this chain.
     function setChainSpecificConstants(
-        JBUniswapV4LPSplitHook hook,
-        IPoolManager poolManager,
-        IPositionManager positionManager,
-        IHooks oracleHook
+        JBUniswapV4LPSplitHook newHookImplementation,
+        IPoolManager newPoolManager,
+        IPositionManager newPositionManager,
+        IHooks newOracleHook
     )
         external
         override
     {
         if (msg.sender != _DEPLOYER) revert JBUniswapV4LPSplitHookDeployer_Unauthorized({caller: msg.sender});
-        if (address(HOOK) != address(0)) revert JBUniswapV4LPSplitHookDeployer_AlreadyConfigured();
-        HOOK = hook;
-        POOL_MANAGER = poolManager;
-        POSITION_MANAGER = positionManager;
-        ORACLE_HOOK = oracleHook;
+        if (address(hookImplementation) != address(0)) revert JBUniswapV4LPSplitHookDeployer_AlreadyConfigured();
+        hookImplementation = newHookImplementation;
+        poolManager = newPoolManager;
+        positionManager = newPositionManager;
+        oracleHook = newOracleHook;
     }
 }

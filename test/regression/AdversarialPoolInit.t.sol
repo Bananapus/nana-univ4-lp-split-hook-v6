@@ -62,11 +62,11 @@ contract AdversarialPoolInitTest is LPSplitHookV4TestBase {
             IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3)
         );
         mathHook.initialize({
-            feeProjectId: FEE_PROJECT_ID,
-            feePercent: FEE_PERCENT,
-            poolManager: IPoolManager(address(poolManager)),
-            positionManager: IPositionManager(address(positionManager)),
-            oracleHook: IHooks(address(0))
+            initialFeeProjectId: FEE_PROJECT_ID,
+            initialFeePercent: FEE_PERCENT,
+            newPoolManager: IPoolManager(address(poolManager)),
+            newPositionManager: IPositionManager(address(positionManager)),
+            newOracleHook: IHooks(address(0))
         });
     }
 

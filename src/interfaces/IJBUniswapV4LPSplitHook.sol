@@ -78,17 +78,17 @@ interface IJBUniswapV4LPSplitHook {
     function deployPool(uint256 projectId, uint256 minCashOutReturn) external;
 
     /// @notice Initialize per-instance config + chain-specific Uniswap V4 addresses on a clone. Callable once.
-    /// @param feeProjectId Project ID to receive LP fees.
-    /// @param feePercent Percentage of LP fees to route to fee project, out of `BPS`.
-    /// @param poolManager The Uniswap V4 PoolManager on this chain.
-    /// @param positionManager The Uniswap V4 PositionManager on this chain.
-    /// @param oracleHook The JB V4 oracle hook deployed against `poolManager` on this chain.
+    /// @param initialFeeProjectId Project ID to receive LP fees.
+    /// @param initialFeePercent Percentage of LP fees to route to fee project, out of `BPS`.
+    /// @param newPoolManager The Uniswap V4 PoolManager on this chain.
+    /// @param newPositionManager The Uniswap V4 PositionManager on this chain.
+    /// @param newOracleHook The JB V4 oracle hook deployed against `newPoolManager` on this chain.
     function initialize(
-        uint256 feeProjectId,
-        uint256 feePercent,
-        IPoolManager poolManager,
-        IPositionManager positionManager,
-        IHooks oracleHook
+        uint256 initialFeeProjectId,
+        uint256 initialFeePercent,
+        IPoolManager newPoolManager,
+        IPositionManager newPositionManager,
+        IHooks newOracleHook
     )
         external;
 }

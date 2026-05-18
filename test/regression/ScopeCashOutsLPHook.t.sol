@@ -64,11 +64,11 @@ contract ScopeCashOutsLPHookTest is LPSplitHookV4TestBase {
             IJBSuckerRegistry(SUCKER_REGISTRY_ADDR)
         );
         cashOutHook.initialize({
-            feeProjectId: FEE_PROJECT_ID,
-            feePercent: FEE_PERCENT,
-            poolManager: IPoolManager(address(poolManager)),
-            positionManager: IPositionManager(address(positionManager)),
-            oracleHook: IHooks(address(0))
+            initialFeeProjectId: FEE_PROJECT_ID,
+            initialFeePercent: FEE_PERCENT,
+            newPoolManager: IPoolManager(address(poolManager)),
+            newPositionManager: IPositionManager(address(positionManager)),
+            newOracleHook: IHooks(address(0))
         });
 
         // Mock controller.totalTokenSupplyWithReservedTokensOf (needed for unscoped path)

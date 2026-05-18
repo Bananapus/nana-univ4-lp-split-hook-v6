@@ -99,11 +99,11 @@ contract RegressionPreinitializedRangeRegression is LPSplitHookV4TestBase {
             IAllowanceTransfer(address(hook.PERMIT2()))
         );
         mathHook.initialize({
-            feeProjectId: 0,
-            feePercent: 0,
-            poolManager: IPoolManager(address(poolManager)),
-            positionManager: IPositionManager(address(positionManager)),
-            oracleHook: IHooks(address(0))
+            initialFeeProjectId: 0,
+            initialFeePercent: 0,
+            newPoolManager: IPoolManager(address(poolManager)),
+            newPositionManager: IPositionManager(address(positionManager)),
+            newOracleHook: IHooks(address(0))
         });
 
         directory.setTerminal(PROJECT_ID, JBConstants.NATIVE_TOKEN, address(terminal));

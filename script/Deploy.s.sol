@@ -106,13 +106,13 @@ contract DeployScript is Script, Sphinx {
         bool hookAlreadyDeployed = hookImplAddress.code.length != 0;
         if (!hookAlreadyDeployed) {
             hookImplAddress = address(
-                new JBUniswapV4LPSplitHook{salt: hookSalt}(
-                    address(core.directory),
-                    core.permissions,
-                    address(core.tokens),
-                    IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
-                    suckers.registry
-                )
+                new JBUniswapV4LPSplitHook{salt: hookSalt}({
+                    directory: address(core.directory),
+                    permissions: core.permissions,
+                    tokens: address(core.tokens),
+                    permit2: IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
+                    suckerRegistry: suckers.registry
+                })
             );
         }
 
@@ -132,11 +132,16 @@ contract DeployScript is Script, Sphinx {
             })
         );
         if (address(deployer).code.length == 0) {
-            deployer = new JBUniswapV4LPSplitHookDeployer{salt: deployerSalt}(registry.registry, safeAddress());
+            deployer = new JBUniswapV4LPSplitHookDeployer{salt: deployerSalt}({
+                addressRegistry: registry.registry, deployer: safeAddress()
+            });
         }
-        if (address(deployer.HOOK()) == address(0)) {
+        if (address(deployer.hookImplementation()) == address(0)) {
             deployer.setChainSpecificConstants({
-                hook: hookImpl, poolManager: poolManager, positionManager: positionManager, oracleHook: router.hook
+                newHookImplementation: hookImpl,
+                newPoolManager: poolManager,
+                newPositionManager: positionManager,
+                newOracleHook: router.hook
             });
         }
     }

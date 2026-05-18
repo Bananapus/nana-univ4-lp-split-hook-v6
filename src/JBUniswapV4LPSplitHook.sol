@@ -152,27 +152,27 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     //*********************************************************************//
 
     /// @notice The oracle hook used for all JB V4 pools (provides TWAP via observe()).
-    /// @dev Set once per clone via `initialize` (alongside `FEE_PROJECT_ID` + `FEE_PERCENT`). Held as storage rather
+    /// @dev Set once per clone via `initialize` (alongside `feeProjectId` + `feePercent`). Held as storage rather
     /// than immutable because `JBUniswapV4Hook` is chain-different by design (inherits Uniswap's
     /// `BaseHook → ImmutableState`). Keeping it out of the constructor lets this implementation's CREATE2 inputs be
     /// byte-identical on every chain.
-    IHooks public ORACLE_HOOK;
+    IHooks public oracleHook;
 
     /// @notice The Uniswap V4 pool manager contract that coordinates all pool operations.
     /// @dev Set once per clone via `initialize`. Held as storage rather than immutable so the implementation's
     /// constructor inputs are byte-identical on every chain (the V4 PoolManager varies per chain).
-    IPoolManager public POOL_MANAGER;
+    IPoolManager public poolManager;
 
     /// @notice The Uniswap V4 position manager contract that handles liquidity position NFTs.
     /// @dev Set once per clone via `initialize`. Held as storage rather than immutable so the implementation's
     /// constructor inputs are byte-identical on every chain (the V4 PositionManager varies per chain).
-    IPositionManager public POSITION_MANAGER;
+    IPositionManager public positionManager;
 
     /// @notice Project ID to receive LP fees
-    uint256 public FEE_PROJECT_ID;
+    uint256 public feeProjectId;
 
     /// @notice Percentage of LP fees to route to fee project (in basis points, e.g., 3800 = 38%)
-    uint256 public FEE_PERCENT;
+    uint256 public feePercent;
 
     /// @notice The accumulated project-token balance currently held for each project before its first pool deployment.
     /// @dev `processSplitWith` accumulates project tokens here while the project is still in pre-deployment mode.
@@ -270,52 +270,52 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// storage, so the implementation's state is never used. In normal production use, the deployer factory's
     /// `deployHookFor` atomically clones + initializes in the same transaction, so the call site for `initialize`
     /// is uncontested.
-    /// @param feeProjectId Project ID to receive LP fees.
-    /// @param feePercent Percentage of LP fees to route to fee project, out of `BPS` (e.g., 3800 = 38%).
-    /// @param poolManager The Uniswap V4 PoolManager on this chain.
-    /// @param positionManager The Uniswap V4 PositionManager on this chain.
-    /// @param oracleHook The JB V4 oracle hook deployed against `poolManager` on this chain.
+    /// @param initialFeeProjectId Project ID to receive LP fees.
+    /// @param initialFeePercent Percentage of LP fees to route to fee project, out of `BPS` (e.g., 3800 = 38%).
+    /// @param newPoolManager The Uniswap V4 PoolManager on this chain.
+    /// @param newPositionManager The Uniswap V4 PositionManager on this chain.
+    /// @param newOracleHook The JB V4 oracle hook deployed against `newPoolManager` on this chain.
     function initialize(
-        uint256 feeProjectId,
-        uint256 feePercent,
-        IPoolManager poolManager,
-        IPositionManager positionManager,
-        IHooks oracleHook
+        uint256 initialFeeProjectId,
+        uint256 initialFeePercent,
+        IPoolManager newPoolManager,
+        IPositionManager newPositionManager,
+        IHooks newOracleHook
     )
         external
     {
-        // POOL_MANAGER doubles as the "already initialized" sentinel: every legitimate initialize sets it non-zero.
+        // poolManager doubles as the "already initialized" sentinel: every legitimate initialize sets it non-zero.
         // Reject a zero poolManager up front so callers cannot accidentally leave the sentinel uninitialized and
         // re-enter `initialize` with different fee settings on the same clone.
-        if (address(POOL_MANAGER) != address(0)) revert JBUniswapV4LPSplitHook_AlreadyInitialized();
-        if (address(poolManager) == address(0)) revert JBUniswapV4LPSplitHook_AlreadyInitialized();
+        if (address(poolManager) != address(0)) revert JBUniswapV4LPSplitHook_AlreadyInitialized();
+        if (address(newPoolManager) == address(0)) revert JBUniswapV4LPSplitHook_AlreadyInitialized();
 
-        if (feePercent > BPS) {
-            revert JBUniswapV4LPSplitHook_InvalidFeePercent({feePercent: feePercent, maxFeePercent: BPS});
+        if (initialFeePercent > BPS) {
+            revert JBUniswapV4LPSplitHook_InvalidFeePercent({feePercent: initialFeePercent, maxFeePercent: BPS});
         }
 
         // If fees are configured, a valid fee project must be specified — otherwise fee tokens get stuck
         // because primaryTerminalOf(0, token) returns address(0).
-        if (feePercent > 0 && feeProjectId == 0) {
+        if (initialFeePercent > 0 && initialFeeProjectId == 0) {
             revert JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject({
-                feePercent: feePercent, feeProjectId: feeProjectId
+                feePercent: initialFeePercent, feeProjectId: initialFeeProjectId
             });
         }
 
-        if (feeProjectId != 0) {
-            address feeController = _controllerOf(feeProjectId);
+        if (initialFeeProjectId != 0) {
+            address feeController = _controllerOf(initialFeeProjectId);
             if (feeController == address(0)) {
                 revert JBUniswapV4LPSplitHook_InvalidProjectId({
-                    projectId: feeProjectId, controller: feeController, projectToken: address(0)
+                    projectId: initialFeeProjectId, controller: feeController, projectToken: address(0)
                 });
             }
         }
 
-        FEE_PROJECT_ID = feeProjectId;
-        FEE_PERCENT = feePercent;
-        POOL_MANAGER = poolManager;
-        POSITION_MANAGER = positionManager;
-        ORACLE_HOOK = oracleHook;
+        feeProjectId = initialFeeProjectId;
+        feePercent = initialFeePercent;
+        poolManager = newPoolManager;
+        positionManager = newPositionManager;
+        oracleHook = newOracleHook;
     }
 
     /// @notice Accept ETH transfers (needed for cashOut with native ETH and V4 TAKE operations).
@@ -729,7 +729,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Look up the current sqrt price of a pool.
     function _getSqrtPriceX96(PoolKey memory key) internal view returns (uint160 sqrtPriceX96) {
-        (sqrtPriceX96,,,) = POOL_MANAGER.getSlot0(key.toId());
+        (sqrtPriceX96,,,) = poolManager.getSlot0(key.toId());
     }
 
     /// @notice Compute Uniswap SqrtPriceX96 for current JuiceboxV4 price.
@@ -798,7 +798,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Look up the next token ID from the position manager.
     function _nextTokenId() internal view returns (uint256) {
-        return POSITION_MANAGER.nextTokenId();
+        return positionManager.nextTokenId();
     }
 
     /// @notice Look up the owner of a project.
@@ -922,9 +922,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         // Try the credit transfer directly. If the fee-project controller is paused or misconfigured, restore the
         // pending credits instead of unwinding an ERC-20 fee-token claim that already succeeded earlier in the frame.
-        try IJBController(_controllerOf(FEE_PROJECT_ID))
+        try IJBController(_controllerOf(feeProjectId))
             .transferCreditsFrom({
-            holder: address(this), projectId: FEE_PROJECT_ID, recipient: beneficiary, creditCount: creditAmount
+            holder: address(this), projectId: feeProjectId, recipient: beneficiary, creditCount: creditAmount
         }) {
             emit FeeTokensClaimed({projectId: projectId, beneficiary: beneficiary, amount: creditAmount});
         } catch {
@@ -1758,20 +1758,20 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             return terminalIsToken0 ? 0 : totalProjectTokens;
         }
 
-        uint256 diffPriceInit_A = uint256(sqrtPriceInit) - uint256(sqrtPriceA);
-        uint256 diffB_PriceInit = uint256(sqrtPriceB) - uint256(sqrtPriceInit);
+        uint256 diffPriceInitA = uint256(sqrtPriceInit) - uint256(sqrtPriceA);
+        uint256 diffBPriceInit = uint256(sqrtPriceB) - uint256(sqrtPriceInit);
 
         if (terminalIsToken0) {
             // Correct ratio: amount0/amount1 = Q96² × (√Pb − √P) / (√P × √Pb × (√P − √Pa))
             // Computed step-by-step to avoid overflow.
-            uint256 step1 = mulDiv({x: _Q96, y: diffB_PriceInit, denominator: uint256(sqrtPriceInit)});
+            uint256 step1 = mulDiv({x: _Q96, y: diffBPriceInit, denominator: uint256(sqrtPriceInit)});
             numerator = mulDiv({x: step1, y: _Q96, denominator: uint256(sqrtPriceB)});
-            denominator = diffPriceInit_A;
+            denominator = diffPriceInitA;
         } else {
             // Correct ratio: amount1/amount0 = √P × √Pb × (√P − √Pa) / (Q96² × (√Pb − √P))
             uint256 step1 = mulDiv({x: uint256(sqrtPriceInit), y: uint256(sqrtPriceB), denominator: _Q96});
-            numerator = mulDiv({x: step1, y: diffPriceInit_A, denominator: _Q96});
-            denominator = diffB_PriceInit;
+            numerator = mulDiv({x: step1, y: diffPriceInitA, denominator: _Q96});
+            denominator = diffBPriceInit;
         }
 
         uint256 ratioE18 = mulDiv({x: numerator, y: _WAD, denominator: denominator});
@@ -1810,7 +1810,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             : (projectCurrency, terminalCurrency);
 
         key = PoolKey({
-            currency0: currency0, currency1: currency1, fee: POOL_FEE, tickSpacing: TICK_SPACING, hooks: ORACLE_HOOK
+            currency0: currency0, currency1: currency1, fee: POOL_FEE, tickSpacing: TICK_SPACING, hooks: oracleHook
         });
 
         // Compute initial price at geometric mean of [cashOutRate, issuanceRate]
@@ -1856,7 +1856,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         // Best-effort initialize the pool. Uniswap's PositionManager swallows initialize reverts and returns
         // `type(int24).max`, so this call is still required for uninitialized pools but non-fatal for initialized ones.
-        POSITION_MANAGER.initializePool({key: key, sqrtPriceX96: sqrtPriceX96});
+        positionManager.initializePool({key: key, sqrtPriceX96: sqrtPriceX96});
 
         // Store the pool key
         poolKeysOf[projectId][terminalToken] = key;
@@ -2084,7 +2084,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Execute a batched position-manager action (mint, burn, decrease, etc.) with a short deadline.
     function _modifyLiquidities(bytes memory unlockData, uint256 value) internal {
-        POSITION_MANAGER.modifyLiquidities{value: value}({
+        positionManager.modifyLiquidities{value: value}({
             unlockData: unlockData, deadline: block.timestamp + _DEADLINE_SECONDS
         });
     }
@@ -2099,7 +2099,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
         PERMIT2.approve({
             token: token,
-            spender: address(POSITION_MANAGER),
+            spender: address(positionManager),
             // forge-lint: disable-next-line(unsafe-typecast)
             amount: uint160(amount),
             // forge-lint: disable-next-line(unsafe-typecast)
@@ -2141,12 +2141,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     function _routeFeesToProject(uint256 projectId, address terminalToken, uint256 amount) internal {
         if (amount == 0) return;
 
-        uint256 feeAmount = (amount * FEE_PERCENT) / BPS;
+        uint256 feeAmount = (amount * feePercent) / BPS;
         uint256 remainingAmount = amount - feeAmount;
 
         uint256 beneficiaryTokenCount = 0;
         if (feeAmount > 0) {
-            address feeTerminal = _primaryTerminalOf({projectId: FEE_PROJECT_ID, token: terminalToken});
+            address feeTerminal = _primaryTerminalOf({projectId: feeProjectId, token: terminalToken});
             // If no fee terminal is configured, the fee project simply misses this collection and the full amount
             // stays in the project's normal split-hook flow.
             if (feeTerminal == address(0)) {
@@ -2157,7 +2157,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 // _totalOutstandingFeeTokenClaims. This prevents a reentrancy through terminal.pay()
                 // → pay hooks → collectAndRouteLPFees() from seeing stale claims and double-counting
                 // fee tokens in _burnReceivedTokens or leftover handling.
-                address feeProjectToken = _tokenOf(FEE_PROJECT_ID);
+                address feeProjectToken = _tokenOf(feeProjectId);
 
                 // If this project already has unclaimed ERC-20 fee tokens, keep using that snapshotted token address.
                 // Otherwise a fee-project token migration could strand the earlier claim behind a new token contract.
@@ -2199,7 +2199,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 // balance before measuring freshly received tokens.
                 if (_isNativeToken(terminalToken)) {
                     beneficiaryTokenCount = IJBMultiTerminal(feeTerminal).pay{value: feeAmount}({
-                        projectId: FEE_PROJECT_ID,
+                        projectId: feeProjectId,
                         token: terminalToken,
                         amount: feeAmount,
                         beneficiary: address(this),
@@ -2211,7 +2211,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                     IERC20(terminalToken).forceApprove({spender: feeTerminal, value: feeAmount});
                     beneficiaryTokenCount = IJBMultiTerminal(feeTerminal)
                         .pay({
-                        projectId: FEE_PROJECT_ID,
+                        projectId: feeProjectId,
                         token: terminalToken,
                         amount: feeAmount,
                         beneficiary: address(this),
