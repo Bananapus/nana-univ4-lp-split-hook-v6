@@ -2118,7 +2118,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// after the position manager returns.
     /// @param token The ERC-20 token whose allowances should be revoked.
     function _clearPermit2Approval(address token) internal {
-        PERMIT2.approve({token: token, spender: address(positionManager), amount: 0, expiration: 0});
+        // Permit2 treats `expiration: 0` as "valid until the end of this block", so use a nonzero timestamp in the
+        // past while zeroing the amount. The amount blocks value pulls; the expired timestamp makes the revocation
+        // explicit for any zero-value or edge-case allowance reads.
+        PERMIT2.approve({token: token, spender: address(positionManager), amount: 0, expiration: 1});
+
+        // Drop the ERC-20 approval to Permit2 as well, so the hook leaves no pull authority behind on either layer.
         IERC20(token).forceApprove({spender: address(PERMIT2), value: 0});
     }
 

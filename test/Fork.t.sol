@@ -227,8 +227,12 @@ contract LPSplitHookForkTest is ForkDeployHelper {
             0,
             "hook should clear its ERC20 allowance to Permit2 after deploy"
         );
-        (uint160 permitAmount,,) = PERMIT2.allowance(address(hook), token, address(V4_POSITION_MANAGER));
+        (uint160 permitAmount, uint48 permitExpiration,) =
+            PERMIT2.allowance(address(hook), token, address(V4_POSITION_MANAGER));
         assertEq(permitAmount, 0, "hook should clear Permit2 allowance to PositionManager after deploy");
+        // Real Permit2 treats expiration 0 as end-of-block, so the production fork must show the cleanup wrote an
+        // already-expired nonzero timestamp.
+        assertEq(permitExpiration, 1, "hook should expire Permit2 allowance to PositionManager after deploy");
         uint256 tokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         uint128 liq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         assertTrue(liq > 0, "position should have liquidity via Permit2 flow");

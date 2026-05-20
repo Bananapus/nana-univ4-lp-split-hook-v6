@@ -302,9 +302,19 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
             "project token Permit2 allowance cleared"
         );
         assertEq(
+            MockPermit2(permit2).expirations(address(hook), address(projectToken), address(positionManager)),
+            1,
+            "project token Permit2 allowance expired"
+        );
+        assertEq(
             MockPermit2(permit2).allowances(address(hook), address(terminalToken), address(positionManager)),
             0,
             "terminal token Permit2 allowance cleared"
+        );
+        assertEq(
+            MockPermit2(permit2).expirations(address(hook), address(terminalToken), address(positionManager)),
+            1,
+            "terminal token Permit2 allowance expired"
         );
     }
 
