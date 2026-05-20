@@ -71,6 +71,13 @@ contract ExposedJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
     {
         return _computeInitialSqrtPrice(projectId, terminalToken, projectToken, controller, ruleset);
     }
+
+    /// @notice Exposes the internal V4-PositionManager call so a lock-held adversarial test can route through
+    /// the hook (not bypass it). Without this, a fork test of "lock held + hook tries to modifyLiquidities"
+    /// can only prove V4's own protection, not that our hook surfaces the revert correctly.
+    function exposed_modifyLiquidities(bytes memory unlockData, uint256 value) external payable {
+        _modifyLiquidities(unlockData, value);
+    }
 }
 
 contract LPSplitHookForkTest is ForkDeployHelper {
