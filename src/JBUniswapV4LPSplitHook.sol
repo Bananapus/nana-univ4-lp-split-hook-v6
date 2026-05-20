@@ -1974,7 +1974,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         _modifyLiquidities({unlockData: abi.encode(actions, params), value: ethValue});
 
+        // Drop Permit2 allowance for currency0 after PositionManager has pulled what it needs.
         if (token0 != address(0)) _clearPermit2Approval(token0);
+        // Drop currency1 separately only when it is an ERC-20 distinct from currency0; native ETH has no Permit2
+        // allowance, and equal token addresses should not pay the extra clear call twice.
         if (token1 != address(0) && token1 != token0) _clearPermit2Approval(token1);
     }
 
