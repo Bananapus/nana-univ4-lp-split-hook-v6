@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
+import {LPSplitHookV4TestBase, MockPermit2} from "./TestBaseV4.sol";
 import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 import {IJBUniswapV4LPSplitHook} from "../src/interfaces/IJBUniswapV4LPSplitHook.sol";
 import {JBPermissioned} from "@bananapus/core-v6/src/abstract/JBPermissioned.sol";
@@ -282,6 +282,30 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         assertTrue(controller.burnCallCount() > 0, "controller.burnTokensOf should be called for leftover tokens");
         assertEq(controller.lastBurnProjectId(), PROJECT_ID, "leftover burn should target the correct project");
         assertEq(controller.lastBurnHolder(), address(hook), "leftover burn should be from the hook");
+    }
+
+    function test_DeployPool_PartialMintClearsPermit2Approvals() public {
+        positionManager.setUsagePercent(8000);
+
+        _accumulateTokens(PROJECT_ID, 100e18);
+
+        address permit2 = address(hook.PERMIT2());
+
+        vm.prank(owner);
+        hook.deployPool(PROJECT_ID, 0);
+
+        assertEq(projectToken.allowance(address(hook), permit2), 0, "project token ERC20 allowance cleared");
+        assertEq(terminalToken.allowance(address(hook), permit2), 0, "terminal token ERC20 allowance cleared");
+        assertEq(
+            MockPermit2(permit2).allowances(address(hook), address(projectToken), address(positionManager)),
+            0,
+            "project token Permit2 allowance cleared"
+        );
+        assertEq(
+            MockPermit2(permit2).allowances(address(hook), address(terminalToken), address(positionManager)),
+            0,
+            "terminal token Permit2 allowance cleared"
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────────

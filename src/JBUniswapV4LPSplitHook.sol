@@ -1973,6 +1973,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         params[4] = abi.encode(key.currency1, address(this));
 
         _modifyLiquidities({unlockData: abi.encode(actions, params), value: ethValue});
+
+        if (token0 != address(0)) _clearPermit2Approval(token0);
+        if (token1 != address(0) && token1 != token0) _clearPermit2Approval(token1);
     }
 
     /// @notice Mint a new LP position with tick bounds recalculated from current issuance and cash-out rates.
@@ -2105,6 +2108,14 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             // forge-lint: disable-next-line(unsafe-typecast)
             expiration: uint48(block.timestamp + _DEADLINE_SECONDS)
         });
+    }
+
+    /// @notice Clear both Permit2's internal spender allowance and the ERC-20 allowance granted to Permit2.
+    /// @dev V4 mints can consume less than the max amount approved for SETTLE, so clean up any residual authority
+    /// after the position manager returns.
+    function _clearPermit2Approval(address token) internal {
+        PERMIT2.approve({token: token, spender: address(positionManager), amount: 0, expiration: 0});
+        IERC20(token).forceApprove({spender: address(PERMIT2), value: 0});
     }
 
     /// @notice Identify which side of the collected LP fees is the terminal token and route it to the project; burn the

@@ -222,6 +222,13 @@ contract LPSplitHookForkTest is ForkDeployHelper {
             0,
             "hook should never directly approve PositionManager"
         );
+        assertEq(
+            IERC20(token).allowance(address(hook), address(PERMIT2)),
+            0,
+            "hook should clear its ERC20 allowance to Permit2 after deploy"
+        );
+        (uint160 permitAmount,,) = PERMIT2.allowance(address(hook), token, address(V4_POSITION_MANAGER));
+        assertEq(permitAmount, 0, "hook should clear Permit2 allowance to PositionManager after deploy");
         uint256 tokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         uint128 liq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         assertTrue(liq > 0, "position should have liquidity via Permit2 flow");

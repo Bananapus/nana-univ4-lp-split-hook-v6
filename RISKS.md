@@ -79,9 +79,11 @@ The design assumes trusted Juicebox and Uniswap components on the critical exter
 
 Fee routing into the fee project intentionally does not set a local slippage floor. The fee project's own terminal and hook logic are expected to own that behavior.
 
-### 7.3 Permit2 approval overflow is guarded explicitly
+### 7.3 Permit2 approval bounds and cleanup
 
-The hook checks for `uint160` overflow before narrowing approval amounts for Permit2.
+The hook checks for `uint160` overflow before narrowing approval amounts for Permit2. Successful mint paths also clear
+both the Permit2 spender allowance and the ERC-20 allowance granted to Permit2, because Uniswap V4 mints can consume
+less than the max amount approved for settlement.
 
 ### 7.4 Pre-initialized pools are validated against economic tick bounds
 
