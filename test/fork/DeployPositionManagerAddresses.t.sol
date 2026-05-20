@@ -16,44 +16,59 @@ contract DeployPositionManagerAddressesForkTest is Test {
     address internal constant BASE_SEPOLIA_PM = 0x4B2C77d209D3405F41a037Ec6c77F7F5b8e2ca80;
     address internal constant ARBITRUM_SEPOLIA_PM = 0xAc631556d3d4019C95769033B5E719dD77124BAc;
 
-    function _assertHasCode(string memory chainName, address pm) internal {
-        try vm.createSelectFork(chainName) {
-            uint256 size;
-            assembly {
-                size := extcodesize(pm)
+    function _assertHasCode(string memory chainName, address pm, uint256 forkBlock) internal {
+        // Pin chains that already have a stable fork block in this suite. Some CI RPCs lag their advertised latest
+        // block, and an unpinned fork can fail before the bytecode assertion runs.
+        if (forkBlock == 0) {
+            try vm.createSelectFork(chainName) {
+                _assertCodeAt({chainName: chainName, pm: pm});
+            } catch {
+                // RPC not configured in this environment; skip rather than fail.
+                console2.log(string.concat("[SKIP] No RPC configured for ", chainName));
             }
-            assertGt(size, 0, string.concat("PositionManager has no code on ", chainName));
-        } catch {
-            // RPC not configured in this environment; skip rather than fail.
-            console2.log(string.concat("[SKIP] No RPC configured for ", chainName));
+        } else {
+            try vm.createSelectFork(chainName, forkBlock) {
+                _assertCodeAt({chainName: chainName, pm: pm});
+            } catch {
+                // RPC not configured in this environment; skip rather than fail.
+                console2.log(string.concat("[SKIP] No RPC configured for ", chainName));
+            }
         }
     }
 
+    function _assertCodeAt(string memory chainName, address pm) internal view {
+        uint256 size;
+        assembly {
+            size := extcodesize(pm)
+        }
+        assertGt(size, 0, string.concat("PositionManager has no code on ", chainName));
+    }
+
     function test_fork_mainnetPositionManager() public {
-        _assertHasCode("ethereum", MAINNET_PM);
+        _assertHasCode("ethereum", MAINNET_PM, 21_700_000);
     }
 
     function test_fork_optimismPositionManager() public {
-        _assertHasCode("optimism", OPTIMISM_PM);
+        _assertHasCode("optimism", OPTIMISM_PM, 0);
     }
 
     function test_fork_basePositionManager() public {
-        _assertHasCode("base", BASE_PM);
+        _assertHasCode("base", BASE_PM, 0);
     }
 
     function test_fork_arbitrumPositionManager() public {
-        _assertHasCode("arbitrum", ARBITRUM_PM);
+        _assertHasCode("arbitrum", ARBITRUM_PM, 0);
     }
 
     function test_fork_sepoliaPositionManager() public {
-        _assertHasCode("ethereum_sepolia", SEPOLIA_PM);
+        _assertHasCode("ethereum_sepolia", SEPOLIA_PM, 0);
     }
 
     function test_fork_baseSepoliaPositionManager() public {
-        _assertHasCode("base_sepolia", BASE_SEPOLIA_PM);
+        _assertHasCode("base_sepolia", BASE_SEPOLIA_PM, 0);
     }
 
     function test_fork_arbitrumSepoliaPositionManager() public {
-        _assertHasCode("arbitrum_sepolia", ARBITRUM_SEPOLIA_PM);
+        _assertHasCode("arbitrum_sepolia", ARBITRUM_SEPOLIA_PM, 0);
     }
 }
