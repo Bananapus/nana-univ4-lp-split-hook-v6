@@ -2116,6 +2116,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @notice Clear both Permit2's internal spender allowance and the ERC-20 allowance granted to Permit2.
     /// @dev V4 mints can consume less than the max amount approved for SETTLE, so clean up any residual authority
     /// after the position manager returns.
+    /// @param token The ERC-20 token whose allowances should be revoked.
     function _clearPermit2Approval(address token) internal {
         PERMIT2.approve({token: token, spender: address(positionManager), amount: 0, expiration: 0});
         IERC20(token).forceApprove({spender: address(PERMIT2), value: 0});
