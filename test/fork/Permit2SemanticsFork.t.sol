@@ -4,7 +4,6 @@ pragma solidity 0.8.28;
 import "forge-std/Test.sol";
 import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
 
-
 /// @notice Fork tests that verify Permit2's allowance/expiration semantics against the live canonical contract.
 /// @dev These pin the audit finding behind a real-bytecode assertion: a clearer reader doesn't have to trust the
 /// `MockPermit2` in `DeploymentStageTest.t.sol` to behave the same way as the deployed Permit2.
