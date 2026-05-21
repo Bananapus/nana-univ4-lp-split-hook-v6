@@ -1,0 +1,26 @@
+name: halmos
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+jobs:
+  halmos-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 25.9.0
+      - name: Install npm dependencies
+        run: npm install
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+      - name: Install Halmos
+        run: python -m pip install halmos==0.3.3
+      - name: Run Halmos helper proofs
+        run: python -m halmos --match-contract JBUniswapV4LPSplitHookHalmos --solver-threads 1 --solver-timeout-assertion 30s --statistics

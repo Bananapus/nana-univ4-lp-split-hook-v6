@@ -34,9 +34,11 @@ import {
 /// @notice Minimal mock so the hook can call PERMIT2.approve() in unit tests.
 contract MockPermit2 {
     mapping(address owner => mapping(address token => mapping(address spender => uint256))) public allowances;
+    mapping(address owner => mapping(address token => mapping(address spender => uint48))) public expirations;
 
-    function approve(address token, address spender, uint160 amount, uint48) external {
+    function approve(address token, address spender, uint160 amount, uint48 expiration) external {
         allowances[msg.sender][token][spender] = amount;
+        expirations[msg.sender][token][spender] = expiration;
     }
 
     function transferFrom(address from, address to, uint160 amount, address token) external {

@@ -71,6 +71,13 @@ contract ExposedJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
     {
         return _computeInitialSqrtPrice(projectId, terminalToken, projectToken, controller, ruleset);
     }
+
+    /// @notice Exposes the internal V4-PositionManager call so a lock-held adversarial test can route through
+    /// the hook (not bypass it). Without this, a fork test of "lock held + hook tries to modifyLiquidities"
+    /// can only prove V4's own protection, not that our hook surfaces the revert correctly.
+    function exposed_modifyLiquidities(bytes memory unlockData, uint256 value) external payable {
+        _modifyLiquidities(unlockData, value);
+    }
 }
 
 contract LPSplitHookForkTest is ForkDeployHelper {
@@ -222,6 +229,17 @@ contract LPSplitHookForkTest is ForkDeployHelper {
             0,
             "hook should never directly approve PositionManager"
         );
+        assertEq(
+            IERC20(token).allowance(address(hook), address(PERMIT2)),
+            0,
+            "hook should clear its ERC20 allowance to Permit2 after deploy"
+        );
+        (uint160 permitAmount, uint48 permitExpiration,) =
+            PERMIT2.allowance(address(hook), token, address(V4_POSITION_MANAGER));
+        assertEq(permitAmount, 0, "hook should clear Permit2 allowance to PositionManager after deploy");
+        // Real Permit2 treats expiration 0 as end-of-block, so the production fork must show the cleanup wrote an
+        // already-expired nonzero timestamp.
+        assertEq(permitExpiration, 1, "hook should expire Permit2 allowance to PositionManager after deploy");
         uint256 tokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         uint128 liq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         assertTrue(liq > 0, "position should have liquidity via Permit2 flow");
@@ -244,7 +262,6 @@ contract LPSplitHookForkTest is ForkDeployHelper {
             ownerMustSendPayouts: false,
             holdFees: false,
             scopeCashOutsToLocalBalances: true,
-            pauseCrossProjectFeeFreeInflows: false,
             useDataHookForPay: false,
             useDataHookForCashOut: false,
             dataHook: address(0),
@@ -350,7 +367,6 @@ contract LPSplitHookForkTest is ForkDeployHelper {
             ownerMustSendPayouts: false,
             holdFees: false,
             scopeCashOutsToLocalBalances: true,
-            pauseCrossProjectFeeFreeInflows: false,
             useDataHookForPay: false,
             useDataHookForCashOut: false,
             dataHook: address(0),
