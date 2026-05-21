@@ -35,6 +35,7 @@ import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerR
 import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
 
 import {IJBUniswapV4LPSplitHook} from "./interfaces/IJBUniswapV4LPSplitHook.sol";
+import {JBLPSplitHookHelpers} from "./libraries/JBLPSplitHookHelpers.sol";
 
 /// @custom:benediction DEVS BENEDICAT ET PROTEGAT CONTRACTVS MEAM
 /// @notice A split hook that builds and manages a Uniswap V4 liquidity position for a Juicebox project, using the
@@ -793,7 +794,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param terminalToken The terminal token to check.
     /// @return isNative True if `terminalToken` represents native ETH.
     function _isNativeToken(address terminalToken) internal pure returns (bool isNative) {
-        return terminalToken == JBConstants.NATIVE_TOKEN;
+        return JBLPSplitHookHelpers.isNativeToken(terminalToken);
     }
 
     /// @notice Look up the next token ID from the position manager.
@@ -1369,13 +1370,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @notice Align tick down to the nearest spacing boundary (floor semantics).
     /// @dev Used for `tickUpper` so the LP range contracts toward the intended inner band on the upper side.
     function _alignTickToSpacing(int24 tick, int24 spacing) internal pure returns (int24 alignedTick) {
-        // Intentional: rounding tick down to nearest spacing boundary
-        // forge-lint: disable-next-line(divide-before-multiply)
-        int24 rounded = (tick / spacing) * spacing;
-        if (tick < 0 && rounded > tick) {
-            rounded -= spacing;
-        }
-        return rounded;
+        return JBLPSplitHookHelpers.alignTickToSpacing({tick: tick, spacing: spacing});
     }
 
     /// @notice Align tick up to the nearest spacing boundary (ceiling semantics).
@@ -1383,12 +1378,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// Without this, flooring tickLower would expand the LP range downward by up to one spacing interval,
     /// exposing project liquidity at prices the bonding curve never sanctioned.
     function _alignTickToSpacingCeil(int24 tick, int24 spacing) internal pure returns (int24 alignedTick) {
-        // forge-lint: disable-next-line(divide-before-multiply)
-        int24 rounded = (tick / spacing) * spacing;
-        if (rounded < tick) {
-            rounded += spacing;
-        }
-        return rounded;
+        return JBLPSplitHookHelpers.alignTickToSpacingCeil({tick: tick, spacing: spacing});
     }
 
     /// @notice Burn an existing LP position via `BURN_POSITION` + `TAKE_PAIR` and recover its principal.
@@ -2303,12 +2293,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Sort two token addresses into the canonical Uniswap V4 ordering (lower address = token0).
     function _sortTokens(address tokenA, address tokenB) internal pure returns (address token0, address token1) {
-        return tokenA < tokenB ? (tokenA, tokenB) : (tokenB, tokenA);
+        return JBLPSplitHookHelpers.sortTokens({tokenA: tokenA, tokenB: tokenB});
     }
 
     /// @notice Convert a Juicebox terminal-token address to the equivalent Uniswap V4 `Currency`.
     /// @dev Juicebox uses the sentinel `JBConstants.NATIVE_TOKEN` for ETH; Uniswap V4 uses `address(0)`.
     function _toCurrency(address terminalToken) internal pure returns (Currency) {
-        return Currency.wrap(_isNativeToken(terminalToken) ? address(0) : terminalToken);
+        return JBLPSplitHookHelpers.toCurrency(terminalToken);
     }
 }
