@@ -1273,7 +1273,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 tokenToReclaim: terminalToken,
                 minTokensReclaimed: effectiveMinReturn,
                 beneficiary: payable(address(this)),
-                metadata: ""
+                metadata: "",
+                referralProjectId: 0
             });
 
             // Reconcile the terminal report with the actual spendable balance delta. Fee-on-transfer tokens or
