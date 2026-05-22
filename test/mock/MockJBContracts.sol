@@ -437,7 +437,9 @@ contract MockJBMultiTerminal {
         uint256,
         /* minTokensReclaimed */
         address payable beneficiary,
-        bytes calldata /* metadata */
+        bytes calldata,
+        /* metadata */
+        uint256 /* referralProjectId */
     )
         external
         returns (uint256 reclaimAmount)
