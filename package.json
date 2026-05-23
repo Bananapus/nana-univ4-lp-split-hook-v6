@@ -1,17 +1,16 @@
 {
   "name": "@bananapus/univ4-lp-split-hook-v6",
-  "version": "0.0.44",
+  "version": "0.0.45",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Bananapus/nana-univ4-lp-split-hook-v6"
   },
   "files": [
-    "foundry.lock",
     "foundry.toml",
     "references/",
     "remappings.txt",
-    "script/Deploy.s.sol",
+    "script/",
     "src/"
   ],
   "engines": {
