@@ -7,7 +7,6 @@
     "url": "git+https://github.com/Bananapus/nana-univ4-lp-split-hook-v6"
   },
   "files": [
-    "CHANGELOG.md",
     "foundry.lock",
     "foundry.toml",
     "references/",
