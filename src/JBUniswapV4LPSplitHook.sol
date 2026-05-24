@@ -907,7 +907,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         _totalOutstandingFeeTokenClaims[feeProjectToken] -= tokenAmount;
 
         // Emit the claim after bookkeeping so the event only survives if the downstream transfer does too.
-        emit FeeTokensClaimed({projectId: projectId, beneficiary: beneficiary, amount: tokenAmount});
+        emit FeeTokensClaimed({projectId: projectId, beneficiary: beneficiary, amount: tokenAmount, caller: msg.sender});
         IERC20(feeProjectToken).safeTransfer({to: beneficiary, value: tokenAmount});
     }
 
@@ -927,7 +927,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             .transferCreditsFrom({
             holder: address(this), projectId: feeProjectId, recipient: beneficiary, creditCount: creditAmount
         }) {
-            emit FeeTokensClaimed({projectId: projectId, beneficiary: beneficiary, amount: creditAmount});
+            emit FeeTokensClaimed({
+                projectId: projectId, beneficiary: beneficiary, amount: creditAmount, caller: msg.sender
+            });
         } catch {
             // Restore the pending credits so the project owner can retry once the fee-project controller is usable.
             claimableFeeCredits[projectId] = creditAmount;
@@ -1019,7 +1021,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         emit ProjectDeployed({
             projectId: projectId,
             terminalToken: terminalToken,
-            poolId: PoolId.unwrap(poolKeysOf[projectId][terminalToken].toId())
+            poolId: PoolId.unwrap(poolKeysOf[projectId][terminalToken].toId()),
+            caller: msg.sender
         });
     }
 
@@ -1420,7 +1423,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         if (controller != address(0)) {
             IJBController(controller)
                 .burnTokensOf({holder: address(this), projectId: projectId, tokenCount: amount, memo: memo});
-            emit TokensBurned({projectId: projectId, token: projectToken, amount: amount});
+            emit TokensBurned({projectId: projectId, token: projectToken, amount: amount, caller: msg.sender});
         }
     }
 
@@ -2288,7 +2291,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             totalAmount: amount,
             feeAmount: feeAmount,
             remainingAmount: remainingAmount,
-            feeTokensMinted: beneficiaryTokenCount
+            feeTokensMinted: beneficiaryTokenCount,
+            caller: msg.sender
         });
     }
 

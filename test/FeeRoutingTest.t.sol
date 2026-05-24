@@ -324,7 +324,13 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
 
         vm.expectEmit(true, true, false, true, address(hook));
         emit IJBUniswapV4LPSplitHook.LPFeesRouted(
-            PROJECT_ID, address(terminalToken), feeAmount, expectedFee, expectedRemaining, expectedFeeTokensMinted
+            PROJECT_ID,
+            address(terminalToken),
+            feeAmount,
+            expectedFee,
+            expectedRemaining,
+            expectedFeeTokensMinted,
+            address(this)
         );
 
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));

@@ -14,7 +14,8 @@ interface IJBUniswapV4LPSplitHook {
     /// @param projectId The Juicebox project ID.
     /// @param beneficiary The address receiving the claimed tokens.
     /// @param amount The amount of tokens claimed.
-    event FeeTokensClaimed(uint256 indexed projectId, address indexed beneficiary, uint256 amount);
+    /// @param caller The address that claimed the tokens.
+    event FeeTokensClaimed(uint256 indexed projectId, address indexed beneficiary, uint256 amount, address caller);
 
     /// @notice Emitted when LP fees are routed back to the project.
     /// @param projectId The Juicebox project ID.
@@ -23,26 +24,32 @@ interface IJBUniswapV4LPSplitHook {
     /// @param feeAmount The amount sent to the fee project.
     /// @param remainingAmount The amount sent to the original project.
     /// @param feeTokensMinted The number of fee project tokens minted.
+    /// @param caller The address that routed the LP fees.
     event LPFeesRouted(
         uint256 indexed projectId,
         address indexed terminalToken,
         uint256 totalAmount,
         uint256 feeAmount,
         uint256 remainingAmount,
-        uint256 feeTokensMinted
+        uint256 feeTokensMinted,
+        address caller
     );
 
     /// @notice Emitted when a project transitions from Stage 1 to Stage 2 by deploying a pool.
     /// @param projectId The Juicebox project ID.
     /// @param terminalToken The terminal token address.
     /// @param poolId The Uniswap V4 pool ID.
-    event ProjectDeployed(uint256 indexed projectId, address indexed terminalToken, bytes32 indexed poolId);
+    /// @param caller The address that deployed the pool.
+    event ProjectDeployed(
+        uint256 indexed projectId, address indexed terminalToken, bytes32 indexed poolId, address caller
+    );
 
     /// @notice Emitted when tokens are burned in Stage 2.
     /// @param projectId The Juicebox project ID.
     /// @param token The token address that was burned.
     /// @param amount The amount of tokens burned.
-    event TokensBurned(uint256 indexed projectId, address indexed token, uint256 amount);
+    /// @param caller The address that triggered the burn.
+    event TokensBurned(uint256 indexed projectId, address indexed token, uint256 amount, address caller);
 
     /// @notice Check if a pool has been deployed for a project/terminal token pair.
     /// @param projectId The Juicebox project ID.
