@@ -104,7 +104,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         // Check indexed params: projectId (topic1) and terminalToken (topic2)
         // The poolId (topic3) is unknown ahead of time, so we only check the first two indexed params.
         vm.expectEmit(true, true, false, false);
-        emit IJBUniswapV4LPSplitHook.ProjectDeployed(PROJECT_ID, address(terminalToken), bytes32(0));
+        emit IJBUniswapV4LPSplitHook.ProjectDeployed(PROJECT_ID, address(terminalToken), bytes32(0), owner);
 
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, 0);
