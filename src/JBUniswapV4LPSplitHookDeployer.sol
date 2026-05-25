@@ -47,8 +47,8 @@ contract JBUniswapV4LPSplitHookDeployer is IJBUniswapV4LPSplitHookDeployer {
     /// `setChainSpecificConstants` and never changed thereafter.
     /// @dev Held as public storage (rather than immutable) so the constructor inputs are byte-identical on every chain.
     /// The chain-specific hook implementation is supplied by `_DEPLOYER` in a one-shot call to
-    /// `setChainSpecificConstants`. This is the same chain-same pattern used by `JBBuybackHook` and
-    /// `JBOptimismSuckerDeployer`, and makes this deployer's CREATE2 address unified across chains.
+    /// `setChainSpecificConstants`. This mirrors the chain-identical CREATE2 pattern used by `JBBuybackHook` and
+    /// `JBOptimismSuckerDeployer`, keeping this deployer's address unified across chains.
     JBUniswapV4LPSplitHook public override hookImplementation;
 
     /// @notice The Uniswap V4 oracle hook clones should use, set once by `_DEPLOYER` via `setChainSpecificConstants`.
@@ -140,7 +140,7 @@ contract JBUniswapV4LPSplitHookDeployer is IJBUniswapV4LPSplitHookDeployer {
     /// @param newHookImplementation The chain-specific `JBUniswapV4LPSplitHook` implementation.
     /// @param newPoolManager The Uniswap V4 PoolManager on this chain.
     /// @param newPositionManager The Uniswap V4 PositionManager on this chain.
-    /// @param newOracleHook The JB V4 oracle hook deployed against `newPoolManager` on this chain.
+    /// @param newOracleHook The Uniswap V4 oracle hook deployed against `newPoolManager` on this chain.
     function setChainSpecificConstants(
         JBUniswapV4LPSplitHook newHookImplementation,
         IPoolManager newPoolManager,

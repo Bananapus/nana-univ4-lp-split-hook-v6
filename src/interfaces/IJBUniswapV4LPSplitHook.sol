@@ -89,7 +89,7 @@ interface IJBUniswapV4LPSplitHook {
     /// @param initialFeePercent Percentage of LP fees to route to fee project, out of `BPS`.
     /// @param newPoolManager The Uniswap V4 PoolManager on this chain.
     /// @param newPositionManager The Uniswap V4 PositionManager on this chain.
-    /// @param newOracleHook The JB V4 oracle hook deployed against `newPoolManager` on this chain.
+    /// @param newOracleHook The Uniswap V4 oracle hook deployed against `newPoolManager` on this chain.
     function initialize(
         uint256 initialFeeProjectId,
         uint256 initialFeePercent,

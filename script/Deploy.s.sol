@@ -117,7 +117,7 @@ contract DeployScript is Script, Sphinx {
         }
 
         // Thread the actual implementation address from the active deployment path into the deployer.
-        // Deployer construction is chain-same (CREATE2 inputs are byte-identical across chains); the
+        // Deployer construction is chain-identical (CREATE2 inputs are byte-identical across chains); the
         // chain-specific hook implementation is wired in afterwards via setChainSpecificConstants.
         JBUniswapV4LPSplitHook hookImpl = JBUniswapV4LPSplitHook(payable(hookImplAddress));
 
