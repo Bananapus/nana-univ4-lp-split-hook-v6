@@ -254,7 +254,7 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
             TEST_PROJECT_ID, address(lowTerminalToken), address(highProjectToken)
         );
 
-        assertLt(tickLower, tickUpper, "tickLower must be < tickUpper after fix");
+        assertLt(tickLower, tickUpper, "tickLower must be < tickUpper after sorting");
 
         // The range should be wide (not the narrow +/-1 tick fallback).
         int24 range = tickUpper - tickLower;

@@ -162,7 +162,7 @@ contract LPSplitHookV4TestBase is Test {
         address permit2Addr = 0x000000000022D473030F116dDEE9F6B43aC78BA3;
         vm.etch(permit2Addr, address(new MockPermit2()).code);
 
-        // Deploy the chain-same implementation, then clone + initialize. The clone's storage (project + chain
+        // Deploy the chain-identical implementation, then clone + initialize. The clone's storage (project + chain
         // specific) is set atomically inside `initialize`.
         JBUniswapV4LPSplitHook hookImpl = new JBUniswapV4LPSplitHook(
             address(directory),

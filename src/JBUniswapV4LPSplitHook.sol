@@ -152,7 +152,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     // --------------------- public stored properties -------------------- //
     //*********************************************************************//
 
-    /// @notice The oracle hook used for all JB V4 pools (provides TWAP via observe()).
+    /// @notice The oracle hook used for configured Uniswap V4 pools (provides TWAP via observe()).
     /// @dev Set once per clone via `initialize` (alongside `feeProjectId` + `feePercent`). Held as storage rather
     /// than immutable because `JBUniswapV4Hook` is chain-different by design (inherits Uniswap's
     /// `BaseHook → ImmutableState`). Keeping it out of the constructor lets this implementation's CREATE2 inputs be
@@ -275,7 +275,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param initialFeePercent Percentage of LP fees to route to fee project, out of `BPS` (e.g., 3800 = 38%).
     /// @param newPoolManager The Uniswap V4 PoolManager on this chain.
     /// @param newPositionManager The Uniswap V4 PositionManager on this chain.
-    /// @param newOracleHook The JB V4 oracle hook deployed against `newPoolManager` on this chain.
+    /// @param newOracleHook The Uniswap V4 oracle hook deployed against `newPoolManager` on this chain.
     function initialize(
         uint256 initialFeeProjectId,
         uint256 initialFeePercent,
@@ -1136,7 +1136,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             projectId: projectId, projectToken: projectToken, terminalToken: terminalToken, tokenId: tokenId, key: key
         });
 
-        // Snapshot balances before burn to isolate per-project recovered amounts ().
+        // Snapshot balances before burn to isolate recovered amounts created by this project's rebalance.
         uint256 projBalBefore = IERC20(projectToken).balanceOf(address(this));
         uint256 termBalBefore = _getTerminalTokenBalance(terminalToken);
 
@@ -1324,7 +1324,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // waste gas and leave the project in a deployed state with a useless (empty) LP position.
         if (liquidity == 0) revert JBUniswapV4LPSplitHook_ZeroLiquidity({amount0: amount0, amount1: amount1});
 
-        // Snapshot balances before minting to isolate per-project leftovers ().
+        // Snapshot balances before minting to isolate leftovers created by this project's rebalance.
         uint256 projBalBeforeMint = IERC20(projectToken).balanceOf(address(this));
         uint256 termBalBeforeMint = _getTerminalTokenBalance(terminalToken);
 
@@ -1341,7 +1341,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // inside modifyLiquidities, so (nextTokenId - 1) is the ID that was just minted.
         tokenIdOf[projectId][terminalToken] = _nextTokenId() - 1;
 
-        // Per-project leftover handling via snapshot-delta ().
+        // Snapshot deltas keep other projects' balances out of this project's leftover accounting.
         // Safe subtraction: V4 SWEEP may return dust beyond what was settled.
         uint256 postProjBal = IERC20(projectToken).balanceOf(address(this));
         uint256 postTermBal = _getTerminalTokenBalance(terminalToken);
@@ -2030,7 +2030,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         });
 
         if (liquidity > 0) {
-            // Snapshot balances before minting to isolate per-project leftovers ().
+            // Snapshot balances before minting to isolate leftovers created by this project's rebalance.
             uint256 projBalBeforeMint = IERC20(projectToken).balanceOf(address(this));
             uint256 termBalBeforeMint = _getTerminalTokenBalance(terminalToken);
 
@@ -2047,7 +2047,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             // inside modifyLiquidities, so (nextTokenId - 1) is the ID that was just minted.
             tokenIdOf[projectId][terminalToken] = _nextTokenId() - 1;
 
-            // Per-project leftover handling via snapshot-delta ().
+            // Snapshot deltas keep other projects' balances out of this project's leftover accounting.
             // Safe subtraction: V4 SWEEP may return dust beyond what was settled.
             uint256 postProjBal = IERC20(projectToken).balanceOf(address(this));
             uint256 postTermBal = _getTerminalTokenBalance(terminalToken);

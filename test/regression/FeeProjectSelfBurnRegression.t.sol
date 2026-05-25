@@ -225,8 +225,7 @@ contract FeeProjectSelfBurnRegression is LPSplitHookV4TestBase {
         vm.stopPrank();
     }
 
-    /// @notice Verifies that _totalOutstandingFeeTokenClaims prevents the fee project's own pool
-    /// deployment from consuming other projects' claimable fee tokens (fix).
+    /// @notice Verifies that fee-project pool deployment cannot consume other projects' claimable fee tokens.
     function test_FeeProjectPoolDeploymentDoesNotBurnOtherProjectsClaimableFeeTokens() public {
         uint256 feeProjectAccumulation = 100e18;
 

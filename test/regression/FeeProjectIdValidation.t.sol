@@ -17,7 +17,7 @@ import {MockJBDirectory, MockJBController, MockJBTokens, MockJBPermissions} from
 
 /// @notice feeProjectId=0 with non-zero feePercent locks fees.
 /// @dev When feePercent > 0 and feeProjectId == 0, primaryTerminalOf(0, token) returns address(0),
-///      causing fee tokens to get stuck. The fix validates this combination in initialize().
+///      causing fee tokens to get stuck. initialize() rejects this invalid fee configuration.
 contract FeeProjectIdValidationTest is Test {
     JBUniswapV4LPSplitHook public hookImpl;
     MockJBDirectory public directory;
