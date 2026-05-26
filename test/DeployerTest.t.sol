@@ -50,9 +50,12 @@ contract DeployerTest is Test {
         );
 
         addressRegistry = new JBAddressRegistry();
-        deployer = new JBUniswapV4LPSplitHookDeployer(IJBAddressRegistry(address(addressRegistry)), address(this));
-        deployer.setChainSpecificConstants({
+        deployer = new JBUniswapV4LPSplitHookDeployer({
+            addressRegistry: IJBAddressRegistry(address(addressRegistry)),
             newHookImplementation: hookImpl,
+            deployer: address(this)
+        });
+        deployer.setChainSpecificConstants({
             newPoolManager: IPoolManager(address(2)),
             newPositionManager: IPositionManager(address(3)),
             newOracleHook: IHooks(address(0))
@@ -60,7 +63,11 @@ contract DeployerTest is Test {
     }
 
     function _freshDeployer() internal returns (JBUniswapV4LPSplitHookDeployer) {
-        return new JBUniswapV4LPSplitHookDeployer(IJBAddressRegistry(address(addressRegistry)), address(this));
+        return new JBUniswapV4LPSplitHookDeployer({
+            addressRegistry: IJBAddressRegistry(address(addressRegistry)),
+            newHookImplementation: hookImpl,
+            deployer: address(this)
+        });
     }
 
     function test_deployHookFor_revertsBeforeConfigured() public {

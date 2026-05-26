@@ -18,7 +18,7 @@
 - Project owner or `SET_BUYBACK_POOL` delegate controls the key lifecycle functions.
 - The deployer path is permissionless for creating a new hook instance.
 - Some post-deployment fee collection is permissionless.
-- Deployer chain-specific constants are configured once, then each clone receives the pool manager, position manager, and oracle hook during one-time initialization.
+- The deployer's hook implementation is immutable, and chain-specific V4 constants are configured once. Each clone receives the pool manager, position manager, and oracle hook during one-time initialization.
 
 ## Roles
 
@@ -43,7 +43,8 @@
 - `deployPool(...)` is the irreversible lifecycle transition.
 - Fee-project configuration on a clone is fixed at initialization.
 - Constructor dependencies such as directory and permissions are immutable.
-- The deployer's hook implementation, pool manager, position manager, and oracle hook are one-shot configured via `setChainSpecificConstants`.
+- The deployer's hook implementation is constructor-immutable.
+- The deployer's pool manager, position manager, and oracle hook are one-shot configured via `setChainSpecificConstants`.
 - Each clone's pool manager, position manager, and oracle hook are fixed at initialization.
 
 ## Operational Notes
@@ -70,7 +71,7 @@
 
 - Admins cannot rewrite fee configuration after clone initialization.
 - Admins cannot create multiple deployed pool identities for the same hook and project path.
-- Admins cannot mutate constructor immutables, the deployer's one-shot chain-specific constants, or a clone's initialized pool manager or oracle wiring.
+- Admins cannot mutate constructor immutables, the deployer's one-shot V4 constants, or a clone's initialized pool manager or oracle wiring.
 - Nobody can turn the permissionless fee-collection path into a gated path after deployment.
 
 ## Source Map
