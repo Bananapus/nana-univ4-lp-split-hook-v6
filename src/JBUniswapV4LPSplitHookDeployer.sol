@@ -2,10 +2,10 @@
 pragma solidity 0.8.28;
 
 import {IJBAddressRegistry} from "@bananapus/address-registry-v6/src/interfaces/IJBAddressRegistry.sol";
-import {LibClone} from "solady/src/utils/LibClone.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
+import {LibClone} from "solady/src/utils/LibClone.sol";
 
 import {JBUniswapV4LPSplitHook} from "./JBUniswapV4LPSplitHook.sol";
 import {IJBUniswapV4LPSplitHook} from "./interfaces/IJBUniswapV4LPSplitHook.sol";
@@ -41,7 +41,7 @@ contract JBUniswapV4LPSplitHookDeployer is IJBUniswapV4LPSplitHookDeployer {
     address internal immutable _DEPLOYER;
 
     //*********************************************************************//
-    // ------------------------ public properties ------------------------ //
+    // --------------------- public stored properties -------------------- //
     //*********************************************************************//
 
     /// @notice The hook implementation that all clones delegate to. Set once by `_DEPLOYER` after construction via
@@ -53,7 +53,7 @@ contract JBUniswapV4LPSplitHookDeployer is IJBUniswapV4LPSplitHookDeployer {
     JBUniswapV4LPSplitHook public override hookImplementation;
 
     /// @notice The Uniswap V4 oracle hook clones should use, set once by `_DEPLOYER` via `setChainSpecificConstants`.
-    /// @dev Passed into each freshly cloned hook's `setChainSpecificConstants` inside `deployHookFor`.
+    /// @dev Passed into each freshly cloned hook's `initialize` inside `deployHookFor`.
     IHooks public override oracleHook;
 
     /// @notice The Uniswap V4 PoolManager clones should use, set once by `_DEPLOYER` via `setChainSpecificConstants`.
