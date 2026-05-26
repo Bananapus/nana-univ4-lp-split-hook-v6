@@ -54,8 +54,8 @@ contract RegressionFixM31Test is Test {
         );
 
         addressRegistry = new JBAddressRegistry();
-        deployer = new JBUniswapV4LPSplitHookDeployer(IJBAddressRegistry(address(addressRegistry)), address(this));
-        deployer.setChainSpecificConstants({
+        deployer = new JBUniswapV4LPSplitHookDeployer({
+            addressRegistry: IJBAddressRegistry(address(addressRegistry)),
             newHookImplementation: hookImpl,
             newPoolManager: IPoolManager(address(2)),
             newPositionManager: IPositionManager(address(3)),
