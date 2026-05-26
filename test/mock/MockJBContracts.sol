@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBRulesetMetadata} from "@bananapus/core-v6/src/structs/JBRulesetMetadata.sol";
 import {JBRulesetWithMetadata} from "@bananapus/core-v6/src/structs/JBRulesetWithMetadata.sol";
+import {JBCashOuts} from "@bananapus/core-v6/src/libraries/JBCashOuts.sol";
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
@@ -545,6 +546,12 @@ contract MockJBTerminalStore {
     // terminal => projectId => token => balance
     mapping(address => mapping(uint256 => mapping(address => uint256))) public _balances;
 
+    bool public useProvidedCashOutInputs;
+
+    function setUseProvidedCashOutInputs(bool value) external {
+        useProvidedCashOutInputs = value;
+    }
+
     function setSurplus(uint256 projectId, uint256 surplus) external {
         surplusPerToken[projectId] = surplus;
     }
@@ -561,17 +568,22 @@ contract MockJBTerminalStore {
     function currentReclaimableSurplusOf(
         uint256 projectId,
         uint256 cashOutCount,
-        uint256,
-        /* totalSupply */
-        uint256 /* surplus */
+        uint256 totalSupply,
+        uint256 surplus
     )
         external
         view
         returns (uint256)
     {
-        uint256 surplus = surplusPerToken[projectId];
-        if (surplus == 0) return 0;
-        return (surplus * cashOutCount) / 1e18;
+        if (useProvidedCashOutInputs) {
+            return JBCashOuts.cashOutFrom({
+                surplus: surplus, cashOutCount: cashOutCount, totalSupply: totalSupply, cashOutTaxRate: 0
+            });
+        }
+
+        uint256 configuredSurplus = surplusPerToken[projectId];
+        if (configuredSurplus == 0) return 0;
+        return (configuredSurplus * cashOutCount) / 1e18;
     }
 
     /// @dev Matches
