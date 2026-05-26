@@ -51,15 +51,12 @@ interface IJBUniswapV4LPSplitHookDeployer {
         external
         returns (IJBUniswapV4LPSplitHook hook);
 
-    /// @notice One-shot setter for the chain-specific hook implementation + Uniswap V4 addresses.
-    /// @dev Callable only by the deployer that constructed this contract and only once (when `hookImplementation` is
-    /// still `address(0)`).
-    /// @param newHookImplementation The chain-specific `JBUniswapV4LPSplitHook` implementation.
+    /// @notice One-shot setter for chain-specific Uniswap V4 addresses.
+    /// @dev Callable only by the deployer that constructed this contract and only once.
     /// @param newPoolManager The Uniswap V4 PoolManager on this chain.
     /// @param newPositionManager The Uniswap V4 PositionManager on this chain.
     /// @param newOracleHook The Uniswap V4 oracle hook deployed against `newPoolManager` on this chain.
     function setChainSpecificConstants(
-        JBUniswapV4LPSplitHook newHookImplementation,
         IPoolManager newPoolManager,
         IPositionManager newPositionManager,
         IHooks newOracleHook

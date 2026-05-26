@@ -21,7 +21,7 @@
 | Module | Responsibility | Notes |
 | --- | --- | --- |
 | `JBUniswapV4LPSplitHook` | Accumulation, pool deployment, LP management, fee routing, rebalancing | Runtime core |
-| `JBUniswapV4LPSplitHookDeployer` | Deterministic clone deployment | Deployment helper |
+| `JBUniswapV4LPSplitHookDeployer` | Deterministic clone deployment with immutable implementation and one-shot V4 wiring | Keeps deployer address stable across chains |
 
 ## Trust Boundaries
 
@@ -64,7 +64,7 @@ It also owns claim segregation for routed LP fees. Outstanding fee-token claims 
 - Keep price-bound math, optimal cash-out math, and rebalance logic synchronized.
 - If you change fee routing or burn behavior, re-check outstanding fee-token claim segregation and in-flight fee routing assumptions.
 - If fee routing changes, inspect downstream fee-project behavior and claim paths.
-- Keep deployer assumptions aligned with the address registry and deployment scripts.
+- Keep deployer assumptions aligned with the address registry, deployment scripts, immutable implementation address, and one-shot V4 constants used to preserve the deployer address across chains.
 
 ## Canonical Checks
 

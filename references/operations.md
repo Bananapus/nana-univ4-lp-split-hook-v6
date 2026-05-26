@@ -8,7 +8,7 @@
 
 ## Change Checklist
 
-- If you edit deployment behavior, verify fee-project and fee-percent initialization plus address-registry registration.
+- If you edit deployment behavior, verify fee-project and fee-percent initialization, the immutable implementation address, one-shot V4 constants, same-address CREATE2 assumptions, and address-registry registration.
 - If you edit deployPool or rebalance logic, check permission gates and weight-decay assumptions together.
 - If you edit fee collection, confirm project-token burn behavior and terminal-token routing still align.
 

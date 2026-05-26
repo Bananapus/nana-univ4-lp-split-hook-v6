@@ -88,9 +88,9 @@ contract DeployScript is Script, Sphinx {
     }
 
     function deploy() public sphinx {
-        // Chain-same constructor args — the chain-specific Uniswap V4 addresses are no longer in the constructor;
-        // they are passed into each fresh clone by `JBUniswapV4LPSplitHookDeployer.deployHookFor` via its own
-        // setChainSpecificConstants storage.
+        // Chain-same constructor args keep the implementation address stable across Sphinx-supported chains.
+        // Chain-specific Uniswap V4 addresses are passed into each fresh clone by
+        // `JBUniswapV4LPSplitHookDeployer.deployHookFor` via the deployer's setChainSpecificConstants storage.
         bytes memory hookArgs = abi.encode(
             address(core.directory),
             core.permissions,
@@ -116,12 +116,11 @@ contract DeployScript is Script, Sphinx {
             );
         }
 
-        // Thread the actual implementation address from the active deployment path into the deployer.
-        // Deployer construction is chain-identical (CREATE2 inputs are byte-identical across chains); the
-        // chain-specific hook implementation is wired in afterwards via setChainSpecificConstants.
+        // Thread the implementation address into the deployer constructor. The implementation is deployed from
+        // chain-same inputs, so the deployer's CREATE2 inputs remain byte-identical across supported chains.
         JBUniswapV4LPSplitHook hookImpl = JBUniswapV4LPSplitHook(payable(hookImplAddress));
 
-        bytes memory deployerCtorArgs = abi.encode(address(registry.registry), safeAddress());
+        bytes memory deployerCtorArgs = abi.encode(address(registry.registry), hookImpl, safeAddress());
         JBUniswapV4LPSplitHookDeployer deployer = JBUniswapV4LPSplitHookDeployer(
             vm.computeCreate2Address({
                 salt: deployerSalt,
@@ -133,15 +132,12 @@ contract DeployScript is Script, Sphinx {
         );
         if (address(deployer).code.length == 0) {
             deployer = new JBUniswapV4LPSplitHookDeployer{salt: deployerSalt}({
-                addressRegistry: registry.registry, deployer: safeAddress()
+                addressRegistry: registry.registry, newHookImplementation: hookImpl, deployer: safeAddress()
             });
         }
-        if (address(deployer.hookImplementation()) == address(0)) {
+        if (address(deployer.poolManager()) == address(0)) {
             deployer.setChainSpecificConstants({
-                newHookImplementation: hookImpl,
-                newPoolManager: poolManager,
-                newPositionManager: positionManager,
-                newOracleHook: router.hook
+                newPoolManager: poolManager, newPositionManager: positionManager, newOracleHook: router.hook
             });
         }
     }
