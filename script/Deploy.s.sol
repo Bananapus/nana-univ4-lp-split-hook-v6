@@ -88,6 +88,9 @@ contract DeployScript is Script, Sphinx {
     }
 
     function deploy() public sphinx {
+        // Chain-same constructor args — the chain-specific Uniswap V4 addresses are no longer in the constructor;
+        // they are passed into each fresh clone by `JBUniswapV4LPSplitHookDeployer.deployHookFor` via its own
+        // setChainSpecificConstants storage.
         bytes memory hookArgs = abi.encode(
             address(core.directory),
             core.permissions,
@@ -114,10 +117,11 @@ contract DeployScript is Script, Sphinx {
         }
 
         // Thread the actual implementation address from the active deployment path into the deployer.
+        // Deployer construction is chain-identical (CREATE2 inputs are byte-identical across chains); the
+        // chain-specific hook implementation is wired in afterwards via setChainSpecificConstants.
         JBUniswapV4LPSplitHook hookImpl = JBUniswapV4LPSplitHook(payable(hookImplAddress));
 
-        bytes memory deployerCtorArgs =
-            abi.encode(address(registry.registry), hookImpl, poolManager, positionManager, router.hook);
+        bytes memory deployerCtorArgs = abi.encode(address(registry.registry), safeAddress());
         JBUniswapV4LPSplitHookDeployer deployer = JBUniswapV4LPSplitHookDeployer(
             vm.computeCreate2Address({
                 salt: deployerSalt,
@@ -129,7 +133,11 @@ contract DeployScript is Script, Sphinx {
         );
         if (address(deployer).code.length == 0) {
             deployer = new JBUniswapV4LPSplitHookDeployer{salt: deployerSalt}({
-                addressRegistry: registry.registry,
+                addressRegistry: registry.registry, deployer: safeAddress()
+            });
+        }
+        if (address(deployer.hookImplementation()) == address(0)) {
+            deployer.setChainSpecificConstants({
                 newHookImplementation: hookImpl,
                 newPoolManager: poolManager,
                 newPositionManager: positionManager,

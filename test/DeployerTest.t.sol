@@ -50,13 +50,24 @@ contract DeployerTest is Test {
         );
 
         addressRegistry = new JBAddressRegistry();
-        deployer = new JBUniswapV4LPSplitHookDeployer({
-            addressRegistry: IJBAddressRegistry(address(addressRegistry)),
+        deployer = new JBUniswapV4LPSplitHookDeployer(IJBAddressRegistry(address(addressRegistry)), address(this));
+        deployer.setChainSpecificConstants({
             newHookImplementation: hookImpl,
             newPoolManager: IPoolManager(address(2)),
             newPositionManager: IPositionManager(address(3)),
             newOracleHook: IHooks(address(0))
         });
+    }
+
+    function _freshDeployer() internal returns (JBUniswapV4LPSplitHookDeployer) {
+        return new JBUniswapV4LPSplitHookDeployer(IJBAddressRegistry(address(addressRegistry)), address(this));
+    }
+
+    function test_deployHookFor_revertsBeforeConfigured() public {
+        JBUniswapV4LPSplitHookDeployer freshDeployer = _freshDeployer();
+
+        vm.expectRevert(JBUniswapV4LPSplitHookDeployer.JBUniswapV4LPSplitHookDeployer_NotConfigured.selector);
+        freshDeployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, bytes32(0));
     }
 
     // ─── CREATE deployment registers in address registry ─────────────
@@ -145,11 +156,5 @@ contract DeployerTest is Test {
 
     function test_HOOK_returnsImplementation() public view {
         assertEq(address(deployer.hookImplementation()), address(hookImpl));
-    }
-
-    function test_constructorStoresChainSpecificConstants() public view {
-        assertEq(address(deployer.poolManager()), address(2));
-        assertEq(address(deployer.positionManager()), address(3));
-        assertEq(address(deployer.oracleHook()), address(0));
     }
 }
