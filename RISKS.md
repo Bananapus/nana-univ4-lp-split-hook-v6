@@ -29,6 +29,8 @@ This file focuses on the lifecycle, pricing, and fee-accounting risks in `JBUnis
 
 - **LP range derived from bonding-curve state.** Tick bounds come from live Juicebox issuance and cash-out economics, not from a market oracle.
 - **Local versus total surplus.** Cash-out-rate derivation depends on whether the project uses local surplus or total surplus for cash outs.
+- **Pool-deploy cash-out floor.** `minCashOutReturn` can raise the deployment cash-out floor, but it cannot lower the
+  floor derived from the same cash-out rate used to size the LP position.
 - **Extreme weight scenarios.** Very low or zero effective issuance rates can make deployment invalid; very high weights can push tick bounds toward the edges.
 - **Zero-surplus fallback.** If cash-out rate is effectively zero, the hook falls back to a minimal issuance-centered range.
 - **Dust handling.** Very small token balances can produce inert or effectively zero-liquidity outcomes.
@@ -78,6 +80,8 @@ The design assumes trusted Juicebox and Uniswap components on the critical exter
 ### 7.2 Fee routing uses `minReturnedTokens: 0`
 
 Fee routing into the fee project intentionally does not set a local slippage floor. The fee project's own terminal and hook logic are expected to own that behavior.
+
+If the fee project has no primary terminal for the collected token, the fee project simply misses that collection and the full amount stays in the project's normal split-hook flow. This is accepted because fee-project terminal configuration is owned by the fee project, not by this LP split hook.
 
 ### 7.3 Permit2 approval bounds and cleanup
 

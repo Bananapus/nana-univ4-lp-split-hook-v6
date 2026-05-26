@@ -1251,19 +1251,19 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             // must not count ERC-20s already owed to projects that have not claimed their routed LP fees yet.
             uint256 spendableTerminalTokenBefore = _spendableTerminalTokenBalance(terminalToken);
 
-            // If the deployer did not provide an explicit slippage floor, derive one from the current cash-out rate.
-            // This keeps manual deployments protected while preserving an escape hatch for unusual market conditions.
+            // The LP size and ticks are derived from the current cash-out rate, so the cash-out used to fund the
+            // terminal-token side must not settle below that same rate floor. A caller-supplied minimum can only raise
+            // this floor; it cannot lower it.
             uint256 effectiveMinReturn = minCashOutReturn;
-            if (effectiveMinReturn == 0 && cashOutAmount > 0) {
-                uint256 cashOutRate = _getCashOutRate({
-                    projectId: projectId, terminalToken: terminalToken, controller: controller, ruleset: ruleset
+            uint256 cashOutRate = _getCashOutRate({
+                projectId: projectId, terminalToken: terminalToken, controller: controller, ruleset: ruleset
+            });
+            if (cashOutRate > 0) {
+                uint256 expectedReturn = mulDiv({x: cashOutAmount, y: cashOutRate, denominator: _WAD});
+                uint256 derivedMinReturn = mulDiv({
+                    x: expectedReturn, y: _CASH_OUT_SLIPPAGE_NUMERATOR, denominator: _CASH_OUT_SLIPPAGE_DENOMINATOR
                 });
-                if (cashOutRate > 0) {
-                    uint256 expectedReturn = mulDiv({x: cashOutAmount, y: cashOutRate, denominator: _WAD});
-                    effectiveMinReturn = mulDiv({
-                        x: expectedReturn, y: _CASH_OUT_SLIPPAGE_NUMERATOR, denominator: _CASH_OUT_SLIPPAGE_DENOMINATOR
-                    });
-                }
+                if (derivedMinReturn > effectiveMinReturn) effectiveMinReturn = derivedMinReturn;
             }
 
             // Ask the terminal to cash out first. This enforces the terminal's accounting and returns its reported
@@ -2161,9 +2161,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint256 beneficiaryTokenCount = 0;
         if (feeAmount > 0) {
             address feeTerminal = _primaryTerminalOf({projectId: feeProjectId, token: terminalToken});
-            // If no fee terminal is configured, the fee project simply misses this collection and the full amount
-            // stays in the project's normal split-hook flow.
             if (feeTerminal == address(0)) {
+                // If no fee terminal is configured, the fee project simply misses this collection and the full amount
+                // stays in the project's normal split-hook flow.
                 feeAmount = 0;
                 remainingAmount = amount;
             } else {

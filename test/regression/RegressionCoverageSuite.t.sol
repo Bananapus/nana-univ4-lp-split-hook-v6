@@ -147,6 +147,8 @@ contract TotalSurplusController {
 /// @notice Verifies that `_getCashOutRate` uses `currentTotalReclaimableSurplusOf`
 ///         when the project's ruleset has `scopeCashOutsToLocalBalances: false`.
 contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
+    MockSuckerRegistry internal mockRegistry;
+
     // Custom controller that supports the total-surplus flag.
     TotalSurplusController internal tsController;
 
@@ -156,7 +158,7 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
 
         // Redeploy hook with a real mock sucker registry so the `scopeCashOutsToLocalBalances: false`
         // path can call SUCKER_REGISTRY.remoteSurplusOf / remoteTotalSupplyOf without reverting.
-        MockSuckerRegistry mockRegistry = new MockSuckerRegistry();
+        mockRegistry = new MockSuckerRegistry();
         JBUniswapV4LPSplitHook hookImpl = new JBUniswapV4LPSplitHook(
             address(directory),
             IJBPermissions(address(permissions)),
@@ -233,6 +235,19 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
 
         // Accumulated project tokens should be cleared after deployment.
         assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "accumulated tokens should be zero after deploy");
+    }
+
+    function test_DeployPool_CallerMinimumCannotLowerDerivedCashOutFloor() public {
+        tsController.setScopeCashOutsToLocalBalances(PROJECT_ID, false);
+        mockRegistry.setRemoteValues({remoteSurplus_: 190e18, remoteSupply_: 100e18});
+        store.setSurplus(PROJECT_ID, 10e18);
+        store.setUseProvidedCashOutInputs(true);
+
+        _accumulateViaController(PROJECT_ID, 100e18);
+
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientBalance.selector);
+        vm.prank(owner);
+        hook.deployPool(PROJECT_ID, 1);
     }
 
     /// @notice Compare behaviour: deploy with `scopeCashOutsToLocalBalances = true`
