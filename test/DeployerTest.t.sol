@@ -59,6 +59,17 @@ contract DeployerTest is Test {
         });
     }
 
+    function _freshDeployer() internal returns (JBUniswapV4LPSplitHookDeployer) {
+        return new JBUniswapV4LPSplitHookDeployer(IJBAddressRegistry(address(addressRegistry)), address(this));
+    }
+
+    function test_deployHookFor_revertsBeforeConfigured() public {
+        JBUniswapV4LPSplitHookDeployer freshDeployer = _freshDeployer();
+
+        vm.expectRevert(JBUniswapV4LPSplitHookDeployer.JBUniswapV4LPSplitHookDeployer_NotConfigured.selector);
+        freshDeployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, bytes32(0));
+    }
+
     // ─── CREATE deployment registers in address registry ─────────────
 
     function test_deployHookFor_CREATE_registersInAddressRegistry() public {

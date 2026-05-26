@@ -21,6 +21,7 @@ contract JBUniswapV4LPSplitHookDeployer is IJBUniswapV4LPSplitHookDeployer {
     //*********************************************************************//
 
     error JBUniswapV4LPSplitHookDeployer_AlreadyConfigured();
+    error JBUniswapV4LPSplitHookDeployer_NotConfigured();
     error JBUniswapV4LPSplitHookDeployer_Unauthorized(address caller);
 
     //*********************************************************************//
@@ -98,6 +99,8 @@ contract JBUniswapV4LPSplitHookDeployer is IJBUniswapV4LPSplitHookDeployer {
         override
         returns (IJBUniswapV4LPSplitHook hook)
     {
+        if (address(hookImplementation) == address(0)) revert JBUniswapV4LPSplitHookDeployer_NotConfigured();
+
         hook = IJBUniswapV4LPSplitHook(
             salt == bytes32(0)
                 ? LibClone.clone(address(hookImplementation))
