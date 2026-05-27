@@ -241,7 +241,7 @@ contract PriceRatioRegression is LPSplitHookV4TestBase {
         );
 
         // The two formulas should produce different results.
-        assertTrue(oldCashOut != fixedCashOut, "BUG: old and new formulas should differ");
+        assertNotEq(oldCashOut, fixedCashOut, "BUG: old and new formulas should differ");
 
         // Compute liquidity utilization for BOTH formulas.
         uint256 oldUtil = _computeUtilization(

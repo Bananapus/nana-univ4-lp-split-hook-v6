@@ -37,7 +37,7 @@ contract RegressionDeployScriptRegression is Test {
 
         vm.etch(alreadyDeployed, hex"60006000");
 
-        assertTrue(alreadyDeployed.code.length != 0, "sanity: the alternate-factory deployment exists");
+        assertNotEq(alreadyDeployed.code.length, 0, "sanity: the alternate-factory deployment exists");
         assertFalse(
             harness.exposed_isDeployed(salt, creationCode, constructorArgs),
             "_isDeployed only checks the 0x4e59 factory and misses an existing deployment from another factory"

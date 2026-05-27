@@ -18,7 +18,7 @@ contract StaleTokenIdOfTest is LPSplitHookV4TestBase {
         // Deploy a pool so we have a position to rebalance
         _accumulateAndDeploy(PROJECT_ID, 100e18);
         poolTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        assertTrue(poolTokenId != 0, "Initial tokenId should be nonzero");
+        assertNotEq(poolTokenId, 0, "Initial tokenId should be nonzero");
     }
 
     /// @notice When rebalance would yield zero liquidity, it now reverts with InsufficientLiquidity.
@@ -66,7 +66,7 @@ contract StaleTokenIdOfTest is LPSplitHookV4TestBase {
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
 
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        assertTrue(newTokenId != 0, "tokenIdOf should be nonzero after normal rebalance");
-        assertTrue(newTokenId != originalTokenId, "tokenIdOf should change after rebalance");
+        assertNotEq(newTokenId, 0, "tokenIdOf should be nonzero after normal rebalance");
+        assertNotEq(newTokenId, originalTokenId, "tokenIdOf should change after rebalance");
     }
 }

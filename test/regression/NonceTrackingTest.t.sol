@@ -88,7 +88,7 @@ contract RegressionFixM31Test is Test {
         assertEq(addressRegistry.deployerOf(address(createHook)), address(deployer), "CREATE hook should be registered");
 
         // Both hooks should be different addresses.
-        assertTrue(address(create2Hook) != address(createHook), "hooks should be different addresses");
+        assertNotEq(address(create2Hook), address(createHook), "hooks should be different addresses");
     }
 
     /// @notice Multiple CREATE2 deploys followed by a CREATE deploy — all registered correctly.

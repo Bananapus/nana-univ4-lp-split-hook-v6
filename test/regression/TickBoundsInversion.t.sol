@@ -199,7 +199,7 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
         // Verify that both sqrtPrices are nonzero and distinct.
         assertGt(sqrtPriceCashOut, 0, "CashOut sqrtPrice should be nonzero");
         assertGt(sqrtPriceIssuance, 0, "Issuance sqrtPrice should be nonzero");
-        assertTrue(sqrtPriceCashOut != sqrtPriceIssuance, "CashOut and issuance sqrtPrices should differ");
+        assertNotEq(sqrtPriceCashOut, sqrtPriceIssuance, "CashOut and issuance sqrtPrices should differ");
     }
 
     /// @notice The fix ensures _calculateTickBounds produces a wide economic range
@@ -319,7 +319,7 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
 
         // Verify pool was deployed successfully.
         uint256 tokenId = hook.tokenIdOf(TEST_PROJECT_ID, address(lowTerminalToken));
-        assertTrue(tokenId != 0, "tokenIdOf should be nonzero after deploy");
+        assertNotEq(tokenId, 0, "tokenIdOf should be nonzero after deploy");
         assertTrue(hook.isPoolDeployed(TEST_PROJECT_ID, address(lowTerminalToken)), "projectDeployed should be true");
     }
 
