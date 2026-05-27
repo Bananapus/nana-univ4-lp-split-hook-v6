@@ -57,7 +57,7 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
 
         uint256 oldTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        assertTrue(oldTokenId != 0, "should have a position");
+        assertNotEq(oldTokenId, 0, "should have a position");
 
         // Seed PM with extra tokens so the burn can return them.
         projectToken.mint(address(positionManager), 50e18);
@@ -67,7 +67,7 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
 
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        assertTrue(newTokenId != oldTokenId, "tokenId should change after rebalance");
+        assertNotEq(newTokenId, oldTokenId, "tokenId should change after rebalance");
 
         // After rebalance, the hook should have processed tokens through burn → take → settle → mint.
         // The mock enforces real transfers, so if any step failed the tx would revert.
@@ -164,7 +164,7 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
 
         // Verify new position was created.
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        assertTrue(newTokenId != tokenId, "New position should be minted");
+        assertNotEq(newTokenId, tokenId, "New position should be minted");
     }
 
     // ─── Deploy: partial usage — sweep returns unused tokens ─────────
@@ -182,7 +182,7 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
 
         // Position should still be created successfully.
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        assertTrue(tokenId != 0, "Position should be created even with partial usage");
+        assertNotEq(tokenId, 0, "Position should be created even with partial usage");
 
         // SWEEP should have returned unused tokens — verify hook still has some.
         // (The exact amounts depend on cash-out math, but with 80% usage there

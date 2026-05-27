@@ -141,14 +141,14 @@ contract RebalanceTest is LPSplitHookV4TestBase {
     ///         (different from the original one created during deployPool).
     function test_Rebalance_UpdatesTokenId() public {
         uint256 originalTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        assertTrue(originalTokenId != 0, "original tokenId should be nonzero");
+        assertNotEq(originalTokenId, 0, "original tokenId should be nonzero");
 
         vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
 
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        assertTrue(newTokenId != 0, "new tokenId should be nonzero");
-        assertTrue(newTokenId != originalTokenId, "tokenIdOf should change after rebalance");
+        assertNotEq(newTokenId, 0, "new tokenId should be nonzero");
+        assertNotEq(newTokenId, originalTokenId, "tokenIdOf should change after rebalance");
     }
 
     // -----------------------------------------------------------------------
