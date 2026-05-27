@@ -28,7 +28,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID, 0);
 
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        assertTrue(tokenId != 0, "tokenIdOf should be nonzero after deployPool");
+        assertNotEq(tokenId, 0, "tokenIdOf should be nonzero after deployPool");
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -76,7 +76,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID, 0);
 
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        assertTrue(tokenId != 0, "tokenIdOf should be nonzero after deployPool");
+        assertNotEq(tokenId, 0, "tokenIdOf should be nonzero after deployPool");
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -401,6 +401,6 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID, 0);
 
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        assertTrue(tokenId != 0, "tokenIdOf should be nonzero after deployPool by permitted operator");
+        assertNotEq(tokenId, 0, "tokenIdOf should be nonzero after deployPool by permitted operator");
     }
 }

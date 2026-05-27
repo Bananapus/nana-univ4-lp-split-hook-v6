@@ -332,7 +332,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
 
         // Verify pool was deployed
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        assertTrue(tokenId != 0, "Pool should have been deployed by owner");
+        assertNotEq(tokenId, 0, "Pool should have been deployed by owner");
 
         // Verify the PositionManager mint was called
         assertTrue(positionManager.mintCallCount() > 0, "PositionManager mint should have been called");

@@ -108,7 +108,7 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID, 0);
 
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        assertTrue(tokenId != 0, "pool should be deployed by random user after 10x decay");
+        assertNotEq(tokenId, 0, "pool should be deployed by random user after 10x decay");
     }
 
     /// @notice Anyone can call deployPool when weight has decayed well past 10x.
@@ -126,7 +126,7 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
         vm.prank(randomUser);
         hook.deployPool(PROJECT_ID, 0);
 
-        assertTrue(hook.tokenIdOf(PROJECT_ID, address(terminalToken)) != 0, "pool should be deployed after 100x decay");
+        assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "pool should be deployed after 100x decay");
     }
 
     /// @notice When current weight is 0 (infinite decay), the permission check is bypassed
@@ -196,7 +196,7 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, 0);
 
-        assertTrue(hook.tokenIdOf(PROJECT_ID, address(terminalToken)) != 0, "owner should deploy without decay");
+        assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "owner should deploy without decay");
     }
 
     /// @notice Permitted operator can deploy when weight hasn't decayed enough.

@@ -40,7 +40,7 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
 
         // Verify pool was created (tokenId is nonzero)
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        assertTrue(tokenId != 0, "tokenIdOf should be nonzero after deploy");
+        assertNotEq(tokenId, 0, "tokenIdOf should be nonzero after deploy");
 
         // Verify accumulated tokens were cleared
         assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "accumulated should be 0 after deploy");
@@ -109,7 +109,7 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         // Deploy pool
         _accumulateAndDeploy(PROJECT_ID, 100e18);
         uint256 originalTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        assertTrue(originalTokenId != 0, "original tokenId should be nonzero");
+        assertNotEq(originalTokenId, 0, "original tokenId should be nonzero");
 
         // Mint tokens to PositionManager so decreaseLiquidity -> collect has tokens to give back
         projectToken.mint(address(positionManager), 50e18);
@@ -142,8 +142,8 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
 
         // Verify new tokenId differs from original
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        assertTrue(newTokenId != 0, "new tokenId should be nonzero");
-        assertTrue(newTokenId != originalTokenId, "tokenIdOf should change after rebalance");
+        assertNotEq(newTokenId, 0, "new tokenId should be nonzero");
+        assertNotEq(newTokenId, originalTokenId, "tokenIdOf should change after rebalance");
     }
 
     // -----------------------------------------------------------------------
@@ -272,9 +272,9 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         uint256 tokenId1 = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         uint256 tokenId3 = hook.tokenIdOf(PROJECT_3, address(terminalToken));
 
-        assertTrue(tokenId1 != 0, "PROJECT_ID tokenId should be nonzero");
-        assertTrue(tokenId3 != 0, "PROJECT_3 tokenId should be nonzero");
-        assertTrue(tokenId1 != tokenId3, "tokenIds should differ between projects");
+        assertNotEq(tokenId1, 0, "PROJECT_ID tokenId should be nonzero");
+        assertNotEq(tokenId3, 0, "PROJECT_3 tokenId should be nonzero");
+        assertNotEq(tokenId1, tokenId3, "tokenIds should differ between projects");
 
         // Verify accumulated tokens were cleared for both
         assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "PROJECT_ID accumulated should be 0 after deploy");
@@ -346,7 +346,7 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
 
         // Verify pool was created
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        assertTrue(tokenId != 0, "tokenIdOf should be nonzero after deploy");
+        assertNotEq(tokenId, 0, "tokenIdOf should be nonzero after deploy");
 
         // Verify accumulated tokens were cleared
         assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "accumulated should be 0 after deploy");
