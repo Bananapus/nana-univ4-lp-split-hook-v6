@@ -75,7 +75,7 @@ contract NextTokenIdAfterMintRegression is LPSplitHookV4TestBase {
 
         // Old pattern: read before, store that value
         uint256 oldPatternStored = initialNextId; // Read before anything happened
-        assertTrue(oldPatternStored != ourPositionId, "BUG: old pattern stores 1, but our position is 2");
+        assertNotEq(oldPatternStored, ourPositionId, "BUG: old pattern stores 1, but our position is 2");
         assertEq(
             oldPatternStored, frontRunnerPositionId, "BUG: old pattern accidentally points to front-runner's position"
         );

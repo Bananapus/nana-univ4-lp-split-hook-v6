@@ -102,7 +102,7 @@ contract PermissionlessDeployGriefingTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID, 0);
 
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "pool should be deployed");
-        assertTrue(hook.tokenIdOf(PROJECT_ID, address(terminalToken)) != 0, "pool should exist for highest-value token");
+        assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "pool should exist for highest-value token");
     }
 
     // ─────────────────────────────────────────────────────────────────────

@@ -399,7 +399,7 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
 
         // 8. Verify: position still exists (rebalance completed successfully)
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        assertTrue(newTokenId != 0, "Position should exist after successful rebalance");
+        assertNotEq(newTokenId, 0, "Position should exist after successful rebalance");
     }
 
     // ─────────────────────────────────────────────────────────────────────

@@ -23,15 +23,13 @@ contract DeployPositionManagerAddressesForkTest is Test {
             try vm.createSelectFork(chainName) {
                 _assertCodeAt({chainName: chainName, pm: pm});
             } catch {
-                // RPC not configured in this environment; skip rather than fail.
-                console2.log(string.concat("[SKIP] No RPC configured for ", chainName));
+                vm.skip(true);
             }
         } else {
             try vm.createSelectFork(chainName, forkBlock) {
                 _assertCodeAt({chainName: chainName, pm: pm});
             } catch {
-                // RPC not configured in this environment; skip rather than fail.
-                console2.log(string.concat("[SKIP] No RPC configured for ", chainName));
+                vm.skip(true);
             }
         }
     }

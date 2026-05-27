@@ -109,7 +109,7 @@ contract DeployerTest is Test {
         vm.stopPrank();
 
         // Both should be different addresses.
-        assertTrue(address(hook1) != address(hook2), "hooks should be different");
+        assertNotEq(address(hook1), address(hook2), "hooks should be different");
 
         // Both should be registered.
         assertEq(addressRegistry.deployerOf(address(hook1)), address(deployer), "hook1 not registered");

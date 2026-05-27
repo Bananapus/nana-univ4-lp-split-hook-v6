@@ -65,7 +65,7 @@ contract ReinitAfterRenounceTest is Test {
         assertEq(hook.feeProjectId(), 2);
         assertEq(hook.feePercent(), 3800);
         // POOL_MANAGER doubles as the "initialized" sentinel — non-zero after `initialize`.
-        assertTrue(address(hook.poolManager()) != address(0));
+        assertNotEq(address(hook.poolManager()), address(0));
 
         // Attacker tries to re-initialize with malicious parameters
         vm.prank(attacker);

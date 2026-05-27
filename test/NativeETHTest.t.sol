@@ -189,7 +189,7 @@ contract NativeETHTest is LPSplitHookV4TestBase {
 
         // Verify pool was created (tokenId is nonzero)
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, NATIVE_TOKEN);
-        assertTrue(tokenId != 0, "tokenIdOf should be nonzero after deploy");
+        assertNotEq(tokenId, 0, "tokenIdOf should be nonzero after deploy");
 
         // Verify PositionManager was called
         assertEq(positionManager.mintCallCount(), 1, "PositionManager mint should be called once");

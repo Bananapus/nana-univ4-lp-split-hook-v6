@@ -159,7 +159,7 @@ contract RegressionPreinitializedPoolPriceRegression is LPSplitHookV4TestBase {
 
         // Pick a price still inside the computed LP band, but not equal to the exact midpoint that deployPool expects.
         uint160 inBandSqrtPrice = TickMath.getSqrtPriceAtTick(tickLower + hook.TICK_SPACING());
-        assertTrue(inBandSqrtPrice != expectedSqrtPrice, "precondition: in-band price must differ from midpoint");
+        assertNotEq(inBandSqrtPrice, expectedSqrtPrice, "precondition: in-band price must differ from midpoint");
         assertTrue(inBandSqrtPrice > TickMath.getSqrtPriceAtTick(tickLower), "precondition: price stays in-band");
         assertTrue(inBandSqrtPrice < TickMath.getSqrtPriceAtTick(tickUpper), "precondition: price stays in-band");
 

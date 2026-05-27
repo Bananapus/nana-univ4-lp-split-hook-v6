@@ -141,6 +141,6 @@ contract NonPrimaryBalanceSelectionDoSTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, 0);
 
-        assertTrue(hook.tokenIdOf(PROJECT_ID, address(tokenB)) != 0, "deploy should use the selected primary token");
+        assertNotEq(hook.tokenIdOf(PROJECT_ID, address(tokenB)), 0, "deploy should use the selected primary token");
     }
 }

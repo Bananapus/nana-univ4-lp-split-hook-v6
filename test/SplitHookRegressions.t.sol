@@ -48,14 +48,14 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
     /// @notice rebalanceLiquidity succeeds when called by the project owner.
     function test_H2_rebalance_owner_succeeds() public {
         uint256 originalTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        assertTrue(originalTokenId != 0, "should have an active position");
+        assertNotEq(originalTokenId, 0, "should have an active position");
 
         vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
 
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        assertTrue(newTokenId != 0, "new tokenId should be nonzero");
-        assertTrue(newTokenId != originalTokenId, "tokenId should change after rebalance");
+        assertNotEq(newTokenId, 0, "new tokenId should be nonzero");
+        assertNotEq(newTokenId, originalTokenId, "tokenId should change after rebalance");
     }
 
     /// @notice rebalanceLiquidity succeeds when called by an authorized operator.
@@ -71,8 +71,8 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
 
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        assertTrue(newTokenId != 0, "new tokenId should be nonzero");
-        assertTrue(newTokenId != originalTokenId, "tokenId should change after authorized rebalance");
+        assertNotEq(newTokenId, 0, "new tokenId should be nonzero");
+        assertNotEq(newTokenId, originalTokenId, "tokenId should change after authorized rebalance");
     }
 
     /// @notice rebalanceLiquidity reverts with InsufficientLiquidity when the new
