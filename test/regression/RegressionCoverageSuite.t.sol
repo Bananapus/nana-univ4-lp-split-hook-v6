@@ -250,7 +250,7 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID, 1);
     }
 
-    /// @notice Compare behaviour: deploy with `scopeCashOutsToLocalBalances = true`
+    /// @notice Compare behavior: deploy with `scopeCashOutsToLocalBalances = true`
     ///         (local surplus path) and `false` (total surplus path). Both must succeed.
     function test_LocalVsTotalSurplus_BothPathsSucceed() public {
         // ── Path A: local surplus (default, flag is false) ──
