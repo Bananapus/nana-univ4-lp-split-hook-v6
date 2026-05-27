@@ -4,7 +4,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Bananapus/nana-univ4-lp-split-hook-v6"
+    "url": "git+https://github.com/Bananapus/nana-univ4-lp-split-hook-v6.git"
   },
   "files": [
     "foundry.toml",
