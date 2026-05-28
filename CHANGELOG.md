@@ -11,6 +11,18 @@ This repo was not part of the deployed v5 ecosystem that the top-level changelog
 - `IJBUniswapV4LPSplitHook`
 - `IJBUniswapV4LPSplitHookDeployer`
 
+## 0.0.53 — Continuous LP growth: replace post-deploy burn with `addLiquidity`
+
+- **The hook no longer burns.** Post-deployment, `processSplitWith` now ACCUMULATES reserved-token inflows into `accumulatedProjectTokens` (the same ledger used pre-deployment) instead of burning them. Supply-reducing burns are now a protocol-layer split-routing decision (route a reserved split to `{projectId:0, hook:0, beneficiary:0xdead}`), not this hook's job. Removed `_burnReceivedTokens` / `_burnProjectTokens` and the `TokensBurned` event.
+- **New `addLiquidity(projectId, terminalToken, minCashOutReturn)`** converts post-deploy accumulation into more protocol-owned liquidity. Same authorization model as `deployPool` (permissionless once the ruleset weight has decayed 10x, else `SET_BUYBACK_POOL`). It:
+  - rejects the add if the pool spot price deviates from the oracle TWAP by more than `_MAX_TWAP_DEVIATION_TICKS` (~200, ≈2%) or the TWAP is unavailable (30-minute window) — guarding against JIT/sandwich manipulation;
+  - cashes out the optimal fraction DIRECTLY through the bonding curve via the buyback hook's `cashOutMinReclaimed` skip metadata (targeted at the resolved buyback-hook registry), never routing the funding cash-out through the AMM it feeds;
+  - tops up the active position (`INCREASE_LIQUIDITY`) while the live cash-out/issuance corridor is within `_RERANGE_THRESHOLD_TICKS` (~400, ≈4%) of the active ticks, else mints a new position at the live corridor and retires the old one.
+- **Re-ranging** keeps a single active position plus a set of retired positions; `collectAndRouteLPFees` now collects fees from the active AND every retired position, routing the terminal-token side and carrying the project-token side back into the accumulation ledger.
+- **Dust is carried forward, never burned** — leftover project tokens (from deploy, add, rebalance, and collected project-token fees) return to `accumulatedProjectTokens`; leftover terminal tokens are deposited to the project's terminal.
+- New state: `activeTickLowerOf`, `activeTickUpperOf`, `retiredTokenIdsOf`. New errors: `JBUniswapV4LPSplitHook_PriceDeviationTooHigh`, `JBUniswapV4LPSplitHook_TwapUnavailable`. New event: `LiquidityAdded`.
+- `package.json`: version 0.0.52 -> 0.0.53.
+
 ## 0.0.40 — Bump nana-core-v6 to 0.0.52
 
 - `package.json`: version 0.0.39 -> 0.0.40, core dep ^0.0.49 -> ^0.0.52, univ4-router-v6 dep ^0.0.30 -> ^0.0.31 (the matching downstream bump for core 0.0.52).

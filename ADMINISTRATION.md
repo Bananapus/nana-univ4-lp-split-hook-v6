@@ -33,6 +33,7 @@
 | Contract | Function | Who Can Call | Effect |
 | --- | --- | --- | --- |
 | `JBUniswapV4LPSplitHook` | `deployPool(...)` | Project owner or `SET_BUYBACK_POOL` delegate, and eventually permissionless after the decay condition | Irreversibly transitions a project path into deployed LP mode |
+| `JBUniswapV4LPSplitHook` | `addLiquidity(...)` | Project owner or `SET_BUYBACK_POOL` delegate, and eventually permissionless after the decay condition | Converts accumulated post-deploy reserved tokens into more liquidity (top-up or re-range), guarded by an oracle-TWAP deviation check |
 | `JBUniswapV4LPSplitHook` | `rebalanceLiquidity(...)` | Project owner or `SET_BUYBACK_POOL` delegate | Rebuilds the LP position within the current economic envelope |
 | `JBUniswapV4LPSplitHook` | `claimFeeTokensFor(...)` | Project owner or `SET_BUYBACK_POOL` delegate | Claims fee-project token balances |
 | `JBUniswapV4LPSplitHookDeployer` | `deployHookFor(...)` | Anyone | Deploys and initializes a new hook clone |

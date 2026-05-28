@@ -14,7 +14,7 @@ This file focuses on the lifecycle, pricing, and fee-accounting risks in `JBUnis
 |----------|------|----------------|------------------|
 | P0 | Wrong LP bounds or rebalance math | Bad price math can misplace treasury liquidity and destroy value. | Bound validation, lifecycle tests, and careful review of deployment/rebalance formulas. |
 | P1 | Public first-pool initialization | Outside actors can initialize the target pool first. | Contract-side range validation and operator awareness. |
-| P1 | Post-deploy burn and fee-accounting assumptions | After deployment the hook changes behavior sharply, and tracked fee value must remain separate from burnable balances. | Lifecycle docs, claim-segregation tests, and accounting invariants. |
+| P1 | Post-deploy accumulate / add-liquidity and fee-accounting assumptions | After deployment, `addLiquidity` cashes out directly through the bonding curve and adds liquidity under a TWAP-deviation guard; tracked fee value must remain separate from LP-spendable balances. | Lifecycle docs, TWAP-guard + claim-segregation tests, and accounting invariants. |
 
 ## 1. Trust Assumptions
 
@@ -34,13 +34,14 @@ This file focuses on the lifecycle, pricing, and fee-accounting risks in `JBUnis
 - **Extreme weight scenarios.** Very low or zero effective issuance rates can make deployment invalid; very high weights can push tick bounds toward the edges.
 - **Zero-surplus fallback.** If cash-out rate is effectively zero, the hook falls back to a minimal issuance-centered range.
 - **Dust handling.** Very small token balances can produce inert or effectively zero-liquidity outcomes.
-- **Rebalance value conservation.** Rebalance conserves value only within rounding and leftover handling; extra leftover tokens are burned or returned, not magically preserved in-range.
+- **Rebalance value conservation.** Rebalance conserves value only within rounding and leftover handling; extra leftover project tokens are carried back into the accumulation ledger and leftover terminal tokens are returned to the project terminal — never burned.
 - **Impermanent loss amplification.** This is concentrated liquidity. If price exits the range, the position becomes single-sided.
 - **Accumulation-period idle capital.** Before deployment, accumulated reserved tokens are idle.
 
 ## 3. MEV And Timing Risks
 
 - **Rebalance sandwich risk.** Rebalance depends on spot pool price at execution time. A searcher can try to skew the price around the transaction.
+- **`addLiquidity` sandwich/JIT risk.** `addLiquidity` mints at the pool's live price, so it is bounded by a TWAP-deviation check (rejects adds whose spot is too far from the oracle TWAP, and refuses to add when the TWAP is unavailable) and by a force-direct cash-out that never routes through the AMM being fed.
 - **Permissionless fee collection timing.** Anyone can trigger some fee-collection paths, so adversarial timing is possible even if direct extraction is limited.
 - **Public pool pre-initialization.** The target pool can be initialized before the hook deploys its first position. The contract validates the existing price against the project's economic tick bounds and reverts if out of range — see §7.4.
 
@@ -48,13 +49,14 @@ This file focuses on the lifecycle, pricing, and fee-accounting risks in `JBUnis
 
 - **Authorization is narrower than fee collection.** Rebalance is owner or delegate gated, but fee collection is not always gated.
 - **Consecutive rebalance safety matters.** New position IDs must only be stored after successful remint.
-- **Leftover token handling matters.** Leftover project tokens are burned; leftover terminal tokens are returned to project balance.
-- **Fee collection order matters.** Collected fees should be separated before burning and reminting principal.
+- **Leftover token handling matters.** Leftover project tokens are carried back into the accumulation ledger; leftover terminal tokens are returned to project balance. Nothing is burned.
+- **Fee collection order matters.** Collected fees should be separated before reminting principal; the project-token fee side is carried into the accumulation ledger (not burned).
 - **Spot price is used during rebalance.** Operators should treat rebalance timing as economically sensitive.
 
 ## 5. Access Control Risks
 
 - **`deployPool` can become permissionless after weight decay.** This is intentional so tokens do not remain locked forever.
+- **`addLiquidity` shares `deployPool`'s authorization** (permissionless once the ruleset weight has decayed 10x, else `SET_BUYBACK_POOL`). It reverts if the pool spot price deviates from the oracle TWAP by more than the bound, or if the TWAP is unavailable — accumulation continues safely until it can run.
 - **`rebalanceLiquidity` stays gated.** Absent or hostile operators can leave a stale position un-rebalanced.
 - **`claimFeeTokensFor` is gated.** Unclaimed fee tokens or fee credits can sit in the hook indefinitely.
 - **`initialize` is one-shot.** First-call semantics on clones matter.
@@ -65,7 +67,8 @@ This file focuses on the lifecycle, pricing, and fee-accounting risks in `JBUnis
 - No value creation from rebalance.
 - Fee routing completeness for collected fees.
 - `tokenIdOf` stays nonzero for deployed project paths unless the whole transaction reverts.
-- `accumulatedProjectTokens` clears on successful deployment.
+- `accumulatedProjectTokens` is consumed by a successful deploy/add down to at most an unpaired remainder, which is carried forward (never burned); post-deploy inflows re-accumulate into it.
+- `addLiquidity` never mints at a price far from the oracle TWAP, and its funding cash-out never routes through the AMM.
 - Cross-project isolation holds across all keyed storage.
 - Fee-token and fee-credit bookkeeping match actual claimable balances.
 - Tick bounds stay valid, aligned, and ordered.

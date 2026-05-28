@@ -215,10 +215,11 @@ contract GeomeanLPForkTest is ForkDeployHelper {
             assertTrue(tokenId != 0, string.concat("no position NFT at index ", vm.toString(i)));
             uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
             assertTrue(posLiq > 0, string.concat("zero liquidity at index ", vm.toString(i)));
-            assertEq(
+            // Accumulation consumed by the deploy; only an unpaired remainder is carried forward (never burned).
+            assertLt(
                 hook.accumulatedProjectTokens(pid),
-                0,
-                string.concat("accumulated not cleared at index ", vm.toString(i))
+                amounts[i] / 10,
+                string.concat("bulk consumed; only remainder carried at index ", vm.toString(i))
             );
             PoolKey memory key = hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN);
             PoolId poolId = key.toId();
@@ -318,10 +319,11 @@ contract GeomeanLPForkTest is ForkDeployHelper {
             assertTrue(tokenId != 0, string.concat("no USDC position NFT at index ", vm.toString(i)));
             uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
             assertTrue(posLiq > 0, string.concat("zero USDC liquidity at index ", vm.toString(i)));
-            assertEq(
+            // Accumulation consumed by the deploy; only an unpaired remainder is carried forward (never burned).
+            assertLt(
                 hook.accumulatedProjectTokens(pid),
-                0,
-                string.concat("USDC accumulated not cleared at index ", vm.toString(i))
+                50_000e18 / 10,
+                string.concat("bulk consumed; only remainder carried at index ", vm.toString(i))
             );
             emit log_named_uint("  USDC amount", usdcAmounts[i]);
             emit log_named_uint("  position liquidity", posLiq);

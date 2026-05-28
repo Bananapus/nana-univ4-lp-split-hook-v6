@@ -6,14 +6,14 @@
 
 ## System Overview
 
-`JBUniswapV4LPSplitHook` is a staged split hook: before LP deployment it accumulates reserved tokens; after deployment it manages the position, fee collection, and rebalance lifecycle. `JBUniswapV4LPSplitHookDeployer` creates deterministic instances for projects that want this liquidity policy.
+`JBUniswapV4LPSplitHook` is a staged split hook: before LP deployment it accumulates reserved tokens; after deployment it keeps accumulating later inflows and grows the position via `addLiquidity`, while managing fee collection and the rebalance lifecycle. `JBUniswapV4LPSplitHookDeployer` creates deterministic instances for projects that want this liquidity policy.
 
 ## Core Invariants
 
 - The LP range should stay inside the project's economic envelope rather than float arbitrarily.
 - The hook has materially different pre-deployment and post-deployment behavior.
 - Fee routing must distinguish project-token fees from terminal-token fees.
-- Once a pool is deployed, the hook permanently leaves accumulation mode for that project and future split inflows should be burned or routed, not re-accumulated.
+- A project's accumulation ledger is the single sink for reserved-token inflows both before AND after pool deployment; the hook never burns. Pre-deploy, `deployPool` consumes the accumulation; post-deploy, `addLiquidity` does.
 - A hook instance should map a project and terminal-token pair to one pool path.
 
 ## Modules
@@ -41,28 +41,28 @@ authorized deploy call
   -> cashes out the optimal fraction for terminal tokens
   -> deploys or uses the target pool and mints the concentrated LP position
 post-deployment
-  -> new reserved tokens are burned to avoid LP dilution
-  -> fees can be collected and the position can be rebalanced
+  -> new reserved tokens keep accumulating; `addLiquidity` converts them into more liquidity (top-up while the live corridor matches the active position, else re-range into a new position), validating the pool spot price against the oracle TWAP and cashing out the optimal fraction directly through the bonding curve
+  -> fees can be collected (from the active and all retired positions) and the position can be rebalanced
 ```
 
 ## Accounting Model
 
 The hook owns local staging and LP-management state. It does not own reserved-token issuance or terminal accounting.
 
-It also owns claim segregation for routed LP fees. Outstanding fee-token claims are tracked separately so project-token burn paths do not consume fee assets being held for beneficiaries.
+It also owns claim segregation for routed LP fees. Outstanding fee-token claims are tracked separately so the hook's accumulation and LP-funding paths do not consume fee assets being held for beneficiaries.
 
 ## Security Model
 
 - The main risks are price-bound math, optimal cash-out math, and staged behavior drift.
 - Rebalance is effectively a remove-collect-recompute-mint pipeline and should be reviewed as one unit.
 - Pool initialization race conditions matter on first deployment.
-- Burn logic, fee routing, and outstanding-claim accounting are coupled.
+- Accumulation/LP-funding logic, fee routing, and outstanding-claim accounting are coupled.
 
 ## Safe Change Guide
 
 - Review pre-deployment and post-deployment behavior together whenever state layout changes.
 - Keep price-bound math, optimal cash-out math, and rebalance logic synchronized.
-- If you change fee routing or burn behavior, re-check outstanding fee-token claim segregation and in-flight fee routing assumptions.
+- If you change fee routing or accumulation/leftover-carry behavior, re-check outstanding fee-token claim segregation and in-flight fee routing assumptions.
 - If fee routing changes, inspect downstream fee-project behavior and claim paths.
 - Keep deployer assumptions aligned with the address registry, deployment scripts, immutable implementation address, and one-shot V4 constants used to preserve the deployer address across chains.
 
@@ -70,7 +70,7 @@ It also owns claim segregation for routed LP fees. Outstanding fee-token claims 
 
 - staged accumulation, deployment, and rebalance lifecycle:
   `test/IntegrationLifecycle.t.sol`
-- fee-token claim segregation against burn paths:
+- fee-token claim segregation against the accumulation / LP-funding paths:
   `test/regression/FeeTokenTerminalAccountingRegression.t.sol`
 - split-hook staging and accounting invariants:
   `test/invariant/LPSplitHookInvariant.t.sol`

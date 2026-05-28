@@ -10,7 +10,8 @@
 
 - If you edit deployment behavior, verify fee-project and fee-percent initialization, the immutable implementation address, one-shot V4 constants, same-address CREATE2 assumptions, and address-registry registration.
 - If you edit deployPool or rebalance logic, check permission gates and weight-decay assumptions together.
-- If you edit fee collection, confirm project-token burn behavior and terminal-token routing still align.
+- If you edit `addLiquidity`, top-up vs. re-range, or the TWAP guard, re-check the decay-gated authorization, the `_MAX_TWAP_DEVIATION_TICKS` / `_RERANGE_THRESHOLD_TICKS` thresholds, the force-direct cash-out metadata, and retired-position fee collection together.
+- If you edit fee collection, confirm the project-token fee carry-into-accumulation and terminal-token routing still align, and that collection still covers active AND retired positions.
 
 ## Common Failure Modes
 

@@ -283,10 +283,11 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
     // Test 1: deployPool re-entry via processSplitWith
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice A malicious controller+terminal re-enters processSplitWith during deployPool's
-    ///         cashOutTokensOf call. The re-entry hits `hasDeployedPool == true` and routes to the
-    ///         burn path instead of accumulating. No double-accumulation.
-    function test_reentrancy_deployPool_cannotDoubleAccumulate() public {
+    /// @notice A malicious controller+terminal re-enters processSplitWith during deployPool's cashOutTokensOf call.
+    ///         CEI guards the original accumulation: `_executeAddToPosition` zeroes the ledger before the cash-out, so
+    ///         the deploy mints with its own pre-read snapshot and the re-entry can only accumulate ITS OWN fresh
+    ///         inflow (10e18) — never double-counting or stealing the original deploy amount. No burn occurs.
+    function test_reentrancy_deployPool_reentryAccumulatesSafely() public {
         // 1. Create malicious controller+terminal
         ReentrantControllerTerminal malicious =
             new ReentrantControllerTerminal(hook, projectToken, terminalToken, address(store), PROJECT_ID);
@@ -326,28 +327,29 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, 0);
 
-        // 6. Verify re-entry was attempted and succeeded (via burn path)
+        // 6. Verify re-entry was attempted and succeeded (via accumulation path)
         assertTrue(malicious.reentrancyAttempted(), "Re-entry should have been attempted during cashOutTokensOf");
         assertTrue(
-            malicious.reentrancySucceeded(), "Re-entry should succeed (burn path, not revert) once deployment is set"
+            malicious.reentrancySucceeded(), "Re-entry should succeed (accumulate path, not revert) once deployed"
         );
 
-        // 7. Verify: accumulatedProjectTokens was NOT inflated by re-entry.
-        // During re-entry, `hasDeployedPool` is already true, so the hook routes to the burn path.
-        // After deployPool completes, accumulatedProjectTokens is cleared to 0.
-        assertEq(
-            hook.accumulatedProjectTokens(PROJECT_ID),
-            0,
-            "No double-accumulation: tokens burned during re-entry, accumulated cleared by deploy"
-        );
-
-        // 8. Verify: during re-entry, accumulated balance was unchanged
-        // (burn path does not modify accumulatedProjectTokens)
+        // 7. During re-entry, the ledger had been zeroed by `_executeAddToPosition` (CEI), so the re-entry's own fresh
+        // 10e18 inflow is all that was accumulated — the original 1000e18 deploy amount was not visible to it and
+        // could not be double-counted.
         assertEq(
             malicious.accumulatedDuringReentry(),
-            accBefore,
-            "Re-entry should NOT increase accumulated balance (burn path taken)"
+            10e18,
+            "Re-entry accumulates only its own fresh inflow; original deploy amount is zeroed pre-cash-out"
         );
+
+        // 8. After deployPool completes, the ledger holds exactly the re-entry's inflow (the original 1000e18 was
+        // consumed by the deploy mint with no leftover under the mock's 100% usage). No tokens are lost or burned.
+        assertEq(
+            hook.accumulatedProjectTokens(PROJECT_ID),
+            10e18,
+            "Re-entry inflow is preserved for a later addLiquidity; original consumed by deploy, nothing burned"
+        );
+        assertEq(malicious.burnCallCount(), 0, "no burn should occur during deploy or re-entry");
 
         // 9. Verify: pool deployed successfully despite re-entry
         assertTrue(

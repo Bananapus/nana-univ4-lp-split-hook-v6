@@ -9,13 +9,14 @@
 
 1. Reserved-token splits accumulate project tokens before a pool exists.
 2. A pool is deployed for a chosen terminal token and bounded by project issuance and cash-out economics.
-3. After deployment, newly received reserved tokens are treated differently and fees can be collected or rebalanced over time.
+3. After deployment, newly received reserved tokens keep accumulating; `addLiquidity` converts them into more liquidity (top-up or re-range under an oracle-TWAP deviation guard), and fees can be collected (from active and retired positions) or the position rebalanced over time. The hook never burns.
 
 ## High-Risk Areas
 
 - Pool deployment math: issuance and cash-out rates define the initial liquidity shape.
-- Stage transition: accumulation mode and post-deployment behavior are intentionally different.
-- Fee routing: collected fees are split across fee project, project balance, and burned project tokens.
+- Stage transition: pre-deploy uses `deployPool` to consume accumulation; post-deploy uses `addLiquidity` (top-up/re-range, TWAP-guarded). Accumulation is the single inflow sink in both phases.
+- `addLiquidity` add path: TWAP-deviation guard, force-direct bonding-curve cash-out, and top-up-vs-re-range selection define how new liquidity is added safely.
+- Fee routing: the terminal-token side of collected fees is split across fee project and project balance; the project-token side is carried back into the accumulation ledger (never burned).
 - Rebalancing: position teardown and re-minting can change treasury exposure materially.
 
 ## Tests To Trust First

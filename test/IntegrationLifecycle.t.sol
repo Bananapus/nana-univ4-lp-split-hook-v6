@@ -84,6 +84,7 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
 
         uint256 payCountBefore = terminal.payCallCount();
         uint256 burnCountBefore = controller.burnCallCount();
+        uint256 accumulatedBefore = hook.accumulatedProjectTokens(PROJECT_ID);
 
         // Collect and route fees
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
@@ -91,11 +92,12 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         // Verify terminal token fees were routed (pay was called for fee project)
         assertGt(terminal.payCallCount(), payCountBefore, "terminal.pay should be called to route terminal token fees");
 
-        // Verify project token fees were burned
-        assertGt(
-            controller.burnCallCount(),
-            burnCountBefore,
-            "controller.burnTokensOf should be called for project token fees"
+        // Verify project token fees were carried into the accumulation ledger, not burned.
+        assertEq(controller.burnCallCount(), burnCountBefore, "no burn should occur when collecting fees");
+        assertEq(
+            hook.accumulatedProjectTokens(PROJECT_ID),
+            accumulatedBefore + projectFeeAmount,
+            "project-token fees should be carried into the accumulation ledger"
         );
     }
 
@@ -286,20 +288,19 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
     }
 
     // -----------------------------------------------------------------------
-    // 6. Full lifecycle: tokens are burned after pool is deployed
+    // 6. Full lifecycle: tokens accumulate after pool is deployed (no burn)
     // -----------------------------------------------------------------------
 
-    /// @notice After pool deployment, calling processSplitWith with new tokens should
-    ///         burn them rather than accumulate. Accumulated balance stays 0.
-    function test_FullLifecycle_BurnAfterDeploy() public {
-        // Deploy pool (this sets projectDeployed[PROJECT_ID] = true)
+    /// @notice After pool deployment, calling processSplitWith with new tokens accumulates them for a later
+    ///         `addLiquidity` rather than burning. The hook never burns.
+    function test_FullLifecycle_AccumulatesAfterDeploy() public {
+        // Deploy pool (this sets hasDeployedPool[PROJECT_ID] = true)
         _accumulateAndDeploy(PROJECT_ID, 100e18);
 
-        // Record burn count after deploy (deploy may burn leftovers)
         uint256 burnCountAfterDeploy = controller.burnCallCount();
+        uint256 accumulatedAfterDeploy = hook.accumulatedProjectTokens(PROJECT_ID);
 
-        // Send new tokens to hook and call processSplitWith
-        // Since projectDeployed is true, tokens should be burned
+        // Send new tokens to hook and call processSplitWith. Since the pool is deployed, tokens accumulate.
         uint256 newAmount = 50e18;
         projectToken.mint(address(controller), newAmount);
         vm.startPrank(address(controller));
@@ -308,17 +309,13 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         hook.processSplitWith(context);
         vm.stopPrank();
 
-        // Verify tokens were burned (not accumulated)
-        assertGt(
-            controller.burnCallCount(),
-            burnCountAfterDeploy,
-            "controller.burnTokensOf should be called after pool deployment"
+        // Verify tokens were accumulated, not burned.
+        assertEq(controller.burnCallCount(), burnCountAfterDeploy, "no burn should occur after pool deployment");
+        assertEq(
+            hook.accumulatedProjectTokens(PROJECT_ID),
+            accumulatedAfterDeploy + newAmount,
+            "new tokens should accumulate after deploy"
         );
-        assertEq(controller.lastBurnProjectId(), PROJECT_ID, "burn should target PROJECT_ID");
-        assertEq(controller.lastBurnHolder(), address(hook), "burn holder should be the hook");
-
-        // Verify accumulated stays 0 (tokens were burned, not accumulated)
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "accumulatedProjectTokens should remain 0 after burn");
     }
 
     // -----------------------------------------------------------------------

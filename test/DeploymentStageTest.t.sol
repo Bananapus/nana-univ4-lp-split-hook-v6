@@ -198,17 +198,17 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 11. processSplitWith — burns new tokens after pool deployed
+    // 11. processSplitWith — accumulates new tokens after pool deployed (no burn)
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice After the pool has been deployed by the owner, processSplitWith should
-    ///         burn the newly received project tokens via the controller.
-    function test_ProcessSplit_BurnsNewTokens() public {
+    /// @notice After the pool has been deployed, processSplitWith ACCUMULATES the newly received project tokens for a
+    ///         later `addLiquidity` rather than burning them. The hook never burns.
+    function test_ProcessSplit_AccumulatesNewTokensAfterDeploy() public {
         // Deploy pool first (as owner)
         _accumulateAndDeploy(PROJECT_ID, 100e18);
 
-        // Reset burn tracking after deploy (deploy may have burned leftovers)
         uint256 burnCountAfterDeploy = controller.burnCallCount();
+        uint256 accumulatedAfterDeploy = hook.accumulatedProjectTokens(PROJECT_ID);
 
         // Send new tokens via controller
         uint256 newAmount = 50e18;
@@ -220,32 +220,29 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         hook.processSplitWith(context);
         vm.stopPrank();
 
-        // Verify burn was called for the newly received tokens
-        assertTrue(
-            controller.burnCallCount() > burnCountAfterDeploy,
-            "controller.burnTokensOf should be called after receiving tokens when pool is deployed"
+        // The newly received tokens are accumulated, not burned.
+        assertEq(
+            hook.accumulatedProjectTokens(PROJECT_ID),
+            accumulatedAfterDeploy + newAmount,
+            "post-deploy inflow should accumulate"
         );
-        assertEq(controller.lastBurnProjectId(), PROJECT_ID, "burn should be for the correct project");
-        assertEq(controller.lastBurnHolder(), address(hook), "burn should be from the hook address");
+        assertEq(controller.burnCallCount(), burnCountAfterDeploy, "no burn should occur post-deploy");
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 12. processSplitWith — burns tokens even with 0 accumulated (after deploy)
+    // 12. processSplitWith — accumulates even when accumulated was 0 at deploy time
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice After pool is deployed, processSplitWith burns tokens even when there were
-    ///         0 accumulated tokens at the time of deployment.
-    function test_ProcessSplit_BurnsAfterDeploy_EvenWithZeroAccumulated() public {
-        // Deploy pool with some tokens
+    /// @notice After pool is deployed, processSplitWith accumulates new tokens even when the accumulation ledger was
+    ///         cleared to 0 at the time of deployment. Still no burn.
+    function test_ProcessSplit_AccumulatesAfterDeploy_EvenFromZero() public {
+        // Deploy pool with some tokens. With the mock's 100% usage there is no leftover dust, so accumulated is 0.
         _accumulateAndDeploy(PROJECT_ID, 100e18);
-
-        // Confirm accumulated is cleared
         assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "accumulated should be 0 after deploy");
 
-        // Reset burn tracking
         uint256 burnCountAfterDeploy = controller.burnCallCount();
 
-        // Send new tokens and process — should burn, not accumulate
+        // Send new tokens and process — should accumulate, not burn.
         uint256 newAmount = 10e18;
         projectToken.mint(address(controller), newAmount);
 
@@ -255,21 +252,17 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         hook.processSplitWith(context);
         vm.stopPrank();
 
-        // Should have burned, not accumulated
-        assertTrue(
-            controller.burnCallCount() > burnCountAfterDeploy,
-            "burn should be called for newly received tokens after pool deployed"
-        );
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "accumulatedProjectTokens should remain 0 after burning");
+        assertEq(controller.burnCallCount(), burnCountAfterDeploy, "no burn should occur post-deploy");
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), newAmount, "new tokens should accumulate after deploy");
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 13. deployPool — handles leftover tokens when PositionManager uses less than 100%
+    // 13. deployPool — carries leftover tokens forward when PositionManager uses < 100%
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice When PositionManager uses less than 100% of desired amounts (e.g., 80%), leftover project
-    ///         tokens should be burned via the controller.
-    function test_DeployPool_HandlesBurnOfLeftovers() public {
+    /// @notice When PositionManager uses less than 100% of desired amounts (e.g., 80%), leftover project tokens are
+    ///         carried forward into the accumulation ledger (never burned).
+    function test_DeployPool_CarriesLeftoversForward() public {
         // Set PositionManager to only use 80% of desired amounts
         positionManager.setUsagePercent(8000);
 
@@ -278,10 +271,11 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, 0);
 
-        // The hook should have called burnTokensOf for leftover project tokens
-        assertTrue(controller.burnCallCount() > 0, "controller.burnTokensOf should be called for leftover tokens");
-        assertEq(controller.lastBurnProjectId(), PROJECT_ID, "leftover burn should target the correct project");
-        assertEq(controller.lastBurnHolder(), address(hook), "leftover burn should be from the hook");
+        // The leftover project tokens are carried forward, not burned.
+        assertEq(controller.burnCallCount(), 0, "no burn should occur on deploy");
+        assertGt(
+            hook.accumulatedProjectTokens(PROJECT_ID), 0, "leftover project tokens should be carried into accumulation"
+        );
     }
 
     function test_DeployPool_PartialMintClearsPermit2Approvals() public {
@@ -319,12 +313,12 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 14. After pool deployed, processSplitWith only burns — no second pool
+    // 14. After pool deployed, processSplitWith only accumulates — no second pool
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice After the pool has been deployed, calling processSplitWith again should NOT
-    ///         create a second pool. It should only burn the newly received tokens.
-    function test_DeployPool_PoolAlreadyExists_OnlyBurns() public {
+    /// @notice After the pool has been deployed, calling processSplitWith again should NOT create a second pool. It
+    ///         should only accumulate the newly received tokens (never burn).
+    function test_DeployPool_PoolAlreadyExists_OnlyAccumulates() public {
         // Deploy pool as owner
         _accumulateAndDeploy(PROJECT_ID, 100e18);
 
@@ -332,6 +326,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         uint256 firstTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         uint256 mintCountAfterDeploy = positionManager.mintCallCount();
         uint256 burnCountAfterDeploy = controller.burnCallCount();
+        uint256 accumulatedAfterDeploy = hook.accumulatedProjectTokens(PROJECT_ID);
 
         // Send new tokens and call processSplitWith
         uint256 newAmount = 25e18;
@@ -352,10 +347,12 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
             positionManager.mintCallCount(), mintCountAfterDeploy, "PositionManager mint should not be called again"
         );
 
-        // But burn should have been called for the new tokens
-        assertTrue(
-            controller.burnCallCount() > burnCountAfterDeploy,
-            "burn should be called for newly received tokens when pool already exists"
+        // The new tokens accumulate; no burn.
+        assertEq(controller.burnCallCount(), burnCountAfterDeploy, "no burn should occur post-deploy");
+        assertEq(
+            hook.accumulatedProjectTokens(PROJECT_ID),
+            accumulatedAfterDeploy + newAmount,
+            "new tokens should accumulate after deploy"
         );
     }
 

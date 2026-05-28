@@ -106,21 +106,26 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
     }
 
     // -----------------------------------------------------------------------
-    // 3. Project token fees are burned
+    // 3. Project token fees are carried forward (not burned)
     // -----------------------------------------------------------------------
 
-    /// @notice When project token fees are collected, they should be burned via the controller.
-    function test_CollectFees_BurnsProjectTokenFees() public {
+    /// @notice When project-token LP fees are collected, they are carried into the accumulation ledger to become future
+    ///         liquidity, never burned.
+    function test_CollectFees_CarriesProjectTokenFeesForward() public {
         uint256 projFeeAmount = 500e18;
         _setProjectTokenFees(projFeeAmount);
 
         uint256 burnCountBefore = controller.burnCallCount();
+        uint256 accumulatedBefore = hook.accumulatedProjectTokens(PROJECT_ID);
 
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
 
-        assertGt(controller.burnCallCount(), burnCountBefore, "controller.burnTokensOf should have been called");
-        assertEq(controller.lastBurnProjectId(), PROJECT_ID, "Burn should target PROJECT_ID");
-        assertEq(controller.lastBurnHolder(), address(hook), "Burn holder should be the hook");
+        assertEq(controller.burnCallCount(), burnCountBefore, "no burn should occur when collecting fees");
+        assertEq(
+            hook.accumulatedProjectTokens(PROJECT_ID),
+            accumulatedBefore + projFeeAmount,
+            "project-token fees should be carried into the accumulation ledger"
+        );
     }
 
     // -----------------------------------------------------------------------

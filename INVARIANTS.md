@@ -2,7 +2,7 @@
 
 Last updated: 2026-05-28.
 
-Scope: the `JBUniswapV4LPSplitHook` split hook and its `JBUniswapV4LPSplitHookDeployer` clone factory. Each cloned hook receives reserved-token distributions from one or more Juicebox V6 projects, accumulates them, and at a project owner's (or, after sufficient weight decay, anyone's) signal mints a single concentrated Uniswap V4 LP position per `(projectId, terminalToken)` pair. After deployment the hook switches into burn-and-route mode: incoming reserved tokens are burned, accumulated LP fees can be collected and routed back to the project terminal, and the position can be rebalanced.
+Scope: the `JBUniswapV4LPSplitHook` split hook and its `JBUniswapV4LPSplitHookDeployer` clone factory. Each cloned hook receives reserved-token distributions from one or more Juicebox V6 projects, accumulates them, and at a project owner's (or, after sufficient weight decay, anyone's) signal mints a single concentrated Uniswap V4 LP position per `(projectId, terminalToken)` pair. After deployment the hook stays in accumulate-and-grow mode: incoming reserved tokens keep accumulating, `addLiquidity` converts that accumulation into more liquidity (topping up the active position or re-ranging into a new one, under a TWAP-deviation guard), accumulated LP fees can be collected and routed back to the project terminal, and the position can be rebalanced. **The hook never burns** — supply-reducing burns are a protocol-layer split-routing decision (route a split to `{projectId:0, hook:0, beneficiary:0xdead}`), not this hook's job.
 
 The hook is one Juicebox V6 split-hook implementation among many. It does NOT own project issuance, ruleset behavior, or terminal accounting. Those invariants live in [`nana-core-v6/INVARIANTS.md`](../nana-core-v6/INVARIANTS.md) — read that first if you are reasoning about reserved-token economics, controller permissions, or terminal try/catch behavior. The router/oracle hook side lives in [`univ4-router-v6`](../univ4-router-v6/).
 
@@ -22,10 +22,9 @@ The hook is one Juicebox V6 split-hook implementation among many. It does NOT ow
 
 ## A.2 Reserved-token routing (post-deployment)
 
-- Once `hasDeployedPool[projectId] == true`, any subsequent `processSplitWith` distribution for that project is burned via `controller.burnTokensOf`. The burn measures `IERC20.balanceOf(this) − _unavailableFeeTokenBalance(projectToken)`, so:
-  - Reserved-token leftovers and dust accumulated for OTHER projects (or for the same project after deploy) all collapse into the burn target.
-  - Fee-project ERC-20 tokens (e.g. JBX) held on behalf of OTHER projects' unclaimed LP-fee claims are **excluded** from the burn target. A project that shares the same hook clone as another project's fee-project token cannot have its claimable fee tokens burned out from under it.
-- The accumulation-to-deploy transition is one-way for each project: `hasDeployedPool[projectId]` is set to `true` BEFORE the external Uniswap V4 calls inside `deployPool`. A reentrant `processSplitWith` during deploy cannot observe accumulation mode and re-enter the pre-deploy path.
+- Once `hasDeployedPool[projectId] == true`, any subsequent `processSplitWith` distribution for that project keeps accumulating into `accumulatedProjectTokens[projectId]` — the same ledger as pre-deployment. The hook never burns; supply-reducing burns are a protocol-layer split-routing decision (route a split to `{projectId:0, hook:0, beneficiary:0xdead}`), not this hook's job. The same defense-in-depth balance reconciliation as the pre-deploy path applies.
+- That post-deploy accumulation is later converted into more liquidity by `addLiquidity`, which is keyed by `(projectId, terminalToken)` so other projects' balances on the same clone are never consumed.
+- The deploy transition still sets `hasDeployedPool[projectId] = true` BEFORE the external Uniswap V4 calls inside `deployPool`. A reentrant `processSplitWith` during deploy only re-accumulates; it cannot re-enter the one-shot deploy path (which reverts as already-deployed).
 
 ## A.3 Deployment guarantees
 
@@ -37,8 +36,8 @@ The hook is one Juicebox V6 split-hook implementation among many. It does NOT ow
 - `minCashOutReturn` is a floor, not a ceiling. The hook computes a derived minimum from the current cash-out rate (97% of expected return = 3% slippage) and uses `max(caller-supplied, derived)`. A caller cannot lower the floor below the cash-out rate that sized the LP position.
 - After cash-out for the terminal-token side, the hook reconciles the terminal's reported `reclaimAmount` against the actual spendable balance delta and takes the **minimum**. Fee-on-transfer terminals cannot make the LP spend tokens it never received.
 - `_addUniswapLiquidity` reverts if the computed `liquidity == 0`. A deploy attempt that would mint an empty position fails atomically — `hasDeployedPool` rolls back, `accumulatedProjectTokens` rolls back, and `tokenIdOf` is never set.
-- Leftover project tokens after `MINT_POSITION + SETTLE + SWEEP` are burned via the project's controller; leftover terminal tokens are returned to the project's primary terminal via `addToBalanceOf`. The hook keeps no residual stake in the cashed-out amount.
-- After successful deploy, `accumulatedProjectTokens[projectId]` is zeroed. The accumulation ledger cannot carry stale balance into the post-deploy phase.
+- Leftover project tokens after `MINT_POSITION + SETTLE + SWEEP` are carried back into `accumulatedProjectTokens[projectId]` (becoming future liquidity); leftover terminal tokens are returned to the project's primary terminal via `addToBalanceOf`. The hook never burns leftover.
+- The accumulation ledger is zeroed before the cash-out (CEI) and re-credited only with the unpaired remainder, so a successful deploy consumes the accumulation down to at most that dust; post-deploy inflows then re-accumulate into the same ledger for `addLiquidity`.
 
 ## A.4 Permissionless deployment threshold
 
@@ -46,11 +45,19 @@ The hook is one Juicebox V6 split-hook implementation among many. It does NOT ow
 - Once the current ruleset weight has decayed to **≤ 10% of `initialWeightOf[projectId]`**, `deployPool` becomes permissionless. The threshold is irreversible against the snapshotted initial weight — a later ruleset cannot revoke permissionless access by re-raising the weight.
 - The permissionless path still goes through all the deployment validations (terminal-token selection, pre-init pool check, slippage floor, zero-liquidity revert). A permissionless caller cannot deploy under worse-than-protected economics.
 
+## A.4b Post-deploy liquidity growth (`addLiquidity`)
+
+- `addLiquidity(projectId, terminalToken, minCashOutReturn)` shares `deployPool`'s authorization: permissionless once `ruleset.weight * 10 ≤ initialWeightOf[projectId]` (and `initialWeightOf != 0`), otherwise `SET_BUYBACK_POOL`. It requires a deployed pool (`tokenIdOf != 0`) and nonzero accumulation.
+- It reverts with `JBUniswapV4LPSplitHook_TwapUnavailable` if the oracle TWAP (30-minute window) cannot be read, and with `JBUniswapV4LPSplitHook_PriceDeviationTooHigh` if the pool spot tick is more than `_MAX_TWAP_DEVIATION_TICKS` (~200, ≈2%) from the TWAP tick. It never falls back to spot — accumulation keeps building safely until the add can run. This bounds how badly a JIT/sandwich attacker can skew the mint ratio.
+- The funding cash-out is forced DIRECTLY through the bonding curve via the buyback hook's `cashOutMinReclaimed` skip metadata (keyed to the project's resolved buyback-hook registry), never through the AMM the hook is feeding. It carries the same rate-derived slippage floor as `deployPool` (`max(caller-supplied, derived 3%)`).
+- It tops up the active position (`INCREASE_LIQUIDITY`) while the live cash-out/issuance corridor is within `_RERANGE_THRESHOLD_TICKS` (~400, ≈4%) of the active position's stored `activeTickLowerOf`/`activeTickUpperOf`; once drift exceeds the threshold it mints a fresh position at the live corridor and appends the prior `tokenId` to `_retiredTokenIdsOf`. Retired positions keep their liquidity and are still fee-collected.
+- The accumulation ledger is zeroed before any external call (CEI), so a reentrant `addLiquidity` reverts (nothing accumulated); leftovers are carried forward afterward (project-token dust back to the ledger, terminal-token dust to the project terminal) — never burned.
+
 ## A.5 Fee routing (post-deployment)
 
-- `collectAndRouteLPFees` is **permissionless**. Anyone can trigger a fee collection cycle. The collected fees are split between the project (via `terminal.pay(remainingAmount)`) and the fee project (via `terminal.pay(feeAmount)`); no caller receives extracted value.
+- `collectAndRouteLPFees` is **permissionless**. Anyone can trigger a fee collection cycle. It collects fees from the active position AND every retired position. The terminal-token side is split between the project (via `terminal.pay(remainingAmount)`) and the fee project (via `terminal.pay(feeAmount)`); the project-token side is carried back into the accumulation ledger. No caller receives extracted value.
 - `_collectAndRouteFees` collects fees via `DECREASE_LIQUIDITY(0) + TAKE_PAIR`, which never removes principal liquidity — only accrued fees. A permissionless caller cannot drain the LP position by repeatedly invoking it.
-- Before routing terminal-token fees externally, `_burnReceivedTokens` is called first. The ordering is reentrancy-defensive: `terminal.pay()` may trigger pay hooks, and burning project-token fees first ensures any re-entrant burn finds zero balance.
+- Before routing terminal-token fees externally, `_routeCollectedFees` carries the project-token fee side into `accumulatedProjectTokens[projectId]` — a state write done BEFORE the external `terminal.pay`, for CEI. The hook never burns the project-token fee side.
 - Routed fees are credited to the project's **primary** terminal for that token, not an attacker-chosen one. If the fee project's primary terminal is missing (`address(0)`), the fee-project cut is forfeited and the full amount flows to the project's normal path. A misconfigured fee project never blocks the project's own fee collection.
 - The fee-project payment uses `minReturnedTokens: 0` by design. Slippage protection is the fee project's responsibility (its own data hook / buyback hook); see `RISKS.md` §7.2.
 - The fee project's returned ERC-20 amount is measured via balance delta, not the `pay()` return value. Fee-on-transfer or nonstandard fee-project terminals cannot overstate what the hook actually received.
@@ -58,8 +65,8 @@ The hook is one Juicebox V6 split-hook implementation among many. It does NOT ow
 ## A.6 Fee-token claim segregation
 
 - `claimableFeeTokens[projectId]` is denominated in the snapshotted `claimableFeeTokenOf[projectId]` ERC-20. Once a project has any unclaimed fee-token balance, that token address is pinned. A later fee-routing call where the fee project's ERC-20 has changed (e.g. token migration) reverts with `JBUniswapV4LPSplitHook_UnclaimedFeeTokenChanged` rather than silently mixing two different ERC-20s into the same balance.
-- Fee tokens claimable for **other** projects' unclaimed balances are excluded from `_spendableTerminalTokenBalance` and `_burnReceivedTokens` via the `_unavailableFeeTokenBalance` reserve. Cross-project fee claims cannot be cannibalized by another project's burn or LP-funding path.
-- During in-flight fee routing, `_inflightFeeRoutingCount[token]` makes `_unavailableFeeTokenBalance` conservatively report the **full balance** as unavailable. A reentrant burn or cash-out cannot read partially-updated reserve state and over-spend.
+- Fee tokens claimable for **other** projects' unclaimed balances are excluded from `_spendableTerminalTokenBalance` and the accumulation-ledger reconciliation via the `_unavailableFeeTokenBalance` reserve. Cross-project fee claims cannot be cannibalized by another project's accumulation or LP-funding path.
+- During in-flight fee routing, `_inflightFeeRoutingCount[token]` makes `_unavailableFeeTokenBalance` conservatively report the **full balance** as unavailable. A reentrant accumulation or cash-out cannot read partially-updated reserve state and over-spend.
 - `claimFeeTokensFor` clears `claimableFeeTokens[projectId]` and `claimableFeeTokenOf[projectId]` BEFORE the `safeTransfer`, so a reverting ERC-20 atomically restores state along with the event.
 - Credit-only claims (when the fee project has no ERC-20) go through `transferCreditsFrom` in a try/catch. On failure the pending credit balance is restored, so a paused/misconfigured fee-project controller does not strand an ERC-20 fee-token claim that already succeeded earlier in the same call.
 
@@ -70,7 +77,7 @@ The hook is one Juicebox V6 split-hook implementation among many. It does NOT ow
 - The caller supplies `decreaseAmount0Min` and `decreaseAmount1Min` slippage bounds for the burn step. The hook does not provide a default — the operator must size them.
 - The mint step computes liquidity from the actual recovered balances (per-project snapshot deltas), not from the original deployment-time amounts. Other projects' balances held on the same hook clone cannot be drained into one project's rebalanced position.
 - If the recomputed liquidity is zero (e.g. price has moved entirely outside the new tick range), `_mintRebalancedPosition` reverts with `JBUniswapV4LPSplitHook_InsufficientLiquidity`. This is intentional: the BURN_POSITION already destroyed the old NFT, and a zero-liquidity outcome would brick the project's LP. The revert keeps the entire transaction atomic — `tokenIdOf` is preserved and the position remains rebuildable in a subsequent call.
-- Leftovers after re-mint: project-token leftovers are burned; terminal-token leftovers are routed back to the project's terminal balance via `addToBalanceOf`. Conservation holds modulo on-chain rounding.
+- Leftovers after re-mint: project-token leftovers are carried back into the accumulation ledger; terminal-token leftovers are routed back to the project's terminal balance via `addToBalanceOf`. Nothing is burned. Conservation holds modulo on-chain rounding.
 
 ## A.8 Initialization safety
 
@@ -93,6 +100,7 @@ The hook is one Juicebox V6 split-hook implementation among many. It does NOT ow
 ## B.1 Powers the operator has
 
 - **Deploy the LP position.** Call `deployPool(projectId, minCashOutReturn)`. Until the weight has decayed 10x from `initialWeightOf`, this is operator-gated.
+- **Add post-deploy liquidity.** Call `addLiquidity(projectId, terminalToken, minCashOutReturn)` to convert accumulated post-deploy reserved tokens into more liquidity (top-up or re-range). Operator-gated until the weight has decayed 10x, then permissionless. Subject to the TWAP-deviation guard and the force-direct cash-out floor.
 - **Rebalance the position.** Call `rebalanceLiquidity(projectId, terminalToken, decreaseAmount0Min, decreaseAmount1Min)`. Always operator-gated, regardless of weight decay.
 - **Claim accumulated fee tokens.** Call `claimFeeTokensFor(projectId, beneficiary)`. Pulls claimable ERC-20 fee tokens and/or fee-project credits to the chosen beneficiary.
 - **Deploy new hook clones.** Anyone can call `JBUniswapV4LPSplitHookDeployer.deployHookFor(feeProjectId, feePercent, salt)`. The new clone's fee config is set at the salt-deterministic clone address; the caller is mixed into the salt so a competitor cannot squat a `(msg.sender, salt)` they don't control.
@@ -104,11 +112,12 @@ The hook is one Juicebox V6 split-hook implementation among many. It does NOT ow
 - **No override of terminal-token selection.** `_findHighestValueTerminalTokenOf` is what picks the terminal token at deploy. The operator cannot pass a different one to `deployPool`.
 - **No skip of the slippage floor.** Passing `minCashOutReturn = 0` falls back to the hook's 3% derived floor — it cannot disable slippage protection.
 - **No partial rebalance.** Rebalance is all-or-nothing: collect, burn, recompute, mint. The operator cannot rebalance just one side or skip the collect step.
-- **No direct token withdrawal.** There is no `rescueTokens` or `withdraw` function. The hook's only paths out are: cash-out via terminal, burn via controller, route via `terminal.pay`, route via `terminal.addToBalanceOf`, mint into V4 position. Stuck tokens (e.g. accidentally-sent foreign ERC-20s) cannot be recovered by the operator.
+- **No direct token withdrawal.** There is no `rescueTokens` or `withdraw` function. The hook's only paths out are: cash-out via terminal, route via `terminal.pay`, route via `terminal.addToBalanceOf`, mint into / increase a V4 position. There is no burn path. Stuck tokens (e.g. accidentally-sent foreign ERC-20s) cannot be recovered by the operator.
 
 ## B.3 Permissionless triggers the operator should expect
 
 - **`deployPool` after weight decay.** Once `ruleset.weight * 10 ≤ initialWeightOf[projectId]`, anyone can call `deployPool`. This is intentional: it prevents a missing or hostile operator from locking accumulated reserved tokens forever. The operator can no longer veto deployment timing after the threshold is crossed.
+- **`addLiquidity` after weight decay.** Once the same decay threshold is crossed, anyone can convert accumulated post-deploy reserved tokens into more liquidity. Still bounded by the TWAP-deviation guard and the force-direct cash-out floor, so the caller can only force add timing, not extract value.
 - **`collectAndRouteLPFees`.** Anyone can collect and route fees at any time. The operator cannot reserve "this fee cycle is for project usage X" — collection is opportunistic.
 - **`JBUniswapV4LPSplitHookDeployer.deployHookFor`.** Anyone can deploy a hook clone with any `(feeProjectId, feePercent)` settings. Multiple hook clones can coexist for the same fee project. The operator chooses which clone(s) their splits reference.
 
@@ -134,14 +143,16 @@ Inherits `IJBUniswapV4LPSplitHook`, `IJBSplitHook`, `JBPermissioned`. Cloneable;
 **Split routing (controller-only):**
 
 - **`processSplitWith(JBSplitHookContext) payable`** — only the project's currently-active controller. Reserved-token splits (`groupId == 1`) only. Requires `context.split.hook == this`.
-  - **Pre-deploy:** accumulates `received = balance delta` into `accumulatedProjectTokens[projectId]`, snapshots `initialWeightOf` on first deposit, defense-in-depth ledger reconciliation.
-  - **Post-deploy:** burns received tokens via `controller.burnTokensOf`, excluding committed fee-token reserves.
+  - **Pre- AND post-deploy (identical):** accumulates `received = balance delta` into `accumulatedProjectTokens[projectId]`, snapshots `initialWeightOf` on first deposit, defense-in-depth ledger reconciliation (balance minus committed fee-token reserves must cover the accumulated total). The hook never burns.
   - **Invariant:** project token must be ERC-20 (not credits-only); transient ETH (`msg.value`) is allowed by the function signature but never spent here.
 
 **Project-owner / `SET_BUYBACK_POOL` delegate (and weight-decay permissionless on `deployPool`):**
 
-- **`deployPool(projectId, minCashOutReturn)`** — gated by `SET_BUYBACK_POOL` permission OR permissionless if `ruleset.weight * 10 ≤ initialWeightOf[projectId]` and `initialWeightOf != 0`. Selects highest-ETH-value terminal token via `_findHighestValueTerminalTokenOf`. Sets `hasDeployedPool[projectId] = true` before any external calls. Initializes or accepts pre-initialized pool (validated against economic tick bounds). Computes optimal `cashOutAmount`, cashes out via primary terminal under `effectiveMinReturn = max(caller-supplied, derived 3%)`, mints concentrated position via Permit2 + V4 `MINT_POSITION + SETTLE + SETTLE + SWEEP + SWEEP`. Burns project-token leftover, routes terminal-token leftover to terminal balance, zeroes `accumulatedProjectTokens[projectId]`.
-  - **Invariants:** one-shot per `(projectId, terminalToken)`; one-shot per project (only one terminal token supported per project); pre-init pool rejected if outside or AT `[tickLower, tickUpper]`; zero-liquidity reverts atomically; cash-out floor enforced.
+- **`deployPool(projectId, minCashOutReturn)`** — gated by `SET_BUYBACK_POOL` permission OR permissionless if `ruleset.weight * 10 ≤ initialWeightOf[projectId]` and `initialWeightOf != 0`. Selects highest-ETH-value terminal token via `_findHighestValueTerminalTokenOf`. Sets `hasDeployedPool[projectId] = true` before any external calls. Initializes or accepts pre-initialized pool (validated against economic tick bounds). Computes optimal `cashOutAmount`, cashes out via primary terminal under `effectiveMinReturn = max(caller-supplied, derived 3%)`, mints concentrated position via Permit2 + V4 `MINT_POSITION + SETTLE + SETTLE + SWEEP + SWEEP`. Carries project-token leftover back into `accumulatedProjectTokens[projectId]`, routes terminal-token leftover to terminal balance (never burns).
+  - **Invariants:** one-shot per `(projectId, terminalToken)`; one-shot per project (only one terminal token supported per project); pre-init pool rejected if outside or AT `[tickLower, tickUpper]`; zero-liquidity reverts atomically; cash-out floor enforced; leftover carried to the accumulation ledger (never burned).
+
+- **`addLiquidity(projectId, terminalToken, minCashOutReturn)`** — same gate as `deployPool` (`SET_BUYBACK_POOL` OR permissionless after 10x weight decay). Requires a deployed pool. Reverts on TWAP unavailability or spot/TWAP deviation > `_MAX_TWAP_DEVIATION_TICKS`. Cashes out the optimal fraction DIRECTLY through the bonding curve (force-direct `cashOutMinReclaimed` skip metadata keyed to the resolved buyback-hook registry), then tops up the active position via `INCREASE_LIQUIDITY` while the live corridor is within `_RERANGE_THRESHOLD_TICKS` of the active ticks, else mints a new position at the live corridor and appends the prior tokenId to `_retiredTokenIdsOf`. Zeroes the ledger before external calls (CEI); carries leftovers forward (never burns). Emits `LiquidityAdded`.
+  - **Invariants:** never adds at a manipulated ratio (TWAP guard); never self-routes through the AMM (force-direct cash-out); retired positions keep liquidity and are still fee-collected; per-`(projectId, terminalToken)` keying isolates clone-shared balances.
 
 - **`rebalanceLiquidity(projectId, terminalToken, decreaseAmount0Min, decreaseAmount1Min)`** — `SET_BUYBACK_POOL` permission required. Collects + routes fees first; burns old position with caller-supplied slippage; recomputes ticks; mints new position from per-project snapshot balance deltas. Reverts if recomputed liquidity is zero.
   - **Invariants:** old `tokenIdOf` is overwritten only after successful mint; leftover handling uses per-project balance deltas so other projects' balances are not drained.
@@ -151,8 +162,8 @@ Inherits `IJBUniswapV4LPSplitHook`, `IJBSplitHook`, `JBPermissioned`. Cloneable;
 
 **Permissionless triggers:**
 
-- **`collectAndRouteLPFees(projectId, terminalToken)`** — anyone. Requires `tokenIdOf[projectId][terminalToken] != 0`. Calls `_collectAndRouteFees` which uses `DECREASE_LIQUIDITY(0) + TAKE_PAIR` to fetch only accrued fees, then burns project-token fees and routes terminal-token fees (split between fee project and main project per `feePercent`).
-  - **Invariants:** principal liquidity never removed; project-token burn precedes external terminal call (reentrancy ordering); routed amounts measured by balance delta, not return values; fee-project terminal absence does not strand the project's share.
+- **`collectAndRouteLPFees(projectId, terminalToken)`** — anyone. Requires `tokenIdOf[projectId][terminalToken] != 0`. Calls `_collectAndRouteFees` which uses `DECREASE_LIQUIDITY(0) + TAKE_PAIR` to fetch only accrued fees from the active AND every retired position, carries the project-token fee side into the accumulation ledger, and routes the terminal-token fee side (split between fee project and main project per `feePercent`).
+  - **Invariants:** principal liquidity never removed; project-token fee carry (a state write) precedes the external terminal call (reentrancy ordering); routed amounts measured by balance delta, not return values; fee-project terminal absence does not strand the project's share.
 
 **Receive / interfaces:**
 
@@ -161,9 +172,11 @@ Inherits `IJBUniswapV4LPSplitHook`, `IJBSplitHook`, `JBPermissioned`. Cloneable;
 
 **Public state (selected, all read-only via auto-getters):**
 
-- `accumulatedProjectTokens[projectId]` — pre-deploy escrow ledger; zeroed at deploy.
-- `hasDeployedPool[projectId]` — irreversible deploy flag.
-- `tokenIdOf[projectId][terminalToken]` — V4 position NFT id; nonzero post-deploy and post-rebalance.
+- `accumulatedProjectTokens[projectId]` — the single reserved-token escrow ledger (pre- AND post-deploy); zeroed before each deploy/add and re-credited with any leftover/carry.
+- `hasDeployedPool[projectId]` — irreversible first-deploy flag.
+- `tokenIdOf[projectId][terminalToken]` — active V4 position NFT id; nonzero post-deploy and post-rebalance.
+- `activeTickLowerOf[projectId][terminalToken]` / `activeTickUpperOf[projectId][terminalToken]` — the active position's stored ticks; `addLiquidity` compares the live corridor against these to decide top-up vs. re-range.
+- `retiredTokenIdsOf(projectId, terminalToken)` — retired position token ids (backed by `_retiredTokenIdsOf`); still hold liquidity and are still fee-collected.
 - `poolKeysOf[projectId][terminalToken]` — PoolKey; set during `_createAndInitializePool`.
 - `initialWeightOf[projectId]` — snapshotted at first accumulation; basis for the permissionless-deploy threshold.
 - `claimableFeeTokens[projectId]` / `claimableFeeTokenOf[projectId]` / `claimableFeeCredits[projectId]` — fee-routing ledgers.
@@ -198,17 +211,17 @@ Pure library. `alignTickToSpacing` (floor), `alignTickToSpacingCeil` (ceiling, a
 
 2. **Per-project snapshot deltas in shared-clone storage.** Because one hook clone can manage many projects, every multi-project-touching path (accumulation reconciliation, post-mint leftover handling, fee-routing ERC-20 measurement) uses per-call before/after snapshots of `IERC20.balanceOf(this)`. Other projects' balances cannot leak into one project's leftover or be drained into one project's LP.
 
-3. **Fee-token claim segregation.** `_unavailableFeeTokenBalance(token)` returns the full balance during in-flight routing (`_inflightFeeRoutingCount > 0`) and the cumulative outstanding claims otherwise. Every burn path and every "spendable terminal token" computation subtracts this reserve. A project's claimable fee tokens cannot be burned, cashed-out, or spent into LP by another project sharing the clone.
+3. **Fee-token claim segregation.** `_unavailableFeeTokenBalance(token)` returns the full balance during in-flight routing (`_inflightFeeRoutingCount > 0`) and the cumulative outstanding claims otherwise. Every accumulation-ledger reconciliation and every "spendable terminal token" computation subtracts this reserve. A project's claimable fee tokens cannot be cashed-out or spent into LP by another project sharing the clone.
 
-4. **State-then-call ordering in fee routing.** `_routeFeesToProject` pre-increments `_totalOutstandingFeeTokenClaims` and `_inflightFeeRoutingCount` BEFORE calling `terminal.pay()`, then reconciles after. A reentrant collection during the external call sees an inflated reserve, which conservatively prevents over-burning.
+4. **State-then-call ordering in fee routing.** `_routeFeesToProject` pre-increments `_totalOutstandingFeeTokenClaims` and `_inflightFeeRoutingCount` BEFORE calling `terminal.pay()`, then reconciles after. A reentrant collection during the external call sees an inflated reserve, which conservatively prevents over-spending.
 
-5. **State-then-call ordering in deployment.** `hasDeployedPool[projectId] = true` is set BEFORE the external V4 / terminal calls. A reentrant `processSplitWith` during deploy can only land in the post-deploy burn path, never re-enter accumulation.
+5. **State-then-call ordering in deployment and adds.** `hasDeployedPool[projectId] = true` is set BEFORE the external V4 / terminal calls in `deployPool`, and `addLiquidity`/`deployPool` zero `accumulatedProjectTokens[projectId]` before the funding cash-out. A reentrant `processSplitWith` during deploy/add only re-accumulates; a reentrant `addLiquidity` finds nothing accumulated and reverts; a reentrant `deployPool` reverts as already-deployed.
 
 6. **State-then-call ordering in claims.** `claimFeeTokensFor` clears `claimableFeeTokens` / `claimableFeeTokenOf` and decrements the reserve BEFORE the `safeTransfer`. A reverting transfer atomically restores state via the EVM rollback.
 
 7. **One-shot bindings everywhere.** `JBUniswapV4LPSplitHook.initialize`, `JBUniswapV4LPSplitHookDeployer.setChainSpecificConstants`, `deployPool` (per project / per terminal-token pair). None can be re-armed by anyone.
 
-8. **No direct withdrawal.** The hook holds tokens only to (a) accumulate for LP, (b) burn for supply control, (c) route to project terminal, (d) mint into V4 position. There is no `rescue` / `withdraw` / `recover` function. Misrouted foreign tokens cannot be extracted by the operator.
+8. **No direct withdrawal.** The hook holds tokens only to (a) accumulate for LP, (b) route to project terminal, (c) mint into / increase a V4 position, (d) cash out via terminal to fund the terminal-token side. There is no `rescue` / `withdraw` / `recover` function, and no burn path. Misrouted foreign tokens cannot be extracted by the operator.
 
 9. **Pre-init pool defense.** A front-runner can initialize the V4 pool first, but cannot pin liquidity at an out-of-band tick: `_createAndInitializePool` reverts on existing prices `≤ sqrtPriceLower` or `≥ sqrtPriceUpper`. Boundary equality is rejected — preinitialization exactly at a band edge would single-side the LP.
 
@@ -216,7 +229,7 @@ Pure library. `alignTickToSpacing` (floor), `alignTickToSpacingCeil` (ceiling, a
 
 11. **Rebalance atomicity.** If recomputed liquidity is zero after a successful burn, the entire rebalance reverts. The old position is never destroyed unless the new one will succeed.
 
-12. **Permissionless settlement triggers never extract value beyond canonical allocation.** `deployPool` (after decay), `collectAndRouteLPFees`, `processSplitWith` (controller-only but downstream-permissionless through `sendReservedTokensToSplitsOf`) — none of these allow the caller to redirect value to themselves. The caller can only force settlement timing.
+12. **Permissionless settlement triggers never extract value beyond canonical allocation.** `deployPool` (after decay), `addLiquidity` (after decay, gated by the TWAP-deviation guard and force-direct cash-out), `collectAndRouteLPFees`, `processSplitWith` (controller-only but downstream-permissionless through `sendReservedTokensToSplitsOf`) — none of these allow the caller to redirect value to themselves. The caller can only force settlement timing.
 
 ---
 
@@ -236,7 +249,13 @@ These are NOT third-party attack vectors but are powers held outside the hook it
 # Section F — Key Code References
 
 - Accumulation accounting and balance-delta reconciliation: `src/JBUniswapV4LPSplitHook.sol:1062-1095`
-- Post-deploy burn excluding cross-project fee reserves: `src/JBUniswapV4LPSplitHook.sol:1432-1448`
+- Post-deploy accumulation (no burn) in `processSplitWith`: `src/JBUniswapV4LPSplitHook.sol:1274`
+- `addLiquidity` top-up vs. re-range entrypoint: `src/JBUniswapV4LPSplitHook.sol:1146`
+- Shared cash-out-and-add core (`_executeAddToPosition`): `src/JBUniswapV4LPSplitHook.sol:1443`
+- TWAP-deviation guard (`_requireSpotNearTwap`): `src/JBUniswapV4LPSplitHook.sol:1653`
+- Force-direct cash-out metadata targeting the buyback registry (`_forceDirectCashOutMetadata`): `src/JBUniswapV4LPSplitHook.sol:1698`
+- Leftover carry-forward, never burned (`_carryLeftovers`): `src/JBUniswapV4LPSplitHook.sol:1610`
+- Fee collection from active + retired positions, project-token side carried (`_collectAndRouteFees` / `_routeCollectedFees`): `src/JBUniswapV4LPSplitHook.sol:1972`, `:2493`
 - Controller-only and hook-identity check in `processSplitWith`: `src/JBUniswapV4LPSplitHook.sol:1035-1055`
 - Permissionless-deploy weight-decay threshold (10x): `src/JBUniswapV4LPSplitHook.sol:971-982`
 - `deployPool` one-shot per project + per-terminal-token guards: `src/JBUniswapV4LPSplitHook.sol:987-996`

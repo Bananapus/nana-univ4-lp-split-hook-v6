@@ -44,12 +44,19 @@ interface IJBUniswapV4LPSplitHook {
         uint256 indexed projectId, address indexed terminalToken, bytes32 indexed poolId, address caller
     );
 
-    /// @notice Emitted when tokens are burned in Stage 2.
+    /// @notice Emitted when accumulated reserved tokens are converted into additional liquidity after deployment.
     /// @param projectId The Juicebox project ID.
-    /// @param token The token address that was burned.
-    /// @param amount The amount of tokens burned.
-    /// @param caller The address that triggered the burn.
-    event TokensBurned(uint256 indexed projectId, address indexed token, uint256 amount, address caller);
+    /// @param terminalToken The terminal token address.
+    /// @param tokenId The LP position token ID that received the liquidity.
+    /// @param isNewPosition True if a new (re-ranged) position was minted; false if the active position was topped up.
+    /// @param caller The address that added the liquidity.
+    event LiquidityAdded(
+        uint256 indexed projectId,
+        address indexed terminalToken,
+        uint256 indexed tokenId,
+        bool isNewPosition,
+        address caller
+    );
 
     /// @notice Check if a pool has been deployed for a project/terminal token pair.
     /// @param projectId The Juicebox project ID.
@@ -83,6 +90,26 @@ interface IJBUniswapV4LPSplitHook {
     /// @param projectId The Juicebox project ID.
     /// @param minCashOutReturn Minimum terminal tokens from cash-out (slippage protection, 0 = auto 3% tolerance).
     function deployPool(uint256 projectId, uint256 minCashOutReturn) external;
+
+    /// @notice Convert the project's post-deployment accumulated reserved tokens into additional liquidity. Tops up the
+    /// active position, or mints a new in-corridor position once the live corridor has drifted. Permissionless once the
+    /// ruleset weight has decayed 10x from accumulation; otherwise requires `SET_BUYBACK_POOL` from the project owner.
+    /// @param projectId The Juicebox project ID.
+    /// @param terminalToken The terminal token paired with the project token in the deployed pool.
+    /// @param minCashOutReturn Minimum terminal tokens from the funding cash-out (slippage protection, 0 = auto 3%).
+    function addLiquidity(uint256 projectId, address terminalToken, uint256 minCashOutReturn) external;
+
+    /// @notice The retired (no-longer-active) LP position token IDs for a project's terminal-token pair.
+    /// @param projectId The Juicebox project ID.
+    /// @param terminalToken The terminal token address.
+    /// @return tokenIds The retired position token IDs.
+    function retiredTokenIdsOf(
+        uint256 projectId,
+        address terminalToken
+    )
+        external
+        view
+        returns (uint256[] memory tokenIds);
 
     /// @notice Initialize per-instance config + chain-specific Uniswap V4 addresses on a clone. Callable once.
     /// @param initialFeeProjectId Project ID to receive LP fees.

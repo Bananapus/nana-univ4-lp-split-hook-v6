@@ -211,19 +211,20 @@ contract AccumulationStageTest is LPSplitHookV4TestBase {
     }
 
     // -----------------------------------------------------------------------
-    // 11. processSplitWith -- burns after pool deployed
+    // 11. processSplitWith -- accumulates after pool deployed (no burn)
     // -----------------------------------------------------------------------
 
-    /// @notice After deployPool is called, processSplitWith burns tokens instead of accumulating.
-    function test_ProcessSplit_BurnsAfterDeployed() public {
+    /// @notice After deployPool is called, processSplitWith accumulates tokens for a later addLiquidity; never burns.
+    function test_ProcessSplit_AccumulatesAfterDeployed() public {
         // Deploy pool first
         _accumulateAndDeploy(PROJECT_ID, 100e18);
 
         assertTrue(hook.isPoolDeployed(PROJECT_ID, address(terminalToken)), "projectDeployed should be true");
 
         uint256 burnCountBefore = controller.burnCallCount();
+        uint256 accumulatedBefore = hook.accumulatedProjectTokens(PROJECT_ID);
 
-        // Now processSplitWith should burn instead of accumulate
+        // Now processSplitWith should accumulate instead of burn.
         uint256 newAmount = 50e18;
         projectToken.mint(address(controller), newAmount);
         vm.startPrank(address(controller));
@@ -232,11 +233,13 @@ contract AccumulationStageTest is LPSplitHookV4TestBase {
         hook.processSplitWith(context);
         vm.stopPrank();
 
-        // Verify tokens were burned
-        assertGt(controller.burnCallCount(), burnCountBefore, "burnTokensOf should be called after deployment");
-
-        // Verify accumulated stays 0
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "accumulatedProjectTokens should remain 0 after burn");
+        // Verify tokens were accumulated, not burned.
+        assertEq(controller.burnCallCount(), burnCountBefore, "no burn should occur after deployment");
+        assertEq(
+            hook.accumulatedProjectTokens(PROJECT_ID),
+            accumulatedBefore + newAmount,
+            "tokens should accumulate after deployment"
+        );
     }
 
     // -----------------------------------------------------------------------

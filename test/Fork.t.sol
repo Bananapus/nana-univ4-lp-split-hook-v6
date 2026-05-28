@@ -165,7 +165,8 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should be deployed");
         uint256 tokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         assertTrue(tokenId != 0, "should hold a position NFT");
-        assertEq(hook.accumulatedProjectTokens(projectId), 0, "accumulated should be 0 after deploy");
+        // Only unpaired dust (carried forward, never burned) may remain after the optimal-cashout add.
+        assertLt(hook.accumulatedProjectTokens(projectId), 1e12, "at most dust should remain accumulated after deploy");
         PoolKey memory key = hook.poolKeyOf(projectId, JBConstants.NATIVE_TOKEN);
         PoolId poolId = key.toId();
         (uint160 sqrtPriceX96,,,) = V4_POOL_MANAGER.getSlot0(poolId);
@@ -174,7 +175,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         assertTrue(positionLiquidity > 0, "position should have liquidity");
     }
 
-    function test_fork_burnAfterDeploy() public {
+    function test_fork_accumulatesAfterDeploy() public {
         vm.prank(multisig);
         hook.deployPool(projectId, 0);
         vm.prank(multisig);
@@ -186,6 +187,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
             useReservedPercent: false
         });
         uint256 supplyBefore = IERC20(address(projectToken)).totalSupply();
+        uint256 accumulatedBefore = hook.accumulatedProjectTokens(projectId);
         JBSplitHookContext memory context = JBSplitHookContext({
             token: address(projectToken),
             amount: 50_000e18,
@@ -205,9 +207,14 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         IERC20(address(projectToken)).approve(address(hook), 50_000e18);
         hook.processSplitWith(context);
         vm.stopPrank();
-        assertEq(hook.accumulatedProjectTokens(projectId), 0, "should not accumulate after deploy");
+        // Post-deploy inflow accumulates for a later addLiquidity; the hook never burns.
+        assertEq(
+            hook.accumulatedProjectTokens(projectId),
+            accumulatedBefore + 50_000e18,
+            "post-deploy inflow should accumulate"
+        );
         uint256 supplyAfter = IERC20(address(projectToken)).totalSupply();
-        assertLt(supplyAfter, supplyBefore, "total supply should decrease from burn");
+        assertEq(supplyAfter, supplyBefore, "total supply should not change (no burn)");
     }
 
     function test_fork_deployPool_usesPermit2NotDirectApproval() public {
@@ -345,7 +352,8 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         hook.deployPool(projectId, 0);
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should deploy successfully");
         assertGt(hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN), 0, "position NFT should be minted");
-        assertEq(hook.accumulatedProjectTokens(projectId), 0, "accumulated tokens should be consumed");
+        // Only unpaired dust (carried forward, never burned) may remain after the optimal-cashout add.
+        assertLt(hook.accumulatedProjectTokens(projectId), 1e12, "at most dust should remain accumulated");
         (uint160 sqrtPriceAfter,,,) = V4_POOL_MANAGER.getSlot0(poolId);
         assertEq(sqrtPriceAfter, sqrtPriceBefore, "existing in-band pool price should be reused");
     }
