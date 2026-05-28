@@ -55,11 +55,12 @@ import {AddLiquidityParams} from "./structs/AddLiquidityParams.sol";
 /// convert the accumulated tokens into more protocol-owned liquidity: it cashes out the optimal fraction DIRECTLY at
 /// the bonding-curve floor (never through the AMM it is feeding), checks the pool price against the oracle TWAP to
 /// reject sandwiched adds, then either tops up the active position or — once the live cash-out/issuance corridor has
-/// drifted past a threshold — mints a fresh position at the current corridor (retiring the prior one). LP trading
-/// fees
-/// are collected periodically (from the active position and every retired one) and routed back to the project's
-/// terminal balance, with an optional protocol fee split to a configurable fee project. The hook never burns: burning
-/// is a split-routing decision handled at the protocol layer, so every token this hook touches ends up as liquidity.
+/// drifted past a threshold — burns the stale position and re-mints a single fresh position at the current corridor
+/// (folding the recovered principal back in), so all funds stay consolidated in one position. LP trading fees are
+/// collected periodically from the single active position and routed back to the project's terminal balance, with an
+/// optional protocol fee split to a configurable fee project. The hook never burns project tokens: supply-reducing
+/// burns are a split-routing decision handled at the protocol layer, so every token this hook touches ends up as
+/// liquidity.
 ///
 /// The hook also supports `rebalanceLiquidity`, which re-centers the LP tick range around the project's current
 /// issuance and cash-out prices when they drift from the original deployment parameters.
@@ -152,8 +153,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     int24 internal constant _MAX_TWAP_DEVIATION_TICKS = 200;
 
     /// @notice How far (in ticks) the live cash-out/issuance corridor must drift from the active position's stored
-    /// ticks before `addLiquidity` mints a fresh position at the current corridor instead of topping up the active one.
-    /// ~400 ticks ≈ 4.0%. Keeps the retired-position set small while still tracking a maturing project's band.
+    /// ticks before `addLiquidity` burns the stale position and re-mints at the current corridor instead of topping up.
+    /// ~400 ticks ≈ 4.0%. A wider threshold re-ranges (and pays the burn/re-mint gas) less often while still tracking
+    /// a
+    /// maturing project's band.
     int24 internal constant _RERANGE_THRESHOLD_TICKS = 400;
 
     /// @notice Uniswap V4 Q96 fixed-point scale factor for sqrtPriceX96 values.
@@ -394,7 +397,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     //*********************************************************************//
 
     /// @notice Whether this contract implements a given interface (ERC-165).
+    /// @param interfaceId The ERC-165 interface identifier to check.
+    /// @return True if `interfaceId` is the hook or split-hook interface.
     function supportsInterface(bytes4 interfaceId) public pure override returns (bool) {
+        // Advertise both the hook's own interface and the split-hook interface the controller calls into.
         return interfaceId == type(IJBUniswapV4LPSplitHook).interfaceId || interfaceId == type(IJBSplitHook).interfaceId;
     }
 
@@ -403,11 +409,18 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     //*********************************************************************//
 
     /// @notice Whether a Uniswap V4 LP position has been minted for a project's terminal-token pair.
+    /// @param projectId The ID of the project to check.
+    /// @param terminalToken The terminal token paired with the project token.
+    /// @return deployed True once a position exists for the pair.
     function isPoolDeployed(uint256 projectId, address terminalToken) public view returns (bool deployed) {
+        // A nonzero position token id is the marker that the pool was deployed and seeded.
         return tokenIdOf[projectId][terminalToken] != 0;
     }
 
     /// @notice The Uniswap V4 pool key (currency pair, fee, tick spacing, and hook) for a project's deployed pool.
+    /// @param projectId The ID of the project.
+    /// @param terminalToken The terminal token paired with the project token.
+    /// @return key The stored pool key (zero-valued if no pool has been deployed for the pair).
     function poolKeyOf(uint256 projectId, address terminalToken) public view returns (PoolKey memory key) {
         return poolKeysOf[projectId][terminalToken];
     }
@@ -417,7 +430,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     //*********************************************************************//
 
     /// @notice Look up the controller address for a project.
+    /// @param projectId The ID of the project.
+    /// @return The project's current controller (address(0) if none is set).
     function _controllerOf(uint256 projectId) internal view returns (address) {
+        // The directory is the canonical source of a project's active controller.
         return address(IJBDirectory(DIRECTORY).controllerOf(projectId));
     }
 
@@ -795,8 +811,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         projectTokenOutAmount = mulDiv({x: terminalTokenInAmount, y: ruleset.weight, denominator: weightRatio});
     }
 
-    /// @notice Look up the current sqrt price of a pool.
+    /// @notice Look up the current spot sqrt price of a pool.
+    /// @param key The pool key identifying the Uniswap V4 pool.
+    /// @return sqrtPriceX96 The pool's current `sqrtPriceX96` from Slot0 (0 if the pool is uninitialized).
     function _getSqrtPriceX96(PoolKey memory key) internal view returns (uint160 sqrtPriceX96) {
+        // Read only Slot0's price field via StateLibrary; the tick/fee fields are unused here.
         (sqrtPriceX96,,,) = poolManager.getSlot0(key.toId());
     }
 
@@ -853,7 +872,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param terminalToken The terminal token to read.
     /// @return balance This hook's native ETH or ERC-20 balance for `terminalToken`.
     function _getTerminalTokenBalance(address terminalToken) internal view returns (uint256 balance) {
+        // Native ETH is held as the contract's ether balance, not an ERC-20 balance.
         if (_isNativeToken(terminalToken)) return address(this).balance;
+        // Otherwise read the ERC-20 balance held by this hook.
         return IERC20(terminalToken).balanceOf(address(this));
     }
 
@@ -864,17 +885,24 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         return JBLPSplitHookHelpers.isNativeToken(terminalToken);
     }
 
-    /// @notice Look up the next token ID from the position manager.
+    /// @notice Look up the next token ID the position manager will mint.
+    /// @dev Read immediately after a MINT to recover the just-minted id as `_nextTokenId() - 1`.
+    /// @return The position manager's next-to-be-assigned NFT token id.
     function _nextTokenId() internal view returns (uint256) {
         return positionManager.nextTokenId();
     }
 
     /// @notice Look up the owner of a project.
+    /// @param projectId The ID of the project.
+    /// @return The project's current owner (used as the permission account for `SET_BUYBACK_POOL` gates).
     function _ownerOf(uint256 projectId) internal view returns (address) {
         return PROJECTS.ownerOf(projectId);
     }
 
     /// @notice Look up the primary terminal for a project/token pair.
+    /// @param projectId The ID of the project.
+    /// @param token The token whose primary terminal to resolve.
+    /// @return The project's primary terminal for `token` (address(0) if none is set).
     function _primaryTerminalOf(uint256 projectId, address token) internal view returns (address) {
         return address(IJBDirectory(DIRECTORY).primaryTerminalOf({projectId: projectId, token: token}));
     }
@@ -906,6 +934,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // reflected in `_totalOutstandingFeeTokenClaims`. Treat the whole balance as unavailable until routing
         // finishes.
         if (_inflightFeeRoutingCount[token] != 0) return IERC20(token).balanceOf(address(this));
+        // Otherwise only the already-recorded outstanding claims are off-limits; the rest of the balance is free.
         return _totalOutstandingFeeTokenClaims[token];
     }
 
@@ -926,6 +955,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     }
 
     /// @notice Look up the ERC-20 token address for a project.
+    /// @param projectId The ID of the project.
+    /// @return The project's deployed ERC-20 (address(0) if the project is credits-only with no ERC-20).
     function _tokenOf(uint256 projectId) internal view returns (address) {
         return address(IJBTokens(TOKENS).tokenOf(projectId));
     }
@@ -1086,15 +1117,18 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param projectId The project to claim accumulated fee proceeds for.
     /// @param beneficiary The address that should receive any claimed fee proceeds.
     function claimFeeTokensFor(uint256 projectId, address beneficiary) external {
+        // Only the project owner (or a SET_BUYBACK_POOL delegate) may direct where this project's fee proceeds go.
         _requirePermissionFrom({
             account: _ownerOf(projectId), projectId: projectId, permissionId: JBPermissionIds.SET_BUYBACK_POOL
         });
 
+        // Claim any ERC-20 fee tokens first (the common case once the fee project has a token).
         uint256 tokenAmount = claimableFeeTokens[projectId];
         if (tokenAmount > 0) {
             _claimFeeTokens({projectId: projectId, beneficiary: beneficiary, tokenAmount: tokenAmount});
         }
 
+        // Then claim any fee-project credits accrued while the fee project had no ERC-20 (best-effort; see `_dev`).
         uint256 creditAmount = claimableFeeCredits[projectId];
         if (creditAmount > 0) {
             _claimFeeCredits({projectId: projectId, beneficiary: beneficiary, creditAmount: creditAmount});
@@ -1147,10 +1181,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
     }
 
-    /// @notice Collect accrued Uniswap LP trading fees for a project (from the active and every retired position) and
-    /// route them back to its terminal balance. The terminal-token portion is deposited (minus an optional fee-project
-    /// cut); the project-token portion is carried into the accumulation ledger to become future liquidity (never
-    /// burned). Callable by anyone.
+    /// @notice Collect accrued Uniswap LP trading fees for a project (from its single active position) and route them
+    /// back to its terminal balance. The terminal-token portion is deposited (minus an optional fee-project cut); the
+    /// project-token portion is carried into the accumulation ledger to become future liquidity (never burned).
+    /// Callable by anyone.
     /// @param projectId The ID of the project whose LP fees to collect.
     /// @param terminalToken The terminal token paired with the project token in the pool.
     // forge-lint: disable-next-line(mixed-case-function)
@@ -1372,32 +1406,49 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     //*********************************************************************//
 
     /// @notice Absolute difference between two ticks, used for corridor-drift and TWAP-deviation comparisons.
+    /// @param a The first tick.
+    /// @param b The second tick.
+    /// @return The non-negative distance between the two ticks.
     function _absTickDiff(int24 a, int24 b) internal pure returns (int24) {
+        // Order the subtraction so the result is always non-negative regardless of which tick is larger.
         return a >= b ? a - b : b - a;
     }
 
-    /// @notice Record incoming project tokens in the pre-deployment accumulation ledger.
+    /// @notice Record incoming project tokens in the accumulation ledger (the hook's single inflow sink).
+    /// @param projectId The ID of the project to credit.
+    /// @param amount The project-token amount to add to the ledger.
     function _accumulateTokens(uint256 projectId, uint256 amount) internal {
+        // `+=`: accumulation is additive across every reserved-token distribution, pre- and post-deployment.
         accumulatedProjectTokens[projectId] += amount;
     }
 
     /// @notice Deposit tokens into a project's primary terminal balance via `addToBalanceOf`.
+    /// @param projectId The ID of the project to credit.
+    /// @param token The token to deposit (native sentinel or ERC-20).
+    /// @param amount The amount to deposit.
+    /// @param isNative Whether `token` is the native-ETH sentinel (sent as msg.value) vs. an ERC-20 (pulled via
+    /// approve).
     function _addToProjectBalance(uint256 projectId, address token, uint256 amount, bool isNative) internal {
+        // Nothing to deposit — avoid a no-op external call.
         if (amount == 0) return;
 
+        // Route to the project's primary terminal for this token; revert if it has none (the deposit has no home).
         address terminal = _primaryTerminalOf({projectId: projectId, token: token});
         if (terminal == address(0)) {
             revert JBUniswapV4LPSplitHook_TerminalNotFound({projectId: projectId, token: token});
         }
 
+        // ERC-20 deposits are pulled by the terminal, so grant an exact-use approval first; native ETH is sent inline.
         if (!isNative) {
             IERC20(token).forceApprove({spender: terminal, value: amount});
         }
 
+        // Add the tokens to the project's terminal balance. `shouldReturnHeldFees: false` — this is a plain top-up.
         IJBMultiTerminal(terminal).addToBalanceOf{value: isNative ? amount : 0}({
             projectId: projectId, token: token, amount: amount, shouldReturnHeldFees: false, memo: "", metadata: ""
         });
 
+        // The terminal must have consumed the full approval; a leftover allowance is live spend authority and reverts.
         if (!isNative) _requireTemporaryAllowanceConsumed({token: token, spender: terminal});
     }
 
@@ -1457,7 +1508,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Align tick down to the nearest spacing boundary (floor semantics).
     /// @dev Used for `tickUpper` so the LP range contracts toward the intended inner band on the upper side.
+    /// @param tick The tick to align.
+    /// @param spacing The pool's tick spacing to align to.
+    /// @return alignedTick The greatest spacing-multiple ≤ `tick`.
     function _alignTickToSpacing(int24 tick, int24 spacing) internal pure returns (int24 alignedTick) {
+        // Delegate to the shared pure library so deploy/add/rebalance all align identically.
         return JBLPSplitHookHelpers.alignTickToSpacing({tick: tick, spacing: spacing});
     }
 
@@ -1465,23 +1520,36 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @dev Used for `tickLower` so the LP range contracts toward the intended inner band on the lower side.
     /// Without this, flooring tickLower would expand the LP range downward by up to one spacing interval,
     /// exposing project liquidity at prices the bonding curve never sanctioned.
+    /// @param tick The tick to align.
+    /// @param spacing The pool's tick spacing to align to.
+    /// @return alignedTick The smallest spacing-multiple ≥ `tick`.
     function _alignTickToSpacingCeil(int24 tick, int24 spacing) internal pure returns (int24 alignedTick) {
+        // Delegate to the shared pure library (ceiling variant) for consistent lower-bound alignment.
         return JBLPSplitHookHelpers.alignTickToSpacingCeil({tick: tick, spacing: spacing});
     }
 
     /// @notice Grant the PositionManager a time-limited Permit2 allowance so it can pull tokens during SETTLE.
+    /// @dev Permit2 is a two-layer approval: the ERC-20 must approve Permit2, and Permit2 must approve the spender.
+    /// @param token The ERC-20 to approve for the PositionManager to pull.
+    /// @param amount The exact amount to authorize (cleared again after the mint via `_clearPermit2Approval`).
     function _approveViaPermit2(address token, uint256 amount) internal {
+        // Layer 1: let Permit2 pull this token from the hook.
         IERC20(token).forceApprove({spender: address(PERMIT2), value: amount});
+        // Permit2 stores allowances as uint160; reject any amount that would silently truncate.
         if (amount > type(uint160).max) {
             revert JBUniswapV4LPSplitHook_Permit2AmountOverflow({
                 token: token, amount: amount, maxAmount: type(uint160).max
             });
         }
+        // Layer 2: authorize the PositionManager to pull `amount` from the hook via Permit2, expiring shortly so a
+        // leftover approval cannot be exploited later.
         PERMIT2.approve({
             token: token,
             spender: address(positionManager),
+            // Safe: bounded by the `> type(uint160).max` check above.
             // forge-lint: disable-next-line(unsafe-typecast)
             amount: uint160(amount),
+            // Short-lived expiration so the grant only covers this single SETTLE.
             // forge-lint: disable-next-line(unsafe-typecast)
             expiration: uint48(block.timestamp + _DEADLINE_SECONDS)
         });
@@ -1971,10 +2039,14 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     }
 
     /// @notice The native ETH or ERC-20 balance this contract holds for a given Uniswap V4 currency.
+    /// @param currency The Uniswap V4 currency (address(0) for native ETH) to read.
+    /// @return This hook's balance of `currency`.
     function _currencyBalance(Currency currency) internal view returns (uint256) {
+        // Uniswap V4 represents native ETH as the zero-address currency; read the ether balance for it.
         if (currency.isAddressZero()) {
             return address(this).balance;
         }
+        // Otherwise read the ERC-20 balance held by this hook.
         return IERC20(Currency.unwrap(currency)).balanceOf(address(this));
     }
 
@@ -2446,8 +2518,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
     }
 
-    /// @notice Execute a batched position-manager action (mint, burn, decrease, etc.) with a short deadline.
+    /// @notice Execute a batched position-manager action (mint, increase, burn, decrease, etc.) with a short deadline.
+    /// @param unlockData The ABI-encoded `(actions, params)` for the PositionManager to execute under its unlock.
+    /// @param value The native ETH to forward (nonzero only when settling a native-ETH currency side).
     function _modifyLiquidities(bytes memory unlockData, uint256 value) internal {
+        // Bound every batched action with a short deadline so a long-pending tx cannot execute at a stale price.
         positionManager.modifyLiquidities{value: value}({
             unlockData: unlockData, deadline: block.timestamp + _DEADLINE_SECONDS
         });
@@ -2455,8 +2530,14 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Authorize a deploy/add: permissionless once the ruleset weight has decayed 10x from when accumulation
     /// began, otherwise require `SET_BUYBACK_POOL` from the project owner.
+    /// @param projectId The ID of the project being acted on.
+    /// @param ruleset The project's current ruleset (its `weight` is compared against the snapshotted initial weight).
     function _requireDeployOrAddAuth(uint256 projectId, JBRuleset memory ruleset) internal view {
+        // Snapshot taken at first accumulation; the basis for the permissionless threshold.
         uint256 initialWeight = initialWeightOf[projectId];
+        // Require owner permission until the weight has decayed to <= 10% of the initial (i.e. weight*10 <= initial).
+        // `initialWeight == 0` (no accumulation recorded) also requires permission — there is nothing to gate
+        // against.
         if (initialWeight == 0 || ruleset.weight * 10 > initialWeight) {
             _requirePermissionFrom({
                 account: _ownerOf(projectId), projectId: projectId, permissionId: JBPermissionIds.SET_BUYBACK_POOL
@@ -2689,13 +2770,21 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     }
 
     /// @notice Sort two token addresses into the canonical Uniswap V4 ordering (lower address = token0).
+    /// @param tokenA One token address.
+    /// @param tokenB The other token address.
+    /// @return token0 The lower of the two addresses.
+    /// @return token1 The higher of the two addresses.
     function _sortTokens(address tokenA, address tokenB) internal pure returns (address token0, address token1) {
+        // Delegate to the shared pure library so pool-key construction and amount mapping order tokens identically.
         return JBLPSplitHookHelpers.sortTokens({tokenA: tokenA, tokenB: tokenB});
     }
 
     /// @notice Convert a Juicebox terminal-token address to the equivalent Uniswap V4 `Currency`.
     /// @dev Juicebox uses the sentinel `JBConstants.NATIVE_TOKEN` for ETH; Uniswap V4 uses `address(0)`.
+    /// @param terminalToken The Juicebox terminal token (native sentinel or ERC-20).
+    /// @return The matching Uniswap V4 `Currency` (address(0) for native ETH, else the ERC-20).
     function _toCurrency(address terminalToken) internal pure returns (Currency) {
+        // Delegate to the shared pure library so the native-sentinel → address(0) mapping is applied consistently.
         return JBLPSplitHookHelpers.toCurrency(terminalToken);
     }
 }
