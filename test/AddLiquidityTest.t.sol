@@ -55,17 +55,18 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         uint256 activeTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         uint256 mintsBefore = positionManager.mintCallCount();
         uint256 increasesBefore = positionManager.increaseCallCount();
-        uint256 burnsBefore = controller.burnCallCount();
+        uint256 positionBurnsBefore = positionManager.burnCallCount();
+        uint256 tokenBurnsBefore = controller.burnCallCount();
 
         vm.prank(owner);
         hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
 
-        // Same position topped up via INCREASE_LIQUIDITY — no new position, no burn.
+        // Same position topped up via INCREASE_LIQUIDITY — no new position minted, no position burned (no re-range).
         assertEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), activeTokenId, "active position id unchanged");
         assertEq(positionManager.mintCallCount(), mintsBefore, "no new position minted on top-up");
         assertEq(positionManager.increaseCallCount(), increasesBefore + 1, "active position increased once");
-        assertEq(controller.burnCallCount(), burnsBefore, "addLiquidity never burns");
-        assertEq(hook.retiredTokenIdsOf(PROJECT_ID, address(terminalToken)).length, 0, "no retired positions");
+        assertEq(positionManager.burnCallCount(), positionBurnsBefore, "no position burned on a top-up");
+        assertEq(controller.burnCallCount(), tokenBurnsBefore, "addLiquidity never burns project tokens");
     }
 
     // ─── Force-direct funding cash-out
@@ -134,7 +135,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
     // ─── Re-range path
     // ───────────────────────────────────────────────────
 
-    function test_AddLiquidity_RerangesWhenCorridorDrifts_AndCollectsAllPositions() public {
+    function test_AddLiquidity_RerangesByBurningAndReminting() public {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
 
         uint256 oldTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
@@ -147,41 +148,42 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 40e18);
 
         uint256 mintsBefore = positionManager.mintCallCount();
+        uint256 positionBurnsBefore = positionManager.burnCallCount();
+        uint256 tokenBurnsBefore = controller.burnCallCount();
 
         vm.prank(owner);
         hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
 
-        // A fresh position was minted at the live corridor and the old one retired.
-        assertEq(positionManager.mintCallCount(), mintsBefore + 1, "a new position should be minted on re-range");
+        // The stale position is BURNED and a single fresh position is re-minted at the live corridor — funds
+        // consolidate into one position (no retired set), and no project tokens are burned.
+        assertEq(
+            positionManager.burnCallCount(), positionBurnsBefore + 1, "stale position should be burned on re-range"
+        );
+        assertEq(positionManager.mintCallCount(), mintsBefore + 1, "a single fresh position should be minted");
+        assertEq(controller.burnCallCount(), tokenBurnsBefore, "re-range never burns project tokens");
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertTrue(newTokenId != oldTokenId, "active position id should change on re-range");
-        uint256[] memory retired = hook.retiredTokenIdsOf(PROJECT_ID, address(terminalToken));
-        assertEq(retired.length, 1, "old position should be retired");
-        assertEq(retired[0], oldTokenId, "retired id should be the previous active id");
 
-        // Fees from BOTH the retired and the active position are collected and routed.
-        uint256 feeEach = 5e18;
+        // Fees are collected from the single (new) position and routed.
+        uint256 fee = 5e18;
         (address token0,) = _sort(address(projectToken), address(terminalToken));
-        // Load terminal-token fees on both positions (project side left at 0 for a clean terminal-route assertion).
         if (token0 == address(terminalToken)) {
-            positionManager.setCollectableFees(oldTokenId, feeEach, 0);
-            positionManager.setCollectableFees(newTokenId, feeEach, 0);
+            positionManager.setCollectableFees(newTokenId, fee, 0);
         } else {
-            positionManager.setCollectableFees(oldTokenId, 0, feeEach);
-            positionManager.setCollectableFees(newTokenId, 0, feeEach);
+            positionManager.setCollectableFees(newTokenId, 0, fee);
         }
-        terminalToken.mint(address(positionManager), feeEach * 2);
+        terminalToken.mint(address(positionManager), fee);
 
         uint256 addToBalanceBefore = terminal.addToBalanceCallCount();
         uint256 payBefore = terminal.payCallCount();
 
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
 
-        // Both positions were drained (decreaseLiquidity called for each) and the terminal-token fees routed.
+        // The terminal-token fees from the active position were routed.
         assertGe(
             terminal.payCallCount() + terminal.addToBalanceCallCount(),
             payBefore + addToBalanceBefore + 1,
-            "collected terminal fees from both positions should be routed"
+            "collected terminal fees should be routed"
         );
     }
 

@@ -74,21 +74,11 @@ interface IJBUniswapV4LPSplitHook {
     /// @return key The Uniswap V4 PoolKey.
     function poolKeyOf(uint256 projectId, address terminalToken) external view returns (PoolKey memory key);
 
-    /// @notice The retired (no-longer-active) LP position token IDs for a project's terminal-token pair.
-    /// @param projectId The Juicebox project ID.
-    /// @param terminalToken The terminal token address.
-    /// @return tokenIds The retired position token IDs.
-    function retiredTokenIdsOf(
-        uint256 projectId,
-        address terminalToken
-    )
-        external
-        view
-        returns (uint256[] memory tokenIds);
-
     /// @notice Convert the project's post-deployment accumulated reserved tokens into additional liquidity. Tops up the
-    /// active position, or mints a new in-corridor position once the live corridor has drifted. Permissionless once the
-    /// ruleset weight has decayed 10x from accumulation; otherwise requires `SET_BUYBACK_POOL` from the project owner.
+    /// active position, or — once the live corridor has drifted — burns the stale position and re-mints a single
+    /// fresh
+    /// position at the current corridor. Permissionless once the ruleset weight has decayed 10x from accumulation;
+    /// otherwise requires `SET_BUYBACK_POOL` from the project owner.
     /// @param projectId The Juicebox project ID.
     /// @param terminalToken The terminal token paired with the project token in the deployed pool.
     /// @param minCashOutReturn Minimum terminal tokens from the funding cash-out (slippage protection, 0 = auto 3%).

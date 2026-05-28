@@ -41,7 +41,7 @@ Lifecycle:
 - before pool deployment, reserved project tokens accumulate in the hook
 - `deployPool(...)` creates or joins a V4 pool and mints one managed LP position
 - after deployment, later reserved tokens keep accumulating; `addLiquidity(...)` converts them into more liquidity (top-up or re-range), guarded by an oracle-TWAP deviation check and a force-direct bonding-curve cash-out. The hook never burns.
-- fees can be collected (active + retired positions), routed, and claimed through separate accounting paths
+- fees can be collected from the single active position, routed, and claimed through separate accounting paths
 
 ## Roles And Privileges
 

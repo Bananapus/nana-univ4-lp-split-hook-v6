@@ -9,7 +9,7 @@
 
 1. Reserved-token splits accumulate project tokens before a pool exists.
 2. A pool is deployed for a chosen terminal token and bounded by project issuance and cash-out economics.
-3. After deployment, newly received reserved tokens keep accumulating; `addLiquidity` converts them into more liquidity (top-up or re-range under an oracle-TWAP deviation guard), and fees can be collected (from active and retired positions) or the position rebalanced over time. The hook never burns.
+3. After deployment, newly received reserved tokens keep accumulating; `addLiquidity` converts them into more liquidity (top-up, or — on corridor drift — burn the stale position and re-mint a single fresh one, under an oracle-TWAP deviation guard), and fees can be collected from the single active position or the position rebalanced over time. The hook never burns project tokens.
 
 ## High-Risk Areas
 

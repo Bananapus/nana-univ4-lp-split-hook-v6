@@ -42,7 +42,8 @@ authorized deploy call
   -> deploys or uses the target pool and mints the concentrated LP position
 post-deployment
   -> new reserved tokens keep accumulating; `addLiquidity` converts them into more liquidity (top-up while the live corridor matches the active position, else re-range into a new position), validating the pool spot price against the oracle TWAP and cashing out the optimal fraction directly through the bonding curve
-  -> fees can be collected (from the active and all retired positions) and the position can be rebalanced
+  -> on re-range the stale position is burned and a single fresh position is re-minted at the live corridor (funds consolidate, no fragmentation)
+  -> fees can be collected from the single active position and the position can be rebalanced
 ```
 
 ## Accounting Model

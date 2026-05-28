@@ -86,7 +86,7 @@ This repo takes reserved Juicebox token issuance and turns it into a managed Uni
 
 **Main Flow**
 
-1. Collect accrued LP fees (from the active and all retired positions).
+1. Collect accrued LP fees (from the single active position).
 2. Call `addLiquidity` to convert accumulated post-deploy reserved tokens into more liquidity — topping up the active position while the live corridor matches it, or re-ranging into a new position once the corridor drifts past the threshold.
 3. Rebalance when price or issuance conditions make the old range stale.
 4. Keep fee routing and fee-project assumptions aligned with the intended model.
