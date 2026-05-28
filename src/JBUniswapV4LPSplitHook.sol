@@ -171,7 +171,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice The buyback-hook registry, used to target the force-direct cash-out flag.
     /// @dev When `addLiquidity` cashes out to fund the terminal side, it attaches the buyback hook's
-    /// `cashOutMinReclaimed` skip metadata keyed to this registry so the cash-out is routed DIRECTLY through the
+    /// `cashOut` skip metadata keyed to this registry so the cash-out is routed DIRECTLY through the
     /// bonding curve (never through an AMM). Held as an immutable strong reference because the registry is chain-same
     /// (one
     /// canonical CREATE2 address per chain) — this contract does not resolve it per-call from a project's data hook,
@@ -2198,7 +2198,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         });
     }
 
-    /// @notice Build the buyback hook's `cashOutMinReclaimed` "skip" metadata that forces a cash-out directly through
+    /// @notice Build the buyback hook's `cashOut` "skip" metadata that forces a cash-out directly through
     /// the bonding curve (skipping the AMM). Keyed to this hook's strong `BUYBACK_HOOK` registry reference — the
     /// contract that reads and re-keys this entry to the project's resolved buyback hook. Returns empty metadata when
     /// `BUYBACK_HOOK` is unset; the terminal's own `minTokensReclaimed` floor still applies.
@@ -2207,7 +2207,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         return JBMetadataResolver.addToMetadata({
             originalMetadata: bytes(""),
-            idToAdd: JBMetadataResolver.getId({purpose: "cashOutMinReclaimed", target: address(BUYBACK_HOOK)}),
+            idToAdd: JBMetadataResolver.getId({purpose: "cashOut", target: address(BUYBACK_HOOK)}),
             // (minimumSwapAmountOut = 0, skip = true): force the direct bonding-curve cash-out. The terminal's own
             // `minTokensReclaimed` floor enforces slippage, so no hook-level minimum is needed here.
             dataToAdd: abi.encode(uint256(0), true)
@@ -2217,7 +2217,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @notice Cash out `cashOutAmount` project tokens for terminal tokens to fund one side of an LP add.
     /// @dev Enforces a rate-derived slippage floor (a caller minimum can only raise it) and reconciles the terminal's
     /// reported amount against the actual spendable balance delta (fee-on-transfer / fee-token-segregation safe). When
-    /// `forceDirectCashOut` is set, attaches the buyback hook's `cashOutMinReclaimed` skip flag so the cash-out is
+    /// `forceDirectCashOut` is set, attaches the buyback hook's `cashOut` skip flag so the cash-out is
     /// routed DIRECTLY through the bonding curve, never through the AMM this hook is feeding.
     /// @return terminalTokenAmount The reconciled terminal-token amount obtained for LP pairing.
     function _fundTerminalTokenSide(

@@ -82,8 +82,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         // forcing a direct bonding-curve cash-out (never the AMM).
         bytes memory metadata = terminal.lastCashOutMetadata();
         (bool exists, bytes memory data) = JBMetadataResolver.getDataFor({
-            id: JBMetadataResolver.getId({purpose: "cashOutMinReclaimed", target: address(hook.BUYBACK_HOOK())}),
-            metadata: metadata
+            id: JBMetadataResolver.getId({purpose: "cashOut", target: address(hook.BUYBACK_HOOK())}), metadata: metadata
         });
         assertTrue(exists, "force-direct metadata should be keyed to the buyback registry");
         (uint256 minSwapOut, bool skip) = abi.decode(data, (uint256, bool));
