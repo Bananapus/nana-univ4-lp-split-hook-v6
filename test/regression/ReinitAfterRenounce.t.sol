@@ -46,7 +46,8 @@ contract ReinitAfterRenounceTest is Test {
             IJBPermissions(address(permissions)),
             address(jbTokens),
             IAllowanceTransfer(address(0)),
-            IJBSuckerRegistry(address(0))
+            IJBSuckerRegistry(address(0)),
+            address(0)
         );
 
         // Clone and initialize

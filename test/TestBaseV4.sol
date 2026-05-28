@@ -78,6 +78,8 @@ contract LPSplitHookV4TestBase is Test {
     uint256 public constant DEFAULT_WEIGHT = 1000e18;
     uint256 public constant DEFAULT_FIRST_WEIGHT = 1000e18;
     uint16 public constant DEFAULT_RESERVED_PERCENT = 1000; // 10%
+    /// @notice Stand-in buyback-hook registry the hook holds as `BUYBACK_HOOK` (force-direct cash-out target).
+    address public constant BUYBACK_REGISTRY = address(0xB0B);
 
     address public owner;
     address public user;
@@ -169,7 +171,8 @@ contract LPSplitHookV4TestBase is Test {
             IJBPermissions(address(permissions)),
             address(jbTokens),
             IAllowanceTransfer(permit2Addr),
-            IJBSuckerRegistry(address(0))
+            IJBSuckerRegistry(address(0)),
+            BUYBACK_REGISTRY
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize({

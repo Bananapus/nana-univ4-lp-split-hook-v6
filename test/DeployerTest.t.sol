@@ -46,7 +46,8 @@ contract DeployerTest is Test {
             IJBPermissions(address(permissions)),
             address(1), // tokens placeholder
             IAllowanceTransfer(address(0)),
-            IJBSuckerRegistry(address(0))
+            IJBSuckerRegistry(address(0)),
+            address(0)
         );
 
         addressRegistry = new JBAddressRegistry();

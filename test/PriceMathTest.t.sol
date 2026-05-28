@@ -21,7 +21,7 @@ contract TestableJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
         address _tokens,
         IAllowanceTransfer _permit2
     )
-        JBUniswapV4LPSplitHook(_directory, _permissions, _tokens, _permit2, IJBSuckerRegistry(address(0)))
+        JBUniswapV4LPSplitHook(_directory, _permissions, _tokens, _permit2, IJBSuckerRegistry(address(0)), address(0))
     {}
 
     /// @dev Helper to fetch controller and ruleset for a project.

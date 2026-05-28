@@ -46,18 +46,3 @@ contract MockGeomeanOracle {
         secondsPerLiquidityCumulativeX128s[n - 1] = uint160(window);
     }
 }
-
-/// @notice Minimal mock of a revnet's REVOwner data hook, exposing the buyback-hook registry address that the LP split
-/// hook targets when forcing a direct cash-out.
-contract MockREVOwner {
-    address internal _buybackHook;
-
-    constructor(address buybackHook_) {
-        _buybackHook = buybackHook_;
-    }
-
-    // forge-lint: disable-next-line(mixed-case-function)
-    function BUYBACK_HOOK() external view returns (address) {
-        return _buybackHook;
-    }
-}

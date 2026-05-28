@@ -164,7 +164,8 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
             IJBPermissions(address(permissions)),
             address(jbTokens),
             IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
-            IJBSuckerRegistry(address(mockRegistry))
+            IJBSuckerRegistry(address(mockRegistry)),
+            address(0)
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize({
@@ -324,7 +325,8 @@ contract FeeTokensExcludedFromRebalanceTest is LPSplitHookV4TestBase {
             IJBPermissions(address(permissions)),
             address(jbTokens),
             IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
-            IJBSuckerRegistry(address(mockRegistry))
+            IJBSuckerRegistry(address(mockRegistry)),
+            address(0)
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize({
@@ -440,7 +442,8 @@ contract FeeTokensExcludedFromSplitBalanceCheckTest is LPSplitHookV4TestBase {
             IJBPermissions(address(permissions)),
             address(jbTokens),
             IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
-            IJBSuckerRegistry(address(mockRegistry))
+            IJBSuckerRegistry(address(mockRegistry)),
+            address(0)
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize({

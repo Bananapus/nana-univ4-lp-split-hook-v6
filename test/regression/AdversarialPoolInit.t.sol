@@ -24,7 +24,7 @@ contract AdversarialPoolInitHook is JBUniswapV4LPSplitHook {
         address _tokens,
         IAllowanceTransfer _permit2
     )
-        JBUniswapV4LPSplitHook(_directory, _permissions, _tokens, _permit2, IJBSuckerRegistry(address(0)))
+        JBUniswapV4LPSplitHook(_directory, _permissions, _tokens, _permit2, IJBSuckerRegistry(address(0)), address(0))
     {}
 
     // forge-lint: disable-next-line(mixed-case-function)

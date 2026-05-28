@@ -22,7 +22,7 @@ contract CashOutRateHook is JBUniswapV4LPSplitHook {
         IAllowanceTransfer _permit2,
         IJBSuckerRegistry _suckerRegistry
     )
-        JBUniswapV4LPSplitHook(_directory, _permissions, _tokens, _permit2, _suckerRegistry)
+        JBUniswapV4LPSplitHook(_directory, _permissions, _tokens, _permit2, _suckerRegistry, address(0))
     {}
 
     // forge-lint: disable-next-line(mixed-case-function)

@@ -148,7 +148,8 @@ contract TokenIdFork is ForkDeployHelper {
             IJBPermissions(address(jbPermissions)),
             address(jbTokens),
             IAllowanceTransfer(address(PERMIT2)),
-            IJBSuckerRegistry(address(0))
+            IJBSuckerRegistry(address(0)),
+            address(0)
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize({

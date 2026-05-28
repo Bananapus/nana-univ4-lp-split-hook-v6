@@ -41,7 +41,7 @@ contract ExposedJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
         address tokens,
         IAllowanceTransfer permit2
     )
-        JBUniswapV4LPSplitHook(directory, permissions, tokens, permit2, IJBSuckerRegistry(address(0)))
+        JBUniswapV4LPSplitHook(directory, permissions, tokens, permit2, IJBSuckerRegistry(address(0)), address(0))
     {}
 
     function exposed_calculateTickBounds(

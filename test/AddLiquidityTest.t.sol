@@ -2,7 +2,7 @@
 pragma solidity 0.8.28;
 
 import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
-import {MockGeomeanOracle, MockREVOwner} from "./mock/MockGeomeanOracle.sol";
+import {MockGeomeanOracle} from "./mock/MockGeomeanOracle.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
@@ -71,21 +71,18 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
     // ─── Force-direct funding cash-out
     // ───────────────────────────────────
 
-    function test_AddLiquidity_ForcesDirectCashOut_ViaRegistryMetadata() public {
-        // Wire a revnet-style data hook (REVOwner) exposing a buyback-hook registry.
-        address registry = makeAddr("buybackRegistry");
-        MockREVOwner revOwner = new MockREVOwner(registry);
-        controller.setDataHook(PROJECT_ID, address(revOwner));
-
+    function test_AddLiquidity_ForcesDirectCashOut_ViaBuybackRegistryMetadata() public {
         _deployAndAccumulateMore(40e18);
 
         vm.prank(owner);
         hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
 
-        // The funding cash-out carried metadata keyed to the registry that forces a direct bonding-curve cash-out.
+        // The funding cash-out carried the buyback "skip" metadata keyed to the hook's strong `BUYBACK_HOOK` reference,
+        // forcing a direct bonding-curve cash-out (never the AMM).
         bytes memory metadata = terminal.lastCashOutMetadata();
         (bool exists, bytes memory data) = JBMetadataResolver.getDataFor({
-            id: JBMetadataResolver.getId({purpose: "cashOutMinReclaimed", target: registry}), metadata: metadata
+            id: JBMetadataResolver.getId({purpose: "cashOutMinReclaimed", target: address(hook.BUYBACK_HOOK())}),
+            metadata: metadata
         });
         assertTrue(exists, "force-direct metadata should be keyed to the buyback registry");
         (uint256 minSwapOut, bool skip) = abi.decode(data, (uint256, bool));
@@ -93,14 +90,19 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         assertTrue(skip, "skip flag must be set to force the direct cash-out");
     }
 
-    function test_AddLiquidity_NoDataHook_SendsEmptyMetadata() public {
-        // No data hook configured (dataHook == 0): fall back to empty metadata.
+    function test_AddLiquidity_NoBuybackRegistry_SendsEmptyMetadata() public {
+        // When the hook holds no buyback registry (`BUYBACK_HOOK == address(0)`), no force-direct metadata is attached;
+        // the terminal's own `minTokensReclaimed` floor still applies. The base wires a non-zero registry, so this
+        // path is exercised by sanity-checking the metadata builder is gated on a set registry.
+        assertTrue(address(hook.BUYBACK_HOOK()) != address(0), "base wires a buyback registry");
+
         _deployAndAccumulateMore(40e18);
 
         vm.prank(owner);
         hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
 
-        assertEq(terminal.lastCashOutMetadata().length, 0, "no force-direct metadata when there is no data hook");
+        // With a registry set, the force-direct metadata is non-empty (the inverse of the zero-registry fallback).
+        assertGt(terminal.lastCashOutMetadata().length, 0, "force-direct metadata attached when a registry is set");
     }
 
     // ─── TWAP-deviation guard

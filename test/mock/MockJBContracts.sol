@@ -153,7 +153,6 @@ contract MockJBController {
     mapping(uint256 projectId => uint16 reservedPercent) public reservedPercents;
     mapping(uint256 projectId => uint32 baseCurrency) public baseCurrencies;
     mapping(uint256 projectId => uint256 firstWeight) public firstWeights;
-    mapping(uint256 projectId => address dataHook) public dataHooks;
 
     // Track burn calls for verification
     uint256 public burnCallCount;
@@ -188,10 +187,6 @@ contract MockJBController {
         firstWeights[projectId] = weight;
     }
 
-    function setDataHook(uint256 projectId, address dataHook) external {
-        dataHooks[projectId] = dataHook;
-    }
-
     function PRICES() external view returns (address) {
         return pricesContract;
     }
@@ -221,8 +216,8 @@ contract MockJBController {
             holdFees: false,
             scopeCashOutsToLocalBalances: true,
             useDataHookForPay: false,
-            useDataHookForCashOut: dataHooks[projectId] != address(0),
-            dataHook: dataHooks[projectId],
+            useDataHookForCashOut: false,
+            dataHook: address(0),
             metadata: 0
         });
 

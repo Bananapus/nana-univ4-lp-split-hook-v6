@@ -23,7 +23,7 @@ contract FindHighestValueHarness is JBUniswapV4LPSplitHook {
         address tokens,
         IAllowanceTransfer permit2
     )
-        JBUniswapV4LPSplitHook(directory, permissions, tokens, permit2, IJBSuckerRegistry(address(0)))
+        JBUniswapV4LPSplitHook(directory, permissions, tokens, permit2, IJBSuckerRegistry(address(0)), address(0))
     {}
 
     /// @notice Public wrapper around the internal function for testing.

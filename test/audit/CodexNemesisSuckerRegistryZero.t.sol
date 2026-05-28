@@ -24,7 +24,7 @@ contract CodexNemesisCashOutRateHarness is JBUniswapV4LPSplitHook {
         IAllowanceTransfer permit2,
         IJBSuckerRegistry suckerRegistry
     )
-        JBUniswapV4LPSplitHook(directory, permissions, tokens, permit2, suckerRegistry)
+        JBUniswapV4LPSplitHook(directory, permissions, tokens, permit2, suckerRegistry, address(0))
     {}
 
     function exposedGetCashOutRate(

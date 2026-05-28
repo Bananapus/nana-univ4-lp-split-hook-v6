@@ -14,6 +14,7 @@ import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {Actions} from "@uniswap/v4-periphery/src/libraries/Actions.sol";
 import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
+import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/IJBBuybackHookRegistry.sol";
 import {JBPermissioned} from "@bananapus/core-v6/src/abstract/JBPermissioned.sol";
 import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
 import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
@@ -31,33 +32,14 @@ import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingCo
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
 import {JBPermissionIds} from "@bananapus/permission-ids-v6/src/JBPermissionIds.sol";
+import {IGeomeanOracle} from "@bananapus/suckers-v6/src/interfaces/IGeomeanOracle.sol";
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 
 import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
 
 import {IJBUniswapV4LPSplitHook} from "./interfaces/IJBUniswapV4LPSplitHook.sol";
 import {JBLPSplitHookHelpers} from "./libraries/JBLPSplitHookHelpers.sol";
-
-/// @notice Minimal view of the shared Uniswap V4 geomean oracle hook. The full hook lives in `univ4-router-v6` and is
-/// chain-different by design, so only the TWAP accessor this contract needs is declared locally.
-interface IGeomeanOracle {
-    /// @notice Uniswap-V3-style TWAP accessor returning cumulative ticks at each `secondsAgos` offset.
-    function observe(
-        PoolKey calldata key,
-        uint32[] calldata secondsAgos
-    )
-        external
-        view
-        returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiquidityCumulativeX128s);
-}
-
-/// @notice Minimal view of a revnet's runtime data hook (REVOwner), exposing the buyback-hook registry that performs
-/// the `cashOutMinReclaimed` metadata rekey. Used to target the force-direct cash-out flag at the registry, which is
-/// the only contract on the revnet cash-out path that reads and re-keys it.
-interface IREVOwner {
-    // forge-lint: disable-next-line(mixed-case-function)
-    function BUYBACK_HOOK() external view returns (address);
-}
+import {AddLiquidityParams} from "./structs/AddLiquidityParams.sol";
 
 /// @custom:benediction DEVS BENEDICAT ET PROTEGAT CONTRACTVS MEAM
 /// @notice A split hook that builds and manages a Uniswap V4 liquidity position for a Juicebox project, using the
@@ -114,11 +96,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     error JBUniswapV4LPSplitHook_NoTokensAccumulated(uint256 projectId);
     error JBUniswapV4LPSplitHook_NotHookSpecifiedInContext(address expectedHook, address actualHook);
     error JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported(uint256 projectId, address terminalToken);
+    error JBUniswapV4LPSplitHook_Permit2AmountOverflow(address token, uint256 amount, uint256 maxAmount);
+    error JBUniswapV4LPSplitHook_PoolAlreadyDeployed(uint256 projectId, address terminalToken, uint256 tokenId);
     /// @notice Thrown when the pool's current price has deviated too far from the oracle TWAP, which would let a
     /// sandbox/JIT attacker make the hook add liquidity at a manipulated ratio.
     error JBUniswapV4LPSplitHook_PriceDeviationTooHigh(int24 spotTick, int24 twapTick, int24 maxDeviationTicks);
-    error JBUniswapV4LPSplitHook_Permit2AmountOverflow(address token, uint256 amount, uint256 maxAmount);
-    error JBUniswapV4LPSplitHook_PoolAlreadyDeployed(uint256 projectId, address terminalToken, uint256 tokenId);
     error JBUniswapV4LPSplitHook_SplitSenderNotValidControllerOrTerminal(
         uint256 projectId, address sender, address controller
     );
@@ -183,6 +165,17 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     //*********************************************************************//
     // --------------- public immutable stored properties ---------------- //
     //*********************************************************************//
+
+    /// @notice The buyback-hook registry, used to target the force-direct cash-out flag.
+    /// @dev When `addLiquidity` cashes out to fund the terminal side, it attaches the buyback hook's
+    /// `cashOutMinReclaimed` skip metadata keyed to this registry so the cash-out is routed DIRECTLY through the
+    /// bonding curve (never through an AMM). Held as an immutable strong reference because the registry is chain-same
+    /// (one
+    /// canonical CREATE2 address per chain) — this contract does not resolve it per-call from a project's data hook,
+    /// so
+    /// it is decoupled from revnets / REVOwner. May be the zero address, in which case no force-direct metadata is
+    /// attached and the terminal's own `minTokensReclaimed` floor still applies.
+    IJBBuybackHookRegistry public immutable BUYBACK_HOOK;
 
     /// @notice JBDirectory (to find important control contracts for given projectId)
     address public immutable DIRECTORY;
@@ -314,29 +307,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     mapping(address token => uint256 totalClaims) internal _totalOutstandingFeeTokenClaims;
 
     //*********************************************************************//
-    // ----------------------------- structs ----------------------------- //
-    //*********************************************************************//
-
-    /// @notice Bundled arguments for `_executeAddToPosition`, shared by the deploy and `addLiquidity` paths.
-    /// @dev Bundled into a struct so the shared mint/increase internal stays within the Yul stack budget under
-    /// `via_ir`.
-    struct AddLiquidityParams {
-        uint256 projectId;
-        address projectToken;
-        address terminalToken;
-        PoolKey key;
-        int24 tickLower;
-        int24 tickUpper;
-        uint256 projectTokenBalance;
-        uint256 minCashOutReturn;
-        bool forceDirectCashOut;
-        bool isNewPosition;
-        uint256 existingTokenId;
-        address controller;
-        JBRuleset ruleset;
-    }
-
-    //*********************************************************************//
     // ---------------------------- constructor -------------------------- //
     //*********************************************************************//
 
@@ -345,15 +315,18 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param tokens JBTokens address.
     /// @param permit2 The Permit2 utility.
     /// @param suckerRegistry The sucker registry for cross-chain surplus/supply queries.
+    /// @param buybackHook The buyback-hook registry to target for force-direct cash-outs (chain-same; may be zero).
     constructor(
         address directory,
         IJBPermissions permissions,
         address tokens,
         IAllowanceTransfer permit2,
-        IJBSuckerRegistry suckerRegistry
+        IJBSuckerRegistry suckerRegistry,
+        address buybackHook
     )
         JBPermissioned(permissions)
     {
+        BUYBACK_HOOK = IJBBuybackHookRegistry(buybackHook);
         DIRECTORY = directory;
         PERMIT2 = permit2;
         PROJECTS = IJBDirectory(directory).PROJECTS();
@@ -978,6 +951,87 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     // --------------------- external transactions ----------------------- //
     //*********************************************************************//
 
+    /// @notice Convert the project's post-deployment accumulated reserved tokens into additional protocol-owned
+    /// liquidity. Tops up the active position while the live cash-out/issuance corridor still matches the active
+    /// position's ticks; once the corridor has drifted past `_RERANGE_THRESHOLD_TICKS`, retires the active position and
+    /// mints a fresh one at the current corridor. The funding cash-out is forced DIRECTLY through the bonding curve
+    /// (never the AMM this hook feeds), and the add is rejected if the pool's spot price has deviated from the oracle
+    /// TWAP — bounding sandwich/JIT manipulation. Permissionless once the ruleset weight has decayed 10x from when
+    /// accumulation began; otherwise requires `SET_BUYBACK_POOL` from the project owner. Safe for anyone to call.
+    /// @param projectId The ID of the project whose accumulated tokens should be added as liquidity.
+    /// @param terminalToken The terminal token paired with the project token in the deployed pool.
+    /// @param minCashOutReturn Minimum terminal tokens to accept from the funding cash-out (slippage protection). Pass
+    /// 0 to use the hook's default tolerance derived from the current cash-out rate.
+    function addLiquidity(uint256 projectId, address terminalToken, uint256 minCashOutReturn) external {
+        // Require a deployed pool for this project/terminal-token pair.
+        uint256 activeTokenId = tokenIdOf[projectId][terminalToken];
+        if (activeTokenId == 0) {
+            revert JBUniswapV4LPSplitHook_InvalidStageForAction({
+                projectId: projectId, terminalToken: terminalToken, tokenId: activeTokenId
+            });
+        }
+
+        address controller = _controllerOf(projectId);
+        (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
+
+        // Same authorization model as `deployPool`: permissionless once the weight has decayed 10x, else
+        // SET_BUYBACK_POOL from the owner.
+        _requireDeployOrAddAuth({projectId: projectId, ruleset: ruleset});
+
+        uint256 projectTokenBalance = accumulatedProjectTokens[projectId];
+        if (projectTokenBalance == 0) revert JBUniswapV4LPSplitHook_NoTokensAccumulated({projectId: projectId});
+
+        address projectToken = _tokenOf(projectId);
+        PoolKey memory key = poolKeysOf[projectId][terminalToken];
+
+        // Reject the add while the pool's spot price is off the oracle TWAP. Stops a JIT/sandwich attacker from shoving
+        // the pool price right before our add to make us mint at a bad ratio.
+        _requireSpotNearTwap({projectId: projectId, terminalToken: terminalToken, key: key});
+
+        // Compute the live corridor and decide between topping up the active position and re-ranging into a new one.
+        (int24 liveLower, int24 liveUpper) = _calculateTickBounds({
+            projectId: projectId,
+            terminalToken: terminalToken,
+            projectToken: projectToken,
+            controller: controller,
+            ruleset: ruleset
+        });
+
+        bool rerange = _absTickDiff({a: liveLower, b: activeTickLowerOf[projectId][terminalToken]})
+                > _RERANGE_THRESHOLD_TICKS
+            || _absTickDiff({a: liveUpper, b: activeTickUpperOf[projectId][terminalToken]}) > _RERANGE_THRESHOLD_TICKS;
+
+        // Retire the current active position before re-ranging so the freshly minted one becomes active. The retired
+        // position keeps its liquidity and is still collected by `collectAndRouteLPFees`.
+        if (rerange) _retiredTokenIdsOf[projectId][terminalToken].push(activeTokenId);
+
+        _executeAddToPosition(
+            AddLiquidityParams({
+                projectId: projectId,
+                projectToken: projectToken,
+                terminalToken: terminalToken,
+                key: key,
+                tickLower: rerange ? liveLower : activeTickLowerOf[projectId][terminalToken],
+                tickUpper: rerange ? liveUpper : activeTickUpperOf[projectId][terminalToken],
+                projectTokenBalance: projectTokenBalance,
+                minCashOutReturn: minCashOutReturn,
+                forceDirectCashOut: true,
+                isNewPosition: rerange,
+                existingTokenId: rerange ? 0 : activeTokenId,
+                controller: controller,
+                ruleset: ruleset
+            })
+        );
+
+        emit LiquidityAdded({
+            projectId: projectId,
+            terminalToken: terminalToken,
+            tokenId: tokenIdOf[projectId][terminalToken],
+            isNewPosition: rerange,
+            caller: msg.sender
+        });
+    }
+
     /// @notice Claims accumulated fee proceeds for `projectId` and sends them to `beneficiary`.
     /// @dev Requires `SET_BUYBACK_POOL` permission from the project's owner.
     /// @dev ERC-20 fee tokens are claimed first, followed by any fee credits that were accrued while the fee project
@@ -1132,87 +1186,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         });
     }
 
-    /// @notice Convert the project's post-deployment accumulated reserved tokens into additional protocol-owned
-    /// liquidity. Tops up the active position while the live cash-out/issuance corridor still matches the active
-    /// position's ticks; once the corridor has drifted past `_RERANGE_THRESHOLD_TICKS`, retires the active position and
-    /// mints a fresh one at the current corridor. The funding cash-out is forced DIRECTLY through the bonding curve
-    /// (never the AMM this hook feeds), and the add is rejected if the pool's spot price has deviated from the oracle
-    /// TWAP — bounding sandwich/JIT manipulation. Permissionless once the ruleset weight has decayed 10x from when
-    /// accumulation began; otherwise requires `SET_BUYBACK_POOL` from the project owner. Safe for anyone to call.
-    /// @param projectId The ID of the project whose accumulated tokens should be added as liquidity.
-    /// @param terminalToken The terminal token paired with the project token in the deployed pool.
-    /// @param minCashOutReturn Minimum terminal tokens to accept from the funding cash-out (slippage protection). Pass
-    /// 0 to use the hook's default tolerance derived from the current cash-out rate.
-    function addLiquidity(uint256 projectId, address terminalToken, uint256 minCashOutReturn) external {
-        // Require a deployed pool for this project/terminal-token pair.
-        uint256 activeTokenId = tokenIdOf[projectId][terminalToken];
-        if (activeTokenId == 0) {
-            revert JBUniswapV4LPSplitHook_InvalidStageForAction({
-                projectId: projectId, terminalToken: terminalToken, tokenId: activeTokenId
-            });
-        }
-
-        address controller = _controllerOf(projectId);
-        (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
-
-        // Same authorization model as `deployPool`: permissionless once the weight has decayed 10x, else
-        // SET_BUYBACK_POOL from the owner.
-        _requireDeployOrAddAuth({projectId: projectId, ruleset: ruleset});
-
-        uint256 projectTokenBalance = accumulatedProjectTokens[projectId];
-        if (projectTokenBalance == 0) revert JBUniswapV4LPSplitHook_NoTokensAccumulated({projectId: projectId});
-
-        address projectToken = _tokenOf(projectId);
-        PoolKey memory key = poolKeysOf[projectId][terminalToken];
-
-        // Reject the add while the pool's spot price is off the oracle TWAP. Stops a JIT/sandwich attacker from shoving
-        // the pool price right before our add to make us mint at a bad ratio.
-        _requireSpotNearTwap({projectId: projectId, terminalToken: terminalToken, key: key});
-
-        // Compute the live corridor and decide between topping up the active position and re-ranging into a new one.
-        (int24 liveLower, int24 liveUpper) = _calculateTickBounds({
-            projectId: projectId,
-            terminalToken: terminalToken,
-            projectToken: projectToken,
-            controller: controller,
-            ruleset: ruleset
-        });
-
-        bool rerange = _absTickDiff({a: liveLower, b: activeTickLowerOf[projectId][terminalToken]})
-                > _RERANGE_THRESHOLD_TICKS
-            || _absTickDiff({a: liveUpper, b: activeTickUpperOf[projectId][terminalToken]}) > _RERANGE_THRESHOLD_TICKS;
-
-        // Retire the current active position before re-ranging so the freshly minted one becomes active. The retired
-        // position keeps its liquidity and is still collected by `collectAndRouteLPFees`.
-        if (rerange) _retiredTokenIdsOf[projectId][terminalToken].push(activeTokenId);
-
-        _executeAddToPosition(
-            AddLiquidityParams({
-                projectId: projectId,
-                projectToken: projectToken,
-                terminalToken: terminalToken,
-                key: key,
-                tickLower: rerange ? liveLower : activeTickLowerOf[projectId][terminalToken],
-                tickUpper: rerange ? liveUpper : activeTickUpperOf[projectId][terminalToken],
-                projectTokenBalance: projectTokenBalance,
-                minCashOutReturn: minCashOutReturn,
-                forceDirectCashOut: true,
-                isNewPosition: rerange,
-                existingTokenId: rerange ? 0 : activeTokenId,
-                controller: controller,
-                ruleset: ruleset
-            })
-        );
-
-        emit LiquidityAdded({
-            projectId: projectId,
-            terminalToken: terminalToken,
-            tokenId: tokenIdOf[projectId][terminalToken],
-            isNewPosition: rerange,
-            caller: msg.sender
-        });
-    }
-
     /// @notice Called by the Juicebox controller when reserved tokens are distributed to this hook's split. Tokens are
     /// accumulated in escrow both before AND after pool deployment: pre-deploy, `deployPool` consumes the accumulation;
     /// post-deploy, `addLiquidity` converts it into more liquidity. The hook never burns.
@@ -1352,6 +1325,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     // ------------------------ internal functions ----------------------- //
     //*********************************************************************//
 
+    /// @notice Absolute difference between two ticks, used for corridor-drift and TWAP-deviation comparisons.
+    function _absTickDiff(int24 a, int24 b) internal pure returns (int24) {
+        return a >= b ? a - b : b - a;
+    }
+
     /// @notice Record incoming project tokens in the pre-deployment accumulation ledger.
     function _accumulateTokens(uint256 projectId, uint256 amount) internal {
         accumulatedProjectTokens[projectId] += amount;
@@ -1375,11 +1353,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         });
 
         if (!isNative) _requireTemporaryAllowanceConsumed({token: token, spender: terminal});
-    }
-
-    /// @notice Absolute difference between two ticks, used for corridor-drift and TWAP-deviation comparisons.
-    function _absTickDiff(int24 a, int24 b) internal pure returns (int24) {
-        return a >= b ? a - b : b - a;
     }
 
     /// @notice Add liquidity to a project's Uniswap V4 pool using its accumulated project tokens, by minting a fresh
@@ -1435,284 +1408,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         );
     }
 
-    /// @notice Shared cash-out-and-mint/increase core used by both the deploy path and `addLiquidity`.
-    /// @dev Cashes out the optimal fraction of `projectTokenBalance` for terminal tokens, then either mints a new
-    /// position (`isNewPosition`) or tops up `existingTokenId` via `INCREASE_LIQUIDITY`, at the pool's current price
-    /// within `[tickLower, tickUpper]`. CEI: the accumulation ledger is zeroed before any external call so a reentrant
-    /// add/deploy finds nothing to spend; leftovers are carried forward afterwards (never burned).
-    function _executeAddToPosition(AddLiquidityParams memory p) internal {
-        // CEI: clear the accumulation ledger before any external call. A reentrant `addLiquidity` then reverts
-        // (NoTokensAccumulated) and a reentrant `deployPool` reverts (already deployed). Leftovers are re-added below.
-        accumulatedProjectTokens[p.projectId] = 0;
-
-        // Read the pool's actual current price. It may have been initialized by another party (e.g. REVDeployer) or
-        // moved by trading since the last add.
-        uint160 sqrtPriceInit = _getSqrtPriceX96(p.key);
-
-        // Determine the optimal fraction of project tokens to cash out for terminal-token pairing within these ticks.
-        uint256 cashOutAmount = _computeOptimalCashOutAmount({
-            projectId: p.projectId,
-            terminalToken: p.terminalToken,
-            projectToken: p.projectToken,
-            totalProjectTokens: p.projectTokenBalance,
-            sqrtPriceInit: sqrtPriceInit,
-            tickLower: p.tickLower,
-            tickUpper: p.tickUpper,
-            controller: p.controller,
-            ruleset: p.ruleset
-        });
-
-        // Fund the terminal-token side via a cash-out (optionally forced directly through the bonding curve).
-        uint256 terminalTokenAmount = _fundTerminalTokenSide({
-            projectId: p.projectId,
-            terminalToken: p.terminalToken,
-            cashOutAmount: cashOutAmount,
-            minCashOutReturn: p.minCashOutReturn,
-            forceDirectCashOut: p.forceDirectCashOut,
-            controller: p.controller,
-            ruleset: p.ruleset
-        });
-
-        uint256 projectTokenAmount = p.projectTokenBalance - cashOutAmount;
-
-        // Map amounts to (amount0, amount1) by currency ordering.
-        (address token0,) = _sortTokens({tokenA: p.projectToken, tokenB: Currency.unwrap(_toCurrency(p.terminalToken))});
-        uint256 amount0 = p.projectToken == token0 ? projectTokenAmount : terminalTokenAmount;
-        uint256 amount1 = p.projectToken == token0 ? terminalTokenAmount : projectTokenAmount;
-
-        // Derive liquidity from the amounts at the pool's current price within the chosen ticks.
-        uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts({
-            sqrtPriceX96: sqrtPriceInit,
-            sqrtPriceAX96: TickMath.getSqrtPriceAtTick(p.tickLower),
-            sqrtPriceBX96: TickMath.getSqrtPriceAtTick(p.tickUpper),
-            amount0: amount0,
-            amount1: amount1
-        });
-
-        // Revert if the computed liquidity is zero — minting/increasing with no liquidity would waste gas.
-        if (liquidity == 0) revert JBUniswapV4LPSplitHook_ZeroLiquidity({amount0: amount0, amount1: amount1});
-
-        // Snapshot balances before settling to isolate this add's leftover from other projects' balances.
-        uint256 projBalBefore = IERC20(p.projectToken).balanceOf(address(this));
-        uint256 termBalBefore = _getTerminalTokenBalance(p.terminalToken);
-
-        if (p.isNewPosition) {
-            _mintPosition({
-                key: p.key,
-                tickLower: p.tickLower,
-                tickUpper: p.tickUpper,
-                liquidity: liquidity,
-                amount0: amount0,
-                amount1: amount1
-            });
-            // nextTokenId was incremented by MINT_POSITION, so (nextTokenId - 1) is the freshly minted ID.
-            tokenIdOf[p.projectId][p.terminalToken] = _nextTokenId() - 1;
-            activeTickLowerOf[p.projectId][p.terminalToken] = p.tickLower;
-            activeTickUpperOf[p.projectId][p.terminalToken] = p.tickUpper;
-        } else {
-            _increaseLiquidity({
-                tokenId: p.existingTokenId, key: p.key, liquidity: liquidity, amount0: amount0, amount1: amount1
-            });
-        }
-
-        // Carry leftovers forward; never burn.
-        _carryLeftovers({
-            projectId: p.projectId,
-            projectToken: p.projectToken,
-            terminalToken: p.terminalToken,
-            intendedProjectAmount: projectTokenAmount,
-            intendedTerminalAmount: terminalTokenAmount,
-            projBalBefore: projBalBefore,
-            termBalBefore: termBalBefore
-        });
-    }
-
-    /// @notice Cash out `cashOutAmount` project tokens for terminal tokens to fund one side of an LP add.
-    /// @dev Enforces a rate-derived slippage floor (a caller minimum can only raise it) and reconciles the terminal's
-    /// reported amount against the actual spendable balance delta (fee-on-transfer / fee-token-segregation safe). When
-    /// `forceDirectCashOut` is set, attaches the buyback hook's `cashOutMinReclaimed` skip flag so the cash-out is
-    /// routed DIRECTLY through the bonding curve, never through the AMM this hook is feeding.
-    /// @return terminalTokenAmount The reconciled terminal-token amount obtained for LP pairing.
-    function _fundTerminalTokenSide(
-        uint256 projectId,
-        address terminalToken,
-        uint256 cashOutAmount,
-        uint256 minCashOutReturn,
-        bool forceDirectCashOut,
-        address controller,
-        JBRuleset memory ruleset
-    )
-        internal
-        returns (uint256 terminalTokenAmount)
-    {
-        address terminal = _primaryTerminalOf({projectId: projectId, token: terminalToken});
-        if (terminal == address(0) || cashOutAmount == 0) return 0;
-
-        // Snapshot only the balance not reserved for fee-token claims so the post-cash-out delta does not count ERC-20s
-        // already owed to other projects' unclaimed routed LP fees.
-        uint256 spendableBefore = _spendableTerminalTokenBalance(terminalToken);
-
-        // The LP size and ticks derive from the current cash-out rate, so this funding cash-out must not settle below
-        // that same rate floor. A caller-supplied minimum can only raise this floor; it cannot lower it.
-        uint256 effectiveMinReturn = minCashOutReturn;
-        uint256 cashOutRate = _getCashOutRate({
-            projectId: projectId, terminalToken: terminalToken, controller: controller, ruleset: ruleset
-        });
-        if (cashOutRate > 0) {
-            uint256 expectedReturn = mulDiv({x: cashOutAmount, y: cashOutRate, denominator: _WAD});
-            uint256 derivedMinReturn = mulDiv({
-                x: expectedReturn, y: _CASH_OUT_SLIPPAGE_NUMERATOR, denominator: _CASH_OUT_SLIPPAGE_DENOMINATOR
-            });
-            if (derivedMinReturn > effectiveMinReturn) effectiveMinReturn = derivedMinReturn;
-        }
-
-        // Optionally force the cash-out directly through the bonding curve (skip the AMM). Empty metadata falls back to
-        // the project's normal cash-out path; the terminal still enforces `effectiveMinReturn`.
-        bytes memory metadata = forceDirectCashOut ? _forceDirectCashOutMetadata(ruleset) : bytes("");
-
-        // Ask the terminal to cash out. The reported amount is the optimistic upper bound for what to credit to LP.
-        uint256 reportedTerminalTokenAmount = IJBMultiTerminal(terminal)
-            .cashOutTokensOf({
-            holder: address(this),
-            projectId: projectId,
-            cashOutCount: cashOutAmount,
-            tokenToReclaim: terminalToken,
-            minTokensReclaimed: effectiveMinReturn,
-            beneficiary: payable(address(this)),
-            metadata: metadata,
-            referralProjectId: 0
-        });
-
-        // Reconcile the terminal report with the actual spendable balance delta.
-        uint256 spendableAfter = _spendableTerminalTokenBalance(terminalToken);
-        uint256 actualTerminalTokenAmount = spendableAfter > spendableBefore ? spendableAfter - spendableBefore : 0;
-
-        // Use the smaller value so LP funding never spends tokens that did not arrive, and never captures unrelated
-        // balance already sitting in the hook.
-        terminalTokenAmount = reportedTerminalTokenAmount < actualTerminalTokenAmount
-            ? reportedTerminalTokenAmount
-            : actualTerminalTokenAmount;
-
-        // The derived or caller-provided minimum is enforced against the reconciled spendable amount.
-        if (terminalTokenAmount < effectiveMinReturn) {
-            revert JBUniswapV4LPSplitHook_InsufficientBalance({
-                available: terminalTokenAmount, required: effectiveMinReturn
-            });
-        }
-    }
-
-    /// @notice Carry leftover tokens after an LP add forward, never burning. Project-token dust returns to the
-    /// accumulation ledger (becoming future liquidity); terminal-token dust is deposited into the project's terminal
-    /// balance.
-    /// @dev Uses balance-delta measurement so fee-on-transfer behavior and V4 SWEEP dust cannot mis-account leftovers,
-    /// and `+=` on the ledger so a reentrant `processSplitWith` inflow during the (later) terminal deposit is
-    /// preserved.
-    function _carryLeftovers(
-        uint256 projectId,
-        address projectToken,
-        address terminalToken,
-        uint256 intendedProjectAmount,
-        uint256 intendedTerminalAmount,
-        uint256 projBalBefore,
-        uint256 termBalBefore
-    )
-        internal
-    {
-        uint256 postProjBal = IERC20(projectToken).balanceOf(address(this));
-        uint256 postTermBal = _getTerminalTokenBalance(terminalToken);
-        uint256 projConsumed = projBalBefore > postProjBal ? projBalBefore - postProjBal : 0;
-        uint256 termConsumed = termBalBefore > postTermBal ? termBalBefore - postTermBal : 0;
-        uint256 projLeftover = intendedProjectAmount > projConsumed ? intendedProjectAmount - projConsumed : 0;
-        uint256 termLeftover = intendedTerminalAmount > termConsumed ? intendedTerminalAmount - termConsumed : 0;
-
-        if (projLeftover > 0) accumulatedProjectTokens[projectId] += projLeftover;
-        if (termLeftover > 0) {
-            _addToProjectBalance({
-                projectId: projectId,
-                token: terminalToken,
-                amount: termLeftover,
-                isNative: _isNativeToken(terminalToken)
-            });
-        }
-    }
-
-    /// @notice Authorize a deploy/add: permissionless once the ruleset weight has decayed 10x from when accumulation
-    /// began, otherwise require `SET_BUYBACK_POOL` from the project owner.
-    function _requireDeployOrAddAuth(uint256 projectId, JBRuleset memory ruleset) internal view {
-        uint256 initialWeight = initialWeightOf[projectId];
-        if (initialWeight == 0 || ruleset.weight * 10 > initialWeight) {
-            _requirePermissionFrom({
-                account: _ownerOf(projectId), projectId: projectId, permissionId: JBPermissionIds.SET_BUYBACK_POOL
-            });
-        }
-    }
-
-    /// @notice Revert if the pool's spot price has deviated from the oracle TWAP by more than
-    /// `_MAX_TWAP_DEVIATION_TICKS`, or if the TWAP cannot be read. Prevents a JIT/sandwich attacker from skewing the
-    /// add ratio by moving the pool price right before the add.
-    function _requireSpotNearTwap(uint256 projectId, address terminalToken, PoolKey memory key) internal view {
-        uint32[] memory secondsAgos = new uint32[](2);
-        secondsAgos[0] = _TWAP_WINDOW;
-        secondsAgos[1] = 0;
-
-        int56[] memory tickCumulatives;
-        // The oracle reverts when it has not accrued enough history yet. In that case the spot price cannot be
-        // validated, so refuse the add (tokens keep accumulating safely; retry once the oracle warms up). Never fall
-        // back to spot — that is exactly the value being validated.
-        try IGeomeanOracle(address(oracleHook)).observe({key: key, secondsAgos: secondsAgos}) returns (
-            int56[] memory cumulatives, uint160[] memory
-        ) {
-            tickCumulatives = cumulatives;
-        } catch {
-            revert JBUniswapV4LPSplitHook_TwapUnavailable({projectId: projectId, terminalToken: terminalToken});
-        }
-
-        if (tickCumulatives.length < 2) {
-            revert JBUniswapV4LPSplitHook_TwapUnavailable({projectId: projectId, terminalToken: terminalToken});
-        }
-
-        // Arithmetic-mean tick over the window, rounding toward negative infinity (canonical V3 TWAP computation).
-        // `_TWAP_WINDOW` is a small positive constant (1800), so the cast to a signed window cannot truncate.
-        // forge-lint: disable-next-line(unsafe-typecast)
-        int56 window = int56(uint56(_TWAP_WINDOW));
-        int56 tickCumulativesDelta = tickCumulatives[1] - tickCumulatives[0];
-        // The mean of in-range cumulative ticks is itself a valid tick, well within int24.
-        // forge-lint: disable-next-line(unsafe-typecast)
-        int24 twapTick = int24(tickCumulativesDelta / window);
-        if (tickCumulativesDelta < 0 && (tickCumulativesDelta % window != 0)) twapTick--;
-
-        int24 spotTick = TickMath.getTickAtSqrtPrice(_getSqrtPriceX96(key));
-        if (_absTickDiff({a: spotTick, b: twapTick}) > _MAX_TWAP_DEVIATION_TICKS) {
-            revert JBUniswapV4LPSplitHook_PriceDeviationTooHigh({
-                spotTick: spotTick, twapTick: twapTick, maxDeviationTicks: _MAX_TWAP_DEVIATION_TICKS
-            });
-        }
-    }
-
-    /// @notice Build the `cashOutMinReclaimed` metadata that forces a revnet cash-out directly through the bonding
-    /// curve (skip the AMM). Targets the buyback-hook REGISTRY — the only contract on the revnet cash-out path
-    /// (terminal → REVOwner → registry → buyback hook) that reads and re-keys this entry. Returns empty metadata
-    /// when
-    /// the ruleset has no data hook, or the data hook is not a REVOwner (non-revnet); the terminal's own
-    /// `minTokensReclaimed` floor still applies and there is no AMM to self-route through.
-    function _forceDirectCashOutMetadata(JBRuleset memory ruleset) internal view returns (bytes memory) {
-        address dataHook = JBRulesetMetadataResolver.dataHook(ruleset);
-        if (dataHook == address(0)) return bytes("");
-
-        try IREVOwner(dataHook).BUYBACK_HOOK() returns (address registry) {
-            if (registry == address(0)) return bytes("");
-            return JBMetadataResolver.addToMetadata({
-                originalMetadata: bytes(""),
-                idToAdd: JBMetadataResolver.getId({purpose: "cashOutMinReclaimed", target: registry}),
-                // (minimumSwapAmountOut = 0, skip = true): force the direct bonding-curve cash-out. The terminal's own
-                // `minTokensReclaimed` floor enforces slippage, so no hook-level minimum is needed here.
-                dataToAdd: abi.encode(uint256(0), true)
-            });
-        } catch {
-            return bytes("");
-        }
-    }
-
     /// @notice Align tick down to the nearest spacing boundary (floor semantics).
     /// @dev Used for `tickUpper` so the LP range contracts toward the intended inner band on the upper side.
     function _alignTickToSpacing(int24 tick, int24 spacing) internal pure returns (int24 alignedTick) {
@@ -1725,6 +1420,24 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// exposing project liquidity at prices the bonding curve never sanctioned.
     function _alignTickToSpacingCeil(int24 tick, int24 spacing) internal pure returns (int24 alignedTick) {
         return JBLPSplitHookHelpers.alignTickToSpacingCeil({tick: tick, spacing: spacing});
+    }
+
+    /// @notice Grant the PositionManager a time-limited Permit2 allowance so it can pull tokens during SETTLE.
+    function _approveViaPermit2(address token, uint256 amount) internal {
+        IERC20(token).forceApprove({spender: address(PERMIT2), value: amount});
+        if (amount > type(uint160).max) {
+            revert JBUniswapV4LPSplitHook_Permit2AmountOverflow({
+                token: token, amount: amount, maxAmount: type(uint160).max
+            });
+        }
+        PERMIT2.approve({
+            token: token,
+            spender: address(positionManager),
+            // forge-lint: disable-next-line(unsafe-typecast)
+            amount: uint160(amount),
+            // forge-lint: disable-next-line(unsafe-typecast)
+            expiration: uint48(block.timestamp + _DEADLINE_SECONDS)
+        });
     }
 
     /// @notice Burn an existing LP position via `BURN_POSITION` + `TAKE_PAIR` and recover its principal.
@@ -1755,68 +1468,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         burnParams[1] = abi.encode(key.currency0, key.currency1, address(this));
 
         _modifyLiquidities({unlockData: abi.encode(burnActions, burnParams), value: 0});
-    }
-
-    /// @notice Increase liquidity on an existing Uniswap V4 position via `INCREASE_LIQUIDITY`, settling both currencies
-    /// and sweeping any unconsumed dust back to this contract. Mirrors `_mintPosition`'s settle/sweep + Permit2 dance.
-    /// @param tokenId The existing position NFT to top up.
-    /// @param key The pool key identifying the Uniswap V4 pool.
-    /// @param liquidity The additional liquidity to add.
-    /// @param amount0 The maximum amount of currency0 to spend.
-    /// @param amount1 The maximum amount of currency1 to spend.
-    function _increaseLiquidity(
-        uint256 tokenId,
-        PoolKey memory key,
-        uint128 liquidity,
-        uint256 amount0,
-        uint256 amount1
-    )
-        internal
-    {
-        address token0 = Currency.unwrap(key.currency0);
-        address token1 = Currency.unwrap(key.currency1);
-
-        uint256 ethValue = 0;
-
-        if (token0 == address(0)) {
-            ethValue = amount0;
-        } else if (amount0 > 0) {
-            _approveViaPermit2({token: token0, amount: amount0});
-        }
-
-        if (token1 == address(0)) {
-            ethValue = amount1;
-        } else if (amount1 > 0) {
-            _approveViaPermit2({token: token1, amount: amount1});
-        }
-
-        bytes memory actions = abi.encodePacked(
-            uint8(Actions.INCREASE_LIQUIDITY),
-            uint8(Actions.SETTLE),
-            uint8(Actions.SETTLE),
-            uint8(Actions.SWEEP),
-            uint8(Actions.SWEEP)
-        );
-
-        bytes[] memory params = new bytes[](5);
-        // INCREASE_LIQUIDITY params: (tokenId, liquidity, amount0Max, amount1Max, hookData).
-        // Safe: amount0/amount1 are bounded by token balances which fit in uint128.
-        // forge-lint: disable-next-line(unsafe-typecast)
-        params[0] = abi.encode(tokenId, uint256(liquidity), uint128(amount0), uint128(amount1), "");
-        // SETTLE currency0: payerIsUser=true means PositionManager pulls from this contract via Permit2.
-        params[1] = abi.encode(key.currency0, uint256(0), true);
-        // SETTLE currency1.
-        params[2] = abi.encode(key.currency1, uint256(0), true);
-        // SWEEP leftover currency0 back to this contract.
-        params[3] = abi.encode(key.currency0, address(this));
-        // SWEEP leftover currency1 back to this contract.
-        params[4] = abi.encode(key.currency1, address(this));
-
-        _modifyLiquidities({unlockData: abi.encode(actions, params), value: ethValue});
-
-        // Drop Permit2 allowances after PositionManager has pulled what it needs.
-        if (token0 != address(0)) _clearPermit2Approval(token0);
-        if (token1 != address(0) && token1 != token0) _clearPermit2Approval(token1);
     }
 
     /// @notice Calculate tick bounds for liquidity position based on issuance and cash out rates.
@@ -1947,18 +1598,53 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
     }
 
-    /// @notice Trigger fee-only collection from a single Uniswap V4 position and take both currencies to this contract.
-    /// @dev `DECREASE_LIQUIDITY(0)` collects fees without removing principal; `TAKE_PAIR` transfers them here.
-    function _collectFeesFromPosition(uint256 tokenId, PoolKey memory key) internal {
-        bytes memory feeActions = abi.encodePacked(uint8(Actions.DECREASE_LIQUIDITY), uint8(Actions.TAKE_PAIR));
+    /// @notice Carry leftover tokens after an LP add forward, never burning. Project-token dust returns to the
+    /// accumulation ledger (becoming future liquidity); terminal-token dust is deposited into the project's terminal
+    /// balance.
+    /// @dev Uses balance-delta measurement so fee-on-transfer behavior and V4 SWEEP dust cannot mis-account leftovers,
+    /// and `+=` on the ledger so a reentrant `processSplitWith` inflow during the (later) terminal deposit is
+    /// preserved.
+    function _carryLeftovers(
+        uint256 projectId,
+        address projectToken,
+        address terminalToken,
+        uint256 intendedProjectAmount,
+        uint256 intendedTerminalAmount,
+        uint256 projBalBefore,
+        uint256 termBalBefore
+    )
+        internal
+    {
+        uint256 postProjBal = IERC20(projectToken).balanceOf(address(this));
+        uint256 postTermBal = _getTerminalTokenBalance(terminalToken);
+        uint256 projConsumed = projBalBefore > postProjBal ? projBalBefore - postProjBal : 0;
+        uint256 termConsumed = termBalBefore > postTermBal ? termBalBefore - postTermBal : 0;
+        uint256 projLeftover = intendedProjectAmount > projConsumed ? intendedProjectAmount - projConsumed : 0;
+        uint256 termLeftover = intendedTerminalAmount > termConsumed ? intendedTerminalAmount - termConsumed : 0;
 
-        bytes[] memory feeParams = new bytes[](2);
-        // DECREASE_LIQUIDITY params: (tokenId, liquidity=0, minAmount0=0, minAmount1=0, hookData).
-        feeParams[0] = abi.encode(tokenId, uint256(0), uint128(0), uint128(0), "");
-        // TAKE_PAIR params: (currency0, currency1, recipient).
-        feeParams[1] = abi.encode(key.currency0, key.currency1, address(this));
+        if (projLeftover > 0) accumulatedProjectTokens[projectId] += projLeftover;
+        if (termLeftover > 0) {
+            _addToProjectBalance({
+                projectId: projectId,
+                token: terminalToken,
+                amount: termLeftover,
+                isNative: _isNativeToken(terminalToken)
+            });
+        }
+    }
 
-        _modifyLiquidities({unlockData: abi.encode(feeActions, feeParams), value: 0});
+    /// @notice Clear both Permit2's internal spender allowance and the ERC-20 allowance granted to Permit2.
+    /// @dev V4 mints can consume less than the max amount approved for SETTLE, so clean up any residual authority
+    /// after the position manager returns.
+    /// @param token The ERC-20 token whose allowances should be revoked.
+    function _clearPermit2Approval(address token) internal {
+        // Permit2 treats `expiration: 0` as "valid until the end of this block", so use a nonzero timestamp in the
+        // past while zeroing the amount. The amount blocks value pulls; the expired timestamp makes the revocation
+        // explicit for any zero-value or edge-case allowance reads.
+        PERMIT2.approve({token: token, spender: address(positionManager), amount: 0, expiration: 1});
+
+        // Drop the ERC-20 approval to Permit2 as well, so the hook leaves no pull authority behind on either layer.
+        IERC20(token).forceApprove({spender: address(PERMIT2), value: 0});
     }
 
     /// @notice Collect accrued Uniswap LP trading fees from the active AND every retired position, then route them.
@@ -2003,6 +1689,20 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             amount0: feeAmount0,
             amount1: feeAmount1
         });
+    }
+
+    /// @notice Trigger fee-only collection from a single Uniswap V4 position and take both currencies to this contract.
+    /// @dev `DECREASE_LIQUIDITY(0)` collects fees without removing principal; `TAKE_PAIR` transfers them here.
+    function _collectFeesFromPosition(uint256 tokenId, PoolKey memory key) internal {
+        bytes memory feeActions = abi.encodePacked(uint8(Actions.DECREASE_LIQUIDITY), uint8(Actions.TAKE_PAIR));
+
+        bytes[] memory feeParams = new bytes[](2);
+        // DECREASE_LIQUIDITY params: (tokenId, liquidity=0, minAmount0=0, minAmount1=0, hookData).
+        feeParams[0] = abi.encode(tokenId, uint256(0), uint128(0), uint128(0), "");
+        // TAKE_PAIR params: (currency0, currency1, recipient).
+        feeParams[1] = abi.encode(key.currency0, key.currency1, address(this));
+
+        _modifyLiquidities({unlockData: abi.encode(feeActions, feeParams), value: 0});
     }
 
     /// @notice Compute the initial sqrtPriceX96 for pool initialization.
@@ -2280,6 +1980,250 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         });
     }
 
+    /// @notice Shared cash-out-and-mint/increase core used by both the deploy path and `addLiquidity`.
+    /// @dev Cashes out the optimal fraction of `projectTokenBalance` for terminal tokens, then either mints a new
+    /// position (`isNewPosition`) or tops up `existingTokenId` via `INCREASE_LIQUIDITY`, at the pool's current price
+    /// within `[tickLower, tickUpper]`. CEI: the accumulation ledger is zeroed before any external call so a reentrant
+    /// add/deploy finds nothing to spend; leftovers are carried forward afterwards (never burned).
+    function _executeAddToPosition(AddLiquidityParams memory p) internal {
+        // CEI: clear the accumulation ledger before any external call. A reentrant `addLiquidity` then reverts
+        // (NoTokensAccumulated) and a reentrant `deployPool` reverts (already deployed). Leftovers are re-added below.
+        accumulatedProjectTokens[p.projectId] = 0;
+
+        // Read the pool's actual current price. It may have been initialized by another party (e.g. REVDeployer) or
+        // moved by trading since the last add.
+        uint160 sqrtPriceInit = _getSqrtPriceX96(p.key);
+
+        // Determine the optimal fraction of project tokens to cash out for terminal-token pairing within these ticks.
+        uint256 cashOutAmount = _computeOptimalCashOutAmount({
+            projectId: p.projectId,
+            terminalToken: p.terminalToken,
+            projectToken: p.projectToken,
+            totalProjectTokens: p.projectTokenBalance,
+            sqrtPriceInit: sqrtPriceInit,
+            tickLower: p.tickLower,
+            tickUpper: p.tickUpper,
+            controller: p.controller,
+            ruleset: p.ruleset
+        });
+
+        // Fund the terminal-token side via a cash-out (optionally forced directly through the bonding curve).
+        uint256 terminalTokenAmount = _fundTerminalTokenSide({
+            projectId: p.projectId,
+            terminalToken: p.terminalToken,
+            cashOutAmount: cashOutAmount,
+            minCashOutReturn: p.minCashOutReturn,
+            forceDirectCashOut: p.forceDirectCashOut,
+            controller: p.controller,
+            ruleset: p.ruleset
+        });
+
+        uint256 projectTokenAmount = p.projectTokenBalance - cashOutAmount;
+
+        // Map amounts to (amount0, amount1) by currency ordering.
+        (address token0,) = _sortTokens({tokenA: p.projectToken, tokenB: Currency.unwrap(_toCurrency(p.terminalToken))});
+        uint256 amount0 = p.projectToken == token0 ? projectTokenAmount : terminalTokenAmount;
+        uint256 amount1 = p.projectToken == token0 ? terminalTokenAmount : projectTokenAmount;
+
+        // Derive liquidity from the amounts at the pool's current price within the chosen ticks.
+        uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts({
+            sqrtPriceX96: sqrtPriceInit,
+            sqrtPriceAX96: TickMath.getSqrtPriceAtTick(p.tickLower),
+            sqrtPriceBX96: TickMath.getSqrtPriceAtTick(p.tickUpper),
+            amount0: amount0,
+            amount1: amount1
+        });
+
+        // Revert if the computed liquidity is zero — minting/increasing with no liquidity would waste gas.
+        if (liquidity == 0) revert JBUniswapV4LPSplitHook_ZeroLiquidity({amount0: amount0, amount1: amount1});
+
+        // Snapshot balances before settling to isolate this add's leftover from other projects' balances.
+        uint256 projBalBefore = IERC20(p.projectToken).balanceOf(address(this));
+        uint256 termBalBefore = _getTerminalTokenBalance(p.terminalToken);
+
+        if (p.isNewPosition) {
+            _mintPosition({
+                key: p.key,
+                tickLower: p.tickLower,
+                tickUpper: p.tickUpper,
+                liquidity: liquidity,
+                amount0: amount0,
+                amount1: amount1
+            });
+            // nextTokenId was incremented by MINT_POSITION, so (nextTokenId - 1) is the freshly minted ID.
+            tokenIdOf[p.projectId][p.terminalToken] = _nextTokenId() - 1;
+            activeTickLowerOf[p.projectId][p.terminalToken] = p.tickLower;
+            activeTickUpperOf[p.projectId][p.terminalToken] = p.tickUpper;
+        } else {
+            _increaseLiquidity({
+                tokenId: p.existingTokenId, key: p.key, liquidity: liquidity, amount0: amount0, amount1: amount1
+            });
+        }
+
+        // Carry leftovers forward; never burn.
+        _carryLeftovers({
+            projectId: p.projectId,
+            projectToken: p.projectToken,
+            terminalToken: p.terminalToken,
+            intendedProjectAmount: projectTokenAmount,
+            intendedTerminalAmount: terminalTokenAmount,
+            projBalBefore: projBalBefore,
+            termBalBefore: termBalBefore
+        });
+    }
+
+    /// @notice Build the buyback hook's `cashOutMinReclaimed` "skip" metadata that forces a cash-out directly through
+    /// the bonding curve (skipping the AMM). Keyed to this hook's strong `BUYBACK_HOOK` registry reference — the
+    /// contract that reads and re-keys this entry to the project's resolved buyback hook. Returns empty metadata when
+    /// `BUYBACK_HOOK` is unset; the terminal's own `minTokensReclaimed` floor still applies.
+    function _forceDirectCashOutMetadata() internal view returns (bytes memory) {
+        if (address(BUYBACK_HOOK) == address(0)) return bytes("");
+
+        return JBMetadataResolver.addToMetadata({
+            originalMetadata: bytes(""),
+            idToAdd: JBMetadataResolver.getId({purpose: "cashOutMinReclaimed", target: address(BUYBACK_HOOK)}),
+            // (minimumSwapAmountOut = 0, skip = true): force the direct bonding-curve cash-out. The terminal's own
+            // `minTokensReclaimed` floor enforces slippage, so no hook-level minimum is needed here.
+            dataToAdd: abi.encode(uint256(0), true)
+        });
+    }
+
+    /// @notice Cash out `cashOutAmount` project tokens for terminal tokens to fund one side of an LP add.
+    /// @dev Enforces a rate-derived slippage floor (a caller minimum can only raise it) and reconciles the terminal's
+    /// reported amount against the actual spendable balance delta (fee-on-transfer / fee-token-segregation safe). When
+    /// `forceDirectCashOut` is set, attaches the buyback hook's `cashOutMinReclaimed` skip flag so the cash-out is
+    /// routed DIRECTLY through the bonding curve, never through the AMM this hook is feeding.
+    /// @return terminalTokenAmount The reconciled terminal-token amount obtained for LP pairing.
+    function _fundTerminalTokenSide(
+        uint256 projectId,
+        address terminalToken,
+        uint256 cashOutAmount,
+        uint256 minCashOutReturn,
+        bool forceDirectCashOut,
+        address controller,
+        JBRuleset memory ruleset
+    )
+        internal
+        returns (uint256 terminalTokenAmount)
+    {
+        address terminal = _primaryTerminalOf({projectId: projectId, token: terminalToken});
+        if (terminal == address(0) || cashOutAmount == 0) return 0;
+
+        // Snapshot only the balance not reserved for fee-token claims so the post-cash-out delta does not count ERC-20s
+        // already owed to other projects' unclaimed routed LP fees.
+        uint256 spendableBefore = _spendableTerminalTokenBalance(terminalToken);
+
+        // The LP size and ticks derive from the current cash-out rate, so this funding cash-out must not settle below
+        // that same rate floor. A caller-supplied minimum can only raise this floor; it cannot lower it.
+        uint256 effectiveMinReturn = minCashOutReturn;
+        uint256 cashOutRate = _getCashOutRate({
+            projectId: projectId, terminalToken: terminalToken, controller: controller, ruleset: ruleset
+        });
+        if (cashOutRate > 0) {
+            uint256 expectedReturn = mulDiv({x: cashOutAmount, y: cashOutRate, denominator: _WAD});
+            uint256 derivedMinReturn = mulDiv({
+                x: expectedReturn, y: _CASH_OUT_SLIPPAGE_NUMERATOR, denominator: _CASH_OUT_SLIPPAGE_DENOMINATOR
+            });
+            if (derivedMinReturn > effectiveMinReturn) effectiveMinReturn = derivedMinReturn;
+        }
+
+        // Optionally force the cash-out directly through the bonding curve (skip the AMM). Empty metadata falls back to
+        // the project's normal cash-out path; the terminal still enforces `effectiveMinReturn`.
+        bytes memory metadata = forceDirectCashOut ? _forceDirectCashOutMetadata() : bytes("");
+
+        // Ask the terminal to cash out. The reported amount is the optimistic upper bound for what to credit to LP.
+        uint256 reportedTerminalTokenAmount = IJBMultiTerminal(terminal)
+            .cashOutTokensOf({
+            holder: address(this),
+            projectId: projectId,
+            cashOutCount: cashOutAmount,
+            tokenToReclaim: terminalToken,
+            minTokensReclaimed: effectiveMinReturn,
+            beneficiary: payable(address(this)),
+            metadata: metadata,
+            referralProjectId: 0
+        });
+
+        // Reconcile the terminal report with the actual spendable balance delta.
+        uint256 spendableAfter = _spendableTerminalTokenBalance(terminalToken);
+        uint256 actualTerminalTokenAmount = spendableAfter > spendableBefore ? spendableAfter - spendableBefore : 0;
+
+        // Use the smaller value so LP funding never spends tokens that did not arrive, and never captures unrelated
+        // balance already sitting in the hook.
+        terminalTokenAmount = reportedTerminalTokenAmount < actualTerminalTokenAmount
+            ? reportedTerminalTokenAmount
+            : actualTerminalTokenAmount;
+
+        // The derived or caller-provided minimum is enforced against the reconciled spendable amount.
+        if (terminalTokenAmount < effectiveMinReturn) {
+            revert JBUniswapV4LPSplitHook_InsufficientBalance({
+                available: terminalTokenAmount, required: effectiveMinReturn
+            });
+        }
+    }
+
+    /// @notice Increase liquidity on an existing Uniswap V4 position via `INCREASE_LIQUIDITY`, settling both currencies
+    /// and sweeping any unconsumed dust back to this contract. Mirrors `_mintPosition`'s settle/sweep + Permit2 dance.
+    /// @param tokenId The existing position NFT to top up.
+    /// @param key The pool key identifying the Uniswap V4 pool.
+    /// @param liquidity The additional liquidity to add.
+    /// @param amount0 The maximum amount of currency0 to spend.
+    /// @param amount1 The maximum amount of currency1 to spend.
+    function _increaseLiquidity(
+        uint256 tokenId,
+        PoolKey memory key,
+        uint128 liquidity,
+        uint256 amount0,
+        uint256 amount1
+    )
+        internal
+    {
+        address token0 = Currency.unwrap(key.currency0);
+        address token1 = Currency.unwrap(key.currency1);
+
+        uint256 ethValue = 0;
+
+        if (token0 == address(0)) {
+            ethValue = amount0;
+        } else if (amount0 > 0) {
+            _approveViaPermit2({token: token0, amount: amount0});
+        }
+
+        if (token1 == address(0)) {
+            ethValue = amount1;
+        } else if (amount1 > 0) {
+            _approveViaPermit2({token: token1, amount: amount1});
+        }
+
+        bytes memory actions = abi.encodePacked(
+            uint8(Actions.INCREASE_LIQUIDITY),
+            uint8(Actions.SETTLE),
+            uint8(Actions.SETTLE),
+            uint8(Actions.SWEEP),
+            uint8(Actions.SWEEP)
+        );
+
+        bytes[] memory params = new bytes[](5);
+        // INCREASE_LIQUIDITY params: (tokenId, liquidity, amount0Max, amount1Max, hookData).
+        // Safe: amount0/amount1 are bounded by token balances which fit in uint128.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        params[0] = abi.encode(tokenId, uint256(liquidity), uint128(amount0), uint128(amount1), "");
+        // SETTLE currency0: payerIsUser=true means PositionManager pulls from this contract via Permit2.
+        params[1] = abi.encode(key.currency0, uint256(0), true);
+        // SETTLE currency1.
+        params[2] = abi.encode(key.currency1, uint256(0), true);
+        // SWEEP leftover currency0 back to this contract.
+        params[3] = abi.encode(key.currency0, address(this));
+        // SWEEP leftover currency1 back to this contract.
+        params[4] = abi.encode(key.currency1, address(this));
+
+        _modifyLiquidities({unlockData: abi.encode(actions, params), value: ethValue});
+
+        // Drop Permit2 allowances after PositionManager has pulled what it needs.
+        if (token0 != address(0)) _clearPermit2Approval(token0);
+        if (token1 != address(0) && token1 != token0) _clearPermit2Approval(token1);
+    }
+
     /// @notice Mint a new concentrated-liquidity position via the Uniswap V4 PositionManager, settling both currencies
     /// and sweeping any unconsumed dust back to this contract.
     function _mintPosition(
@@ -2455,36 +2399,57 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         });
     }
 
-    /// @notice Grant the PositionManager a time-limited Permit2 allowance so it can pull tokens during SETTLE.
-    function _approveViaPermit2(address token, uint256 amount) internal {
-        IERC20(token).forceApprove({spender: address(PERMIT2), value: amount});
-        if (amount > type(uint160).max) {
-            revert JBUniswapV4LPSplitHook_Permit2AmountOverflow({
-                token: token, amount: amount, maxAmount: type(uint160).max
+    /// @notice Authorize a deploy/add: permissionless once the ruleset weight has decayed 10x from when accumulation
+    /// began, otherwise require `SET_BUYBACK_POOL` from the project owner.
+    function _requireDeployOrAddAuth(uint256 projectId, JBRuleset memory ruleset) internal view {
+        uint256 initialWeight = initialWeightOf[projectId];
+        if (initialWeight == 0 || ruleset.weight * 10 > initialWeight) {
+            _requirePermissionFrom({
+                account: _ownerOf(projectId), projectId: projectId, permissionId: JBPermissionIds.SET_BUYBACK_POOL
             });
         }
-        PERMIT2.approve({
-            token: token,
-            spender: address(positionManager),
-            // forge-lint: disable-next-line(unsafe-typecast)
-            amount: uint160(amount),
-            // forge-lint: disable-next-line(unsafe-typecast)
-            expiration: uint48(block.timestamp + _DEADLINE_SECONDS)
-        });
     }
 
-    /// @notice Clear both Permit2's internal spender allowance and the ERC-20 allowance granted to Permit2.
-    /// @dev V4 mints can consume less than the max amount approved for SETTLE, so clean up any residual authority
-    /// after the position manager returns.
-    /// @param token The ERC-20 token whose allowances should be revoked.
-    function _clearPermit2Approval(address token) internal {
-        // Permit2 treats `expiration: 0` as "valid until the end of this block", so use a nonzero timestamp in the
-        // past while zeroing the amount. The amount blocks value pulls; the expired timestamp makes the revocation
-        // explicit for any zero-value or edge-case allowance reads.
-        PERMIT2.approve({token: token, spender: address(positionManager), amount: 0, expiration: 1});
+    /// @notice Revert if the pool's spot price has deviated from the oracle TWAP by more than
+    /// `_MAX_TWAP_DEVIATION_TICKS`, or if the TWAP cannot be read. Prevents a JIT/sandwich attacker from skewing the
+    /// add ratio by moving the pool price right before the add.
+    function _requireSpotNearTwap(uint256 projectId, address terminalToken, PoolKey memory key) internal view {
+        uint32[] memory secondsAgos = new uint32[](2);
+        secondsAgos[0] = _TWAP_WINDOW;
+        secondsAgos[1] = 0;
 
-        // Drop the ERC-20 approval to Permit2 as well, so the hook leaves no pull authority behind on either layer.
-        IERC20(token).forceApprove({spender: address(PERMIT2), value: 0});
+        int56[] memory tickCumulatives;
+        // The oracle reverts when it has not accrued enough history yet. In that case the spot price cannot be
+        // validated, so refuse the add (tokens keep accumulating safely; retry once the oracle warms up). Never fall
+        // back to spot — that is exactly the value being validated.
+        try IGeomeanOracle(address(oracleHook)).observe({key: key, secondsAgos: secondsAgos}) returns (
+            int56[] memory cumulatives, uint160[] memory
+        ) {
+            tickCumulatives = cumulatives;
+        } catch {
+            revert JBUniswapV4LPSplitHook_TwapUnavailable({projectId: projectId, terminalToken: terminalToken});
+        }
+
+        if (tickCumulatives.length < 2) {
+            revert JBUniswapV4LPSplitHook_TwapUnavailable({projectId: projectId, terminalToken: terminalToken});
+        }
+
+        // Arithmetic-mean tick over the window, rounding toward negative infinity (canonical V3 TWAP computation).
+        // `_TWAP_WINDOW` is a small positive constant (1800), so the cast to a signed window cannot truncate.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        int56 window = int56(uint56(_TWAP_WINDOW));
+        int56 tickCumulativesDelta = tickCumulatives[1] - tickCumulatives[0];
+        // The mean of in-range cumulative ticks is itself a valid tick, well within int24.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        int24 twapTick = int24(tickCumulativesDelta / window);
+        if (tickCumulativesDelta < 0 && (tickCumulativesDelta % window != 0)) twapTick--;
+
+        int24 spotTick = TickMath.getTickAtSqrtPrice(_getSqrtPriceX96(key));
+        if (_absTickDiff({a: spotTick, b: twapTick}) > _MAX_TWAP_DEVIATION_TICKS) {
+            revert JBUniswapV4LPSplitHook_PriceDeviationTooHigh({
+                spotTick: spotTick, twapTick: twapTick, maxDeviationTicks: _MAX_TWAP_DEVIATION_TICKS
+            });
+        }
     }
 
     /// @notice Split collected LP fees into their terminal-token and project-token sides: route the terminal-token side
