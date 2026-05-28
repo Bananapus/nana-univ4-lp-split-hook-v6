@@ -3,12 +3,17 @@
 `@bananapus/univ4-lp-split-hook-v6` is a split hook that accumulates reserved Juicebox project tokens and then deploys them into a Uniswap V4 concentrated liquidity position bounded by the project's issuance and cash-out economics.
 
 Docs: <https://docs.juicebox.money>
-Architecture: [ARCHITECTURE.md](./ARCHITECTURE.md)  
-User journeys: [USER_JOURNEYS.md](./USER_JOURNEYS.md)  
-Skills: [SKILLS.md](./SKILLS.md)  
-Risks: [RISKS.md](./RISKS.md)  
-Administration: [ADMINISTRATION.md](./ADMINISTRATION.md)  
-Audit instructions: [AUDIT_INSTRUCTIONS.md](./AUDIT_INSTRUCTIONS.md)
+
+## Documentation
+
+- Architecture: [ARCHITECTURE.md](./ARCHITECTURE.md)
+- User journeys: [USER_JOURNEYS.md](./USER_JOURNEYS.md)
+- Skills: [SKILLS.md](./SKILLS.md)
+- Risks: [RISKS.md](./RISKS.md)
+- Invariants: [INVARIANTS.md](./INVARIANTS.md)
+- Administration: [ADMINISTRATION.md](./ADMINISTRATION.md)
+- Audit instructions: [AUDIT_INSTRUCTIONS.md](./AUDIT_INSTRUCTIONS.md)
+- Changelog: [CHANGELOG.md](./CHANGELOG.md)
 
 ## Overview
 
