@@ -81,7 +81,7 @@ interface IJBUniswapV4LPSplitHook {
     /// @notice Deploy a Uniswap V4 pool using accumulated project tokens.
     /// @dev Auto-selects the terminal token with the highest ETH-denominated value across all terminals.
     /// @param projectId The Juicebox project ID.
-    /// @param minCashOutReturn Minimum terminal tokens from cash-out (slippage protection, 0 = auto 1% tolerance).
+    /// @param minCashOutReturn Minimum terminal tokens from cash-out (slippage protection, 0 = auto 3% tolerance).
     function deployPool(uint256 projectId, uint256 minCashOutReturn) external;
 
     /// @notice Initialize per-instance config + chain-specific Uniswap V4 addresses on a clone. Callable once.
