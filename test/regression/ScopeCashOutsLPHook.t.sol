@@ -3,6 +3,8 @@ pragma solidity 0.8.28;
 
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
+import {JBUniswapV4LPSplitHookMath} from "../../src/libraries/JBUniswapV4LPSplitHookMath.sol";
+import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
@@ -36,7 +38,9 @@ contract CashOutRateHook is JBUniswapV4LPSplitHook {
         view
         returns (uint256)
     {
-        return _getCashOutRate(projectId, terminalToken, controller_, ruleset);
+        return JBUniswapV4LPSplitHookMath.getCashOutRate(
+            IJBDirectory(DIRECTORY), SUCKER_REGISTRY, projectId, terminalToken, controller_, ruleset
+        );
     }
 }
 

@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
+import {JBUniswapV4LPSplitHookMath} from "../../src/libraries/JBUniswapV4LPSplitHookMath.sol";
 
 import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
 import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
@@ -41,7 +42,9 @@ contract TickBoundsHarness is JBUniswapV4LPSplitHook {
     {
         address controller = address(IJBDirectory(DIRECTORY).controllerOf(projectId));
         (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
-        return _calculateTickBounds(projectId, terminalToken, projectToken, controller, ruleset);
+        return JBUniswapV4LPSplitHookMath.calculateTickBounds(
+            IJBDirectory(DIRECTORY), SUCKER_REGISTRY, projectId, terminalToken, projectToken, controller, ruleset
+        );
     }
 }
 

@@ -29,6 +29,7 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
+import {JBUniswapV4LPSplitHookMath} from "../../src/libraries/JBUniswapV4LPSplitHookMath.sol";
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 import {LibClone} from "solady/src/utils/LibClone.sol";
 
@@ -127,7 +128,7 @@ contract ZeroRateFork is ForkDeployHelper {
             // Expected errors are custom selectors encoded as the first 4 bytes.
             // forge-lint: disable-next-line(unsafe-typecast)
             bytes4 selector = bytes4(reason);
-            assertEq(selector, JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoTerminalTokenFound.selector);
+            assertEq(selector, JBUniswapV4LPSplitHookMath.JBUniswapV4LPSplitHookMath_NoTerminalTokenFound.selector);
         }
     }
 

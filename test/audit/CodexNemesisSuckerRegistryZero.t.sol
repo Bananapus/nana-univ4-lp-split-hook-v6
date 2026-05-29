@@ -13,6 +13,8 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
+import {JBUniswapV4LPSplitHookMath} from "../../src/libraries/JBUniswapV4LPSplitHookMath.sol";
+import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 
@@ -37,7 +39,9 @@ contract CodexNemesisCashOutRateHarness is JBUniswapV4LPSplitHook {
         view
         returns (uint256)
     {
-        return _getCashOutRate(projectId, terminalToken, controller, ruleset);
+        return JBUniswapV4LPSplitHookMath.getCashOutRate(
+            IJBDirectory(DIRECTORY), SUCKER_REGISTRY, projectId, terminalToken, controller, ruleset
+        );
     }
 }
 

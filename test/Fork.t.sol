@@ -31,6 +31,8 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
+import {JBUniswapV4LPSplitHookMath} from "../src/libraries/JBUniswapV4LPSplitHookMath.sol";
+import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 import {LibClone} from "solady/src/utils/LibClone.sol";
 
@@ -55,7 +57,9 @@ contract ExposedJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
         view
         returns (int24, int24)
     {
-        return _calculateTickBounds(projectId, terminalToken, projectToken, controller, ruleset);
+        return JBUniswapV4LPSplitHookMath.calculateTickBounds(
+            IJBDirectory(DIRECTORY), SUCKER_REGISTRY, projectId, terminalToken, projectToken, controller, ruleset
+        );
     }
 
     function exposed_computeInitialSqrtPrice(
@@ -69,7 +73,9 @@ contract ExposedJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
         view
         returns (uint160)
     {
-        return _computeInitialSqrtPrice(projectId, terminalToken, projectToken, controller, ruleset);
+        return JBUniswapV4LPSplitHookMath.computeInitialSqrtPrice(
+            IJBDirectory(DIRECTORY), SUCKER_REGISTRY, projectId, terminalToken, projectToken, controller, ruleset
+        );
     }
 
     /// @notice Exposes the internal V4-PositionManager call so a lock-held adversarial test can route through

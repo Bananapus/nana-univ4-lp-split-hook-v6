@@ -11,6 +11,8 @@ import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {LibClone} from "solady/src/utils/LibClone.sol";
 
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
+import {JBUniswapV4LPSplitHookMath} from "../../src/libraries/JBUniswapV4LPSplitHookMath.sol";
+import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
@@ -28,7 +30,8 @@ contract FindHighestValueHarness is JBUniswapV4LPSplitHook {
 
     /// @notice Public wrapper around the internal function for testing.
     function findHighestValueTerminalTokenOf(uint256 projectId, address controller) external view returns (address) {
-        return _findHighestValueTerminalTokenOf(projectId, controller);
+        return
+            JBUniswapV4LPSplitHookMath.findHighestValueTerminalTokenOf(IJBDirectory(DIRECTORY), projectId, controller);
     }
 }
 

@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
+import {JBUniswapV4LPSplitHookMath} from "../../src/libraries/JBUniswapV4LPSplitHookMath.sol";
 import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
 import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
@@ -48,7 +49,9 @@ contract RegressionMathHook is JBUniswapV4LPSplitHook {
         returns (int24, int24)
     {
         (address controller, JBRuleset memory ruleset) = _fetchControllerAndRuleset(projectId);
-        return _calculateTickBounds(projectId, terminalToken, projectToken, controller, ruleset);
+        return JBUniswapV4LPSplitHookMath.calculateTickBounds(
+            IJBDirectory(DIRECTORY), SUCKER_REGISTRY, projectId, terminalToken, projectToken, controller, ruleset
+        );
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
@@ -66,7 +69,9 @@ contract RegressionMathHook is JBUniswapV4LPSplitHook {
         returns (uint256)
     {
         (address controller, JBRuleset memory ruleset) = _fetchControllerAndRuleset(projectId);
-        return _computeOptimalCashOutAmount(
+        return JBUniswapV4LPSplitHookMath.computeOptimalCashOutAmount(
+            IJBDirectory(DIRECTORY),
+            SUCKER_REGISTRY,
             projectId,
             terminalToken,
             projectToken,
@@ -82,7 +87,9 @@ contract RegressionMathHook is JBUniswapV4LPSplitHook {
     // forge-lint: disable-next-line(mixed-case-function)
     function exposed_getCashOutRate(uint256 projectId, address terminalToken) external view returns (uint256) {
         (address controller, JBRuleset memory ruleset) = _fetchControllerAndRuleset(projectId);
-        return _getCashOutRate(projectId, terminalToken, controller, ruleset);
+        return JBUniswapV4LPSplitHookMath.getCashOutRate(
+            IJBDirectory(DIRECTORY), SUCKER_REGISTRY, projectId, terminalToken, controller, ruleset
+        );
     }
 }
 

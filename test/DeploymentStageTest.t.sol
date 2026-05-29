@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {LPSplitHookV4TestBase, MockPermit2} from "./TestBaseV4.sol";
 import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
+import {JBUniswapV4LPSplitHookMath} from "../src/libraries/JBUniswapV4LPSplitHookMath.sol";
 import {IJBUniswapV4LPSplitHook} from "../src/interfaces/IJBUniswapV4LPSplitHook.sol";
 import {JBPermissioned} from "@bananapus/core-v6/src/abstract/JBPermissioned.sol";
 import {JBPermissionIds} from "@bananapus/permission-ids-v6/src/JBPermissionIds.sol";
@@ -166,7 +167,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         // Clear the balance that was set in the base setUp
         store.setBalance(address(terminal), PROJECT_ID, address(terminalToken), 0);
 
-        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoTerminalTokenFound.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHookMath.JBUniswapV4LPSplitHookMath_NoTerminalTokenFound.selector);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID, 0);
     }

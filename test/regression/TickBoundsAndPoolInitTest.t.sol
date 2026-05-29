@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
+import {JBUniswapV4LPSplitHookMath} from "../../src/libraries/JBUniswapV4LPSplitHookMath.sol";
 import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
 import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
@@ -51,7 +52,9 @@ contract TickBoundsTestableHook is JBUniswapV4LPSplitHook {
         returns (int24, int24)
     {
         (address controller, JBRuleset memory ruleset) = _fetchControllerAndRuleset(projectId);
-        return _calculateTickBounds(projectId, terminalToken, projectToken, controller, ruleset);
+        return JBUniswapV4LPSplitHookMath.calculateTickBounds(
+            IJBDirectory(DIRECTORY), SUCKER_REGISTRY, projectId, terminalToken, projectToken, controller, ruleset
+        );
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
@@ -65,7 +68,9 @@ contract TickBoundsTestableHook is JBUniswapV4LPSplitHook {
         returns (uint160)
     {
         (address controller, JBRuleset memory ruleset) = _fetchControllerAndRuleset(projectId);
-        return _computeInitialSqrtPrice(projectId, terminalToken, projectToken, controller, ruleset);
+        return JBUniswapV4LPSplitHookMath.computeInitialSqrtPrice(
+            IJBDirectory(DIRECTORY), SUCKER_REGISTRY, projectId, terminalToken, projectToken, controller, ruleset
+        );
     }
 }
 
