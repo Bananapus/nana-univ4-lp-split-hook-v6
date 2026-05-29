@@ -21,8 +21,8 @@ This repo was not part of the deployed v5 ecosystem that the top-level changelog
 - **Fee collection** routes the terminal-token side and carries the project-token side back into the accumulation ledger; there is always exactly one position per `(projectId, terminalToken)` pair.
 - **Dust is carried forward, never burned** — leftover project tokens (from deploy, add, rebalance, and collected project-token fees) return to `accumulatedProjectTokens`; leftover terminal tokens are deposited to the project's terminal.
 - New constructor immutable `BUYBACK_HOOK` (`IJBBuybackHookRegistry`, sixth constructor arg). New state: `activeTickLowerOf`, `activeTickUpperOf`. New errors: `JBUniswapV4LPSplitHook_PriceDeviationTooHigh`, `JBUniswapV4LPSplitHook_TwapUnavailable`. New event: `LiquidityAdded`. The TWAP `observe` interface is now imported from `@bananapus/suckers-v6` (`IGeomeanOracle`); the `AddLiquidityParams` struct moved to `src/structs/`.
-- `package.json`: version 0.0.52 -> 0.0.53; added dependency `@bananapus/buyback-hook-v6@^0.0.62` (provides `IJBBuybackHookRegistry` and the deploy-script registry address).
-- The force-direct funding cash-out keys its metadata to the buyback hook's `"cashOut"` purpose (renamed from `"cashOutMinReclaimed"` to a lifecycle-phase name in buyback-hook-v6 0.0.63). Bump the `@bananapus/buyback-hook-v6` dependency to `^0.0.63` once that release is published.
+- `package.json`: version 0.0.52 -> 0.0.53; added dependency `@bananapus/buyback-hook-v6@^0.0.63` (provides `IJBBuybackHookRegistry` and the deploy-script registry address).
+- The force-direct funding cash-out keys its metadata to the buyback hook's `"cashOut"` purpose (the lifecycle-phase name introduced in buyback-hook-v6 0.0.63, renamed from `"cashOutMinReclaimed"`).
 
 ## 0.0.40 — Bump nana-core-v6 to 0.0.52
 
