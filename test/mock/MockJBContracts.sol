@@ -334,6 +334,8 @@ contract MockJBMultiTerminal {
     uint256 public lastPayAmount;
     uint256 public lastPayMinReturnedTokens;
     uint256 public lastCashOutAmount;
+    uint256 public lastCashOutMinTokensReclaimed;
+    bytes public lastCashOutMetadata;
 
     // Override return amounts
     uint256 public payReturnAmount;
@@ -429,17 +431,13 @@ contract MockJBMultiTerminal {
     }
 
     function cashOutTokensOf(
-        address,
-        /* holder */
-        uint256,
-        /* projectId */
+        address holder,
+        uint256 projectId,
         uint256 cashOutCount,
         address tokenToReclaim,
-        uint256,
-        /* minTokensReclaimed */
+        uint256 minTokensReclaimed,
         address payable beneficiary,
-        bytes calldata,
-        /* metadata */
+        bytes calldata metadata,
         uint256 /* referralProjectId */
     )
         external
@@ -447,6 +445,15 @@ contract MockJBMultiTerminal {
     {
         cashOutCallCount++;
         lastCashOutAmount = cashOutCount;
+        lastCashOutMinTokensReclaimed = minTokensReclaimed;
+        lastCashOutMetadata = metadata;
+
+        // Burn the holder's project tokens like the real terminal does, so the hook's project-token balance reflects
+        // the cash-out (the holder must hold at least `cashOutCount`).
+        address projectToken = projectTokens[projectId];
+        if (projectToken != address(0) && cashOutCount > 0) {
+            MockERC20(projectToken).burn(holder, cashOutCount);
+        }
 
         if (useCashOutReturnOverride) {
             reclaimAmount = cashOutReturnAmount;

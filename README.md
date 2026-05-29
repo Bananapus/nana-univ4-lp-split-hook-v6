@@ -19,7 +19,7 @@
 The hook has a two-stage lifecycle:
 
 - before pool deployment, it accumulates reserved project tokens
-- after deployment, it manages the LP position, fee collection, and rebalancing
+- after deployment, further reserved-token inflows keep accumulating, and anyone authorized can call `addLiquidity` to convert them into more protocol-owned liquidity (topping up the active position or re-ranging into a new one); the hook also manages fee collection and rebalancing
 
 The LP range is derived from project economics rather than from an arbitrary price target.
 
@@ -38,7 +38,7 @@ This repo owns a post-issuance lifecycle:
 
 1. accumulate reserved tokens
 2. deploy them into a bounded V4 position
-3. manage that position over time
+3. keep accumulating later inflows and grow the position via `addLiquidity` (top-up or re-range), collecting fees and rebalancing over time
 
 It does not own the project's issuance logic itself.
 
@@ -54,7 +54,7 @@ It does not own the project's issuance logic itself.
 - this hook governs post-issuance liquidity, so it should not be used to infer how project tokens were originally priced or minted
 - first-pool deployment validates any pre-initialized pool price against the project's economic tick bounds and reverts if out of range
 - LP management depends on both live market state and live Juicebox economics
-- newly received reserved tokens are intentionally burned after deployment instead of added pro rata to the LP
+- newly received reserved tokens keep accumulating after deployment and are converted into additional liquidity via `addLiquidity` (the hook never burns; supply-reducing burns are a protocol-layer split-routing decision)
 
 ## Where State Lives
 
@@ -103,7 +103,7 @@ script/
 - once a pool path is chosen for a deployed project-token pair, that choice becomes part of the hook's operational identity
 - first-pool deployment is publicly observable and can be front-run by outside initialization
 - LP deployment and rebalancing depend on current project economics and live market structure
-- after deployment, newly received reserved tokens are intentionally burned to avoid LP dilution
+- after deployment, newly received reserved tokens keep accumulating and are added as more liquidity via `addLiquidity`; the hook never burns
 - TWAP and oracle assumptions come from the UniV4 router and should be evaluated together with this hook
 
 ## For AI Agents

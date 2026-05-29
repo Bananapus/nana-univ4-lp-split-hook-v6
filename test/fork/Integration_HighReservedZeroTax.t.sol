@@ -52,7 +52,8 @@ contract Integration_HighReservedZeroTax is ForkDeployHelper {
             IJBPermissions(address(jbPermissions)),
             address(jbTokens),
             IAllowanceTransfer(address(PERMIT2)),
-            IJBSuckerRegistry(address(0))
+            IJBSuckerRegistry(address(0)),
+            address(0)
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize({
@@ -80,7 +81,8 @@ contract Integration_HighReservedZeroTax is ForkDeployHelper {
             uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
             uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
             assertTrue(posLiq > 0, "Position has liquidity");
-            assertEq(hook.accumulatedProjectTokens(pid), 0, "Accumulated cleared");
+            // Accumulation consumed by the deploy; only an unpaired remainder is carried forward (never burned).
+            assertLt(hook.accumulatedProjectTokens(pid), 1e22, "bulk consumed; only remainder carried");
             emit log_named_uint("  sqrtPriceX96", sqrtPriceX96);
             emit log_named_uint("  position liquidity", posLiq);
         } catch (bytes memory reason) {

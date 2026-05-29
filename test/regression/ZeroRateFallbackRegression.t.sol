@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
+import {JBUniswapV4LPSplitHookMath} from "../../src/libraries/JBUniswapV4LPSplitHookMath.sol";
 import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
 import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
@@ -22,7 +23,7 @@ contract ZeroRateFallbackHarness is JBUniswapV4LPSplitHook {
         address _tokens,
         IAllowanceTransfer _permit2
     )
-        JBUniswapV4LPSplitHook(_directory, _permissions, _tokens, _permit2, IJBSuckerRegistry(address(0)))
+        JBUniswapV4LPSplitHook(_directory, _permissions, _tokens, _permit2, IJBSuckerRegistry(address(0)), address(0))
     {}
 
     function _fetchControllerAndRuleset(uint256 projectId)
@@ -45,7 +46,9 @@ contract ZeroRateFallbackHarness is JBUniswapV4LPSplitHook {
         returns (uint160)
     {
         (address ctrl, JBRuleset memory ruleset) = _fetchControllerAndRuleset(projectId);
-        return _getCashOutRateSqrtPriceX96(projectId, terminalToken, projectToken, ctrl, ruleset);
+        return JBUniswapV4LPSplitHookMath.getCashOutRateSqrtPriceX96(
+            IJBDirectory(DIRECTORY), SUCKER_REGISTRY, projectId, terminalToken, projectToken, ctrl, ruleset
+        );
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
@@ -59,7 +62,9 @@ contract ZeroRateFallbackHarness is JBUniswapV4LPSplitHook {
         returns (uint160)
     {
         (address ctrl, JBRuleset memory ruleset) = _fetchControllerAndRuleset(projectId);
-        return _getIssuanceRateSqrtPriceX96(projectId, terminalToken, projectToken, ctrl, ruleset);
+        return JBUniswapV4LPSplitHookMath.getIssuanceRateSqrtPriceX96(
+            IJBDirectory(DIRECTORY), projectId, terminalToken, projectToken, ctrl, ruleset
+        );
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
@@ -73,7 +78,9 @@ contract ZeroRateFallbackHarness is JBUniswapV4LPSplitHook {
         returns (int24, int24)
     {
         (address ctrl, JBRuleset memory ruleset) = _fetchControllerAndRuleset(projectId);
-        return _calculateTickBounds(projectId, terminalToken, projectToken, ctrl, ruleset);
+        return JBUniswapV4LPSplitHookMath.calculateTickBounds(
+            IJBDirectory(DIRECTORY), SUCKER_REGISTRY, projectId, terminalToken, projectToken, ctrl, ruleset
+        );
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
@@ -87,7 +94,9 @@ contract ZeroRateFallbackHarness is JBUniswapV4LPSplitHook {
         returns (uint160)
     {
         (address ctrl, JBRuleset memory ruleset) = _fetchControllerAndRuleset(projectId);
-        return _computeInitialSqrtPrice(projectId, terminalToken, projectToken, ctrl, ruleset);
+        return JBUniswapV4LPSplitHookMath.computeInitialSqrtPrice(
+            IJBDirectory(DIRECTORY), SUCKER_REGISTRY, projectId, terminalToken, projectToken, ctrl, ruleset
+        );
     }
 }
 

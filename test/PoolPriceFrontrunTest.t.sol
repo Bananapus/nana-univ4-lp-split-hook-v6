@@ -26,7 +26,7 @@ contract PoolPriceFrontrunTest is LPSplitHookV4TestBase {
             currency1: currency1,
             fee: hook.POOL_FEE(),
             tickSpacing: hook.TICK_SPACING(),
-            hooks: IHooks(address(0)) // ORACLE_HOOK is address(0) in test setup
+            hooks: hook.oracleHook()
         });
     }
 

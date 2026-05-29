@@ -1,6 +1,6 @@
 {
   "name": "@bananapus/univ4-lp-split-hook-v6",
-  "version": "0.0.52",
+  "version": "0.0.53",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@bananapus/address-registry-v6": "^0.0.29",
+    "@bananapus/buyback-hook-v6": "^0.0.64",
     "@bananapus/core-v6": "^0.0.72",
     "@bananapus/permission-ids-v6": "^0.0.27",
     "@bananapus/suckers-v6": "^0.0.60",

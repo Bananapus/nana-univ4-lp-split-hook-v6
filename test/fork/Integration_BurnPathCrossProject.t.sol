@@ -52,7 +52,8 @@ contract Integration_BurnPathCrossProject is ForkDeployHelper {
             IJBPermissions(address(jbPermissions)),
             address(jbTokens),
             IAllowanceTransfer(address(PERMIT2)),
-            IJBSuckerRegistry(address(0))
+            IJBSuckerRegistry(address(0)),
+            address(0)
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize({
@@ -64,7 +65,7 @@ contract Integration_BurnPathCrossProject is ForkDeployHelper {
         });
     }
 
-    function test_fork_integration_burnPathCrossProject() public {
+    function test_fork_integration_accumulatePathCrossProject() public {
         uint256 pidA = _launchProject({reservedPercent: 0, cashOutTaxRate: 5000, weight: 1_000_000e18});
         vm.prank(multisig);
         IJBToken pTokenA = jbController.deployERC20For(pidA, "Project A Token", "TKA", bytes32(0));
@@ -78,6 +79,7 @@ contract Integration_BurnPathCrossProject is ForkDeployHelper {
         vm.prank(multisig);
         hook.deployPool(pidA, 0);
         assertTrue(hook.isPoolDeployed(pidA, JBConstants.NATIVE_TOKEN), "A deployed");
+        uint256 aAccBefore = hook.accumulatedProjectTokens(pidA);
         uint256 bAccBefore = hook.accumulatedProjectTokens(pidB);
         uint256 bBalBefore = IERC20(address(pTokenB)).balanceOf(address(hook));
         uint256 burnAmount = 50_000e18;
@@ -108,7 +110,8 @@ contract Integration_BurnPathCrossProject is ForkDeployHelper {
         IERC20(address(pTokenA)).approve(address(hook), burnAmount);
         hook.processSplitWith(burnCtx);
         vm.stopPrank();
-        assertEq(hook.accumulatedProjectTokens(pidA), 0, "A accumulated stays 0 after burn");
+        // Post-deploy inflow for A accumulates (never burned); B's accumulation is untouched (cross-project isolation).
+        assertEq(hook.accumulatedProjectTokens(pidA), aAccBefore + burnAmount, "A inflow accumulates after deploy");
         assertEq(hook.accumulatedProjectTokens(pidB), bAccBefore, "B accumulated unchanged");
         assertEq(IERC20(address(pTokenB)).balanceOf(address(hook)), bBalBefore, "B token balance unchanged");
         vm.prank(multisig);
@@ -117,7 +120,8 @@ contract Integration_BurnPathCrossProject is ForkDeployHelper {
         uint256 bTokenId = hook.tokenIdOf(pidB, JBConstants.NATIVE_TOKEN);
         uint128 bLiq = V4_POSITION_MANAGER.getPositionLiquidity(bTokenId);
         assertTrue(bLiq > 0, "B has liquidity");
-        assertEq(hook.accumulatedProjectTokens(pidB), 0, "B accumulated cleared after deploy");
+        // B's accumulation is consumed by its deploy; only an unpaired remainder is carried forward (never burned).
+        assertLt(hook.accumulatedProjectTokens(pidB), 8000e18, "B bulk consumed; only remainder carried after deploy");
         emit log_named_uint("  B liquidity", bLiq);
     }
 

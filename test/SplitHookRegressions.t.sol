@@ -208,15 +208,15 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "hasDeployedPool should be true after first deploy");
     }
 
-    /// @notice processSplitWith uses hasDeployedPool to decide accumulate vs burn.
-    ///         After deploying a pool, new tokens are burned once the flag is true.
-    function test_M2_processSplitWith_burnsAfterDeploy() public {
+    /// @notice processSplitWith accumulates inflow both before AND after deployment; it never burns.
+    function test_M2_processSplitWith_accumulatesAfterDeploy() public {
         // PROJECT_ID has a deployed pool.
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "should have a deployed pool");
 
         uint256 burnCountBefore = controller.burnCallCount();
+        uint256 accumulatedBefore = hook.accumulatedProjectTokens(PROJECT_ID);
 
-        // Send more tokens via processSplitWith -- should burn, not accumulate
+        // Send more tokens via processSplitWith -- should accumulate, not burn.
         uint256 newAmount = 50e18;
         projectToken.mint(address(controller), newAmount);
         vm.startPrank(address(controller));
@@ -225,7 +225,12 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         hook.processSplitWith(context);
         vm.stopPrank();
 
-        assertGt(controller.burnCallCount(), burnCountBefore, "Tokens should be burned after pool deployed");
+        assertEq(controller.burnCallCount(), burnCountBefore, "no burn should occur after pool deployed");
+        assertEq(
+            hook.accumulatedProjectTokens(PROJECT_ID),
+            accumulatedBefore + newAmount,
+            "tokens should accumulate after pool deployed"
+        );
     }
 
     /// @notice processSplitWith accumulates when no pools are deployed (count == 0).

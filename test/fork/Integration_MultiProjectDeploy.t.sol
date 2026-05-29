@@ -52,7 +52,8 @@ contract Integration_MultiProjectDeploy is ForkDeployHelper {
             IJBPermissions(address(jbPermissions)),
             address(jbTokens),
             IAllowanceTransfer(address(PERMIT2)),
-            IJBSuckerRegistry(address(0))
+            IJBSuckerRegistry(address(0)),
+            address(0)
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize({
@@ -81,7 +82,8 @@ contract Integration_MultiProjectDeploy is ForkDeployHelper {
         vm.prank(multisig);
         hook.deployPool(pidA, 0);
         assertTrue(hook.isPoolDeployed(pidA, JBConstants.NATIVE_TOKEN), "A pool deployed");
-        assertEq(hook.accumulatedProjectTokens(pidA), 0, "A accumulated cleared");
+        // A's accumulation is consumed by the deploy; only an unpaired remainder is carried forward (never burned).
+        assertLt(hook.accumulatedProjectTokens(pidA), 10_000e18, "A bulk consumed; only remainder carried");
         assertEq(hook.accumulatedProjectTokens(pidB), bAccBefore, "B accumulated unchanged after A deploy");
         assertEq(IERC20(address(pTokenB)).balanceOf(address(hook)), bBalBefore, "B balance unchanged after A deploy");
         uint256 aTokenId = hook.tokenIdOf(pidA, JBConstants.NATIVE_TOKEN);
@@ -89,7 +91,8 @@ contract Integration_MultiProjectDeploy is ForkDeployHelper {
         vm.prank(multisig);
         hook.deployPool(pidB, 0);
         assertTrue(hook.isPoolDeployed(pidB, JBConstants.NATIVE_TOKEN), "B pool deployed");
-        assertEq(hook.accumulatedProjectTokens(pidB), 0, "B accumulated cleared");
+        // B's accumulation consumed by its deploy; only an unpaired remainder is carried forward (never burned).
+        assertLt(hook.accumulatedProjectTokens(pidB), 8000e18, "B bulk consumed; only remainder carried");
         uint128 aLiqAfter = V4_POSITION_MANAGER.getPositionLiquidity(aTokenId);
         assertEq(aLiqAfter, aLiqBefore, "A liquidity unchanged after B deploy");
         uint256 bTokenId = hook.tokenIdOf(pidB, JBConstants.NATIVE_TOKEN);

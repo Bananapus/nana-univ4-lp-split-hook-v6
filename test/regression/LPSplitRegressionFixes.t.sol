@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
+import {JBUniswapV4LPSplitHookMath} from "../../src/libraries/JBUniswapV4LPSplitHookMath.sol";
 import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
 import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
@@ -25,7 +26,7 @@ contract OutOfRangeAmountHarness is JBUniswapV4LPSplitHook {
         address _tokens,
         IAllowanceTransfer _permit2
     )
-        JBUniswapV4LPSplitHook(_directory, _permissions, _tokens, _permit2, IJBSuckerRegistry(address(0)))
+        JBUniswapV4LPSplitHook(_directory, _permissions, _tokens, _permit2, IJBSuckerRegistry(address(0)), address(0))
     {}
 
     // forge-lint: disable-next-line(mixed-case-function)
@@ -44,11 +45,14 @@ contract OutOfRangeAmountHarness is JBUniswapV4LPSplitHook {
     {
         address controller = address(IJBDirectory(DIRECTORY).controllerOf(projectId));
         (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
-        return _computeOptimalCashOutAmount(
+        return JBUniswapV4LPSplitHookMath.computeOptimalCashOutAmount(
+            IJBDirectory(DIRECTORY),
+            SUCKER_REGISTRY,
             projectId,
             terminalToken,
             _projectToken,
             totalProjectTokens,
+            0,
             sqrtPriceInit,
             tickLower,
             tickUpper,

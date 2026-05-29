@@ -52,6 +52,7 @@ contract MockPositionManager {
 
     // Track calls for verification
     uint256 public mintCallCount;
+    uint256 public increaseCallCount;
     uint256 public burnCallCount;
     uint256 public decreaseLiquidityCallCount;
     uint256 public lastMintTokenId;
@@ -148,7 +149,9 @@ contract MockPositionManager {
         for (uint256 i = 0; i < actions.length; i++) {
             uint8 action = uint8(actions[i]);
 
-            if (action == uint8(Actions.MINT_POSITION)) {
+            if (action == uint8(Actions.INCREASE_LIQUIDITY)) {
+                _handleIncreaseLiquidity(params[i]);
+            } else if (action == uint8(Actions.MINT_POSITION)) {
                 _handleMint(params[i]);
             } else if (action == uint8(Actions.BURN_POSITION)) {
                 _handleBurn(params[i]);
@@ -210,6 +213,39 @@ contract MockPositionManager {
         address token1 = Currency.unwrap(key.currency1);
         poolLocked[token0] += amount0Used;
         poolLocked[token1] += amount1Used;
+    }
+
+    function _handleIncreaseLiquidity(bytes memory data) internal {
+        (
+            uint256 tokenId,
+            uint256 liquidity,
+            uint128 amount0Max,
+            uint128 amount1Max, /* hookData */
+        ) = abi.decode(data, (uint256, uint256, uint128, uint128, bytes));
+
+        increaseCallCount++;
+
+        // Calculate amounts used based on usagePercent (same model as mint).
+        uint256 amount0Used = (uint256(amount0Max) * usagePercent) / 10_000;
+        uint256 amount1Used = (uint256(amount1Max) * usagePercent) / 10_000;
+
+        // Grow the existing position's recorded liquidity/locked amounts.
+        Position storage position = _positions[tokenId];
+        // Safe: test mock; values in tests always fit in target type.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        position.liquidity += uint128(liquidity);
+        position.amount0Locked += amount0Used;
+        position.amount1Locked += amount1Used;
+
+        // Record what SETTLE needs to pull from the caller.
+        _pendingSettle0 = amount0Used;
+        _pendingSettle1 = amount1Used;
+        _settleCurrency0 = position.poolKey.currency0;
+        _settleCurrency1 = position.poolKey.currency1;
+
+        // Lock the used amounts in the "pool" so SWEEP doesn't return them.
+        poolLocked[Currency.unwrap(position.poolKey.currency0)] += amount0Used;
+        poolLocked[Currency.unwrap(position.poolKey.currency1)] += amount1Used;
     }
 
     function _handleBurn(bytes memory data) internal {

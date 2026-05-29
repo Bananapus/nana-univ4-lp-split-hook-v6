@@ -12,6 +12,7 @@ import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingCo
 import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
+import {MockGeomeanOracle} from "../mock/MockGeomeanOracle.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {LibClone} from "solady/src/utils/LibClone.sol";
 
@@ -337,15 +338,24 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
             IJBPermissions(address(permissions)),
             address(jbTokens),
             IAllowanceTransfer(permit2Addr),
-            IJBSuckerRegistry(address(0))
+            IJBSuckerRegistry(address(0)),
+            address(0)
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
+
+        // Spot-tracking oracle so the spot-vs-TWAP guard on rebalanceLiquidity (exercised by the handler) passes.
+        // Etched (no CREATE) so it doesn't shift this setUp's deployment nonces / token ordering.
+        address invOracleAddr = address(uint160(uint256(keccak256("jb.univ4-lp-split.invariant.oracle"))));
+        deployCodeTo("MockGeomeanOracle.sol", invOracleAddr);
+        MockGeomeanOracle invOracle = MockGeomeanOracle(invOracleAddr);
+        invOracle.enableSpotTracking(IPoolManager(address(poolManager)));
+
         hook.initialize({
             initialFeeProjectId: FEE_PROJECT_ID,
             initialFeePercent: FEE_PERCENT,
             newPoolManager: IPoolManager(address(poolManager)),
             newPositionManager: IPositionManager(address(positionManager)),
-            newOracleHook: IHooks(address(0))
+            newOracleHook: IHooks(address(invOracle))
         });
 
         // Deploy the handler

@@ -52,7 +52,8 @@ contract CrossProjectFork is ForkDeployHelper {
             IJBPermissions(address(jbPermissions)),
             address(jbTokens),
             IAllowanceTransfer(address(PERMIT2)),
-            IJBSuckerRegistry(address(0))
+            IJBSuckerRegistry(address(0)),
+            address(0)
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize({
@@ -85,7 +86,8 @@ contract CrossProjectFork is ForkDeployHelper {
         uint256 bTokenBalanceAfter = IERC20(address(pTokenB)).balanceOf(address(hook));
         assertEq(bAccumulatedAfter, bAccumulatedBefore, "B accumulated should be unchanged");
         assertEq(bTokenBalanceAfter, bTokenBalanceBefore, "B token balance should be unchanged");
-        assertEq(hook.accumulatedProjectTokens(pidA), 0, "A accumulated should be 0 after deploy");
+        // A's accumulation is consumed by the deploy; only an unpaired remainder is carried forward (never burned).
+        assertLt(hook.accumulatedProjectTokens(pidA), 10_000e18, "A bulk consumed; only remainder carried after deploy");
         uint256 tokenIdA = hook.tokenIdOf(pidA, JBConstants.NATIVE_TOKEN);
         uint128 posLiqA = V4_POSITION_MANAGER.getPositionLiquidity(tokenIdA);
         assertTrue(posLiqA > 0, "A position should have liquidity");

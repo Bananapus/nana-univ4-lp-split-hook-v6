@@ -10,7 +10,8 @@ Suggestions of where to look:
 
 - misprice or misbound the LP position relative to Juicebox economics
 - let callers extract value during deployment, fee collection, rebalancing, or fee claiming
-- burn, route, or claim the wrong project or terminal-token amounts
+- accumulate, route, add-as-liquidity, or claim the wrong project or terminal-token amounts
+- manipulate the pool price to make `addLiquidity` mint at a bad ratio, or route its funding cash-out through the AMM
 - break clone initialization or redeploy safety
 - leave stale position or fee-accounting state that later calls trust incorrectly
 
@@ -39,8 +40,8 @@ Lifecycle:
 
 - before pool deployment, reserved project tokens accumulate in the hook
 - `deployPool(...)` creates or joins a V4 pool and mints one managed LP position
-- after deployment, later reserved tokens are burned instead of added to the position
-- fees can be collected, routed, and claimed through separate accounting paths
+- after deployment, later reserved tokens keep accumulating; `addLiquidity(...)` converts them into more liquidity (top-up or re-range), guarded by an oracle-TWAP deviation check and a force-direct bonding-curve cash-out. The hook never burns.
+- fees can be collected from the single active position, routed, and claimed through separate accounting paths
 
 ## Roles And Privileges
 
@@ -54,7 +55,7 @@ Lifecycle:
 
 | Dependency | Assumption | What breaks if wrong |
 |------------|------------|----------------------|
-| `nana-core-v6` | Reserved-token issuance and cash-out economics match the hook's pricing model | LP bounds and burn/cash-out math drift |
+| `nana-core-v6` | Reserved-token issuance and cash-out economics match the hook's pricing model | LP bounds and cash-out math drift |
 | `univ4-router-v6` or selected oracle hook | Market-side assumptions stay coherent enough for pool behavior | Pool behavior and price reasoning drift |
 | Uniswap V4 managers | Position and liquidity operations behave as expected | Burn, mint, collect, or rebalance paths break |
 
@@ -62,9 +63,10 @@ Lifecycle:
 
 1. One project path transitions from accumulation mode to deployed-LP mode exactly once.
 2. Tick bounds remain valid and inside the intended economic envelope.
-3. Fee-token claims stay segregated from freely burnable or routable balances.
+3. Fee-token claims stay segregated from freely spendable or routable balances.
 4. Rebalance must not destroy tracked fee claims or silently mint value.
 5. Clone initialization must not allow configuration drift after deployment.
+6. `addLiquidity` never adds at a manipulated ratio: it reverts when spot deviates from the oracle TWAP beyond the bound (or the TWAP is unavailable), and cashes out only directly through the bonding curve, never through the AMM it feeds.
 
 ## Attack Surfaces
 
@@ -77,7 +79,8 @@ Lifecycle:
 ## Accepted Risks Or Behaviors
 
 - Some fee collection paths are intentionally permissionless.
-- Newly received reserved tokens are intentionally burned after deployment to avoid LP dilution.
+- Newly received reserved tokens are intentionally re-accumulated after deployment and later added as liquidity via `addLiquidity`. The hook never burns; supply-reducing burns are a protocol-layer split-routing decision (`{projectId:0, hook:0, beneficiary:0xdead}`).
+- `addLiquidity` is permissionless once the ruleset weight has decayed 10x; it can revert (TWAP unavailable / deviation) and is expected to be retried as the oracle warms up or the price settles.
 
 ## Verification
 

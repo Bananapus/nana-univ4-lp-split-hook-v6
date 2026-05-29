@@ -17,6 +17,20 @@ interface IJBUniswapV4LPSplitHook {
     /// @param caller The address that claimed the tokens.
     event FeeTokensClaimed(uint256 indexed projectId, address indexed beneficiary, uint256 amount, address caller);
 
+    /// @notice Emitted when accumulated reserved tokens are converted into additional liquidity after deployment.
+    /// @param projectId The Juicebox project ID.
+    /// @param terminalToken The terminal token address.
+    /// @param tokenId The LP position token ID that received the liquidity.
+    /// @param isNewPosition True if a new (re-ranged) position was minted; false if the active position was topped up.
+    /// @param caller The address that added the liquidity.
+    event LiquidityAdded(
+        uint256 indexed projectId,
+        address indexed terminalToken,
+        uint256 indexed tokenId,
+        bool isNewPosition,
+        address caller
+    );
+
     /// @notice Emitted when LP fees are routed back to the project.
     /// @param projectId The Juicebox project ID.
     /// @param terminalToken The terminal token address.
@@ -44,13 +58,6 @@ interface IJBUniswapV4LPSplitHook {
         uint256 indexed projectId, address indexed terminalToken, bytes32 indexed poolId, address caller
     );
 
-    /// @notice Emitted when tokens are burned in Stage 2.
-    /// @param projectId The Juicebox project ID.
-    /// @param token The token address that was burned.
-    /// @param amount The amount of tokens burned.
-    /// @param caller The address that triggered the burn.
-    event TokensBurned(uint256 indexed projectId, address indexed token, uint256 amount, address caller);
-
     /// @notice Check if a pool has been deployed for a project/terminal token pair.
     /// @param projectId The Juicebox project ID.
     /// @param terminalToken The terminal token address.
@@ -66,6 +73,16 @@ interface IJBUniswapV4LPSplitHook {
     /// @param terminalToken The terminal token address.
     /// @return key The Uniswap V4 PoolKey.
     function poolKeyOf(uint256 projectId, address terminalToken) external view returns (PoolKey memory key);
+
+    /// @notice Convert the project's post-deployment accumulated reserved tokens into additional liquidity. Tops up the
+    /// active position, or — once the live corridor has drifted — burns the stale position and re-mints a single
+    /// fresh
+    /// position at the current corridor. Permissionless once the ruleset weight has decayed 10x from accumulation;
+    /// otherwise requires `SET_BUYBACK_POOL` from the project owner.
+    /// @param projectId The Juicebox project ID.
+    /// @param terminalToken The terminal token paired with the project token in the deployed pool.
+    /// @param minCashOutReturn Minimum terminal tokens from the funding cash-out (slippage protection, 0 = auto 3%).
+    function addLiquidity(uint256 projectId, address terminalToken, uint256 minCashOutReturn) external;
 
     /// @notice Claim fee tokens for a beneficiary.
     /// @param projectId The Juicebox project ID.

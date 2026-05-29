@@ -22,6 +22,10 @@ import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 import {JBUniswapV4LPSplitHookDeployer} from "../src/JBUniswapV4LPSplitHookDeployer.sol";
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 import {SuckerDeployment, SuckerDeploymentLib} from "@bananapus/suckers-v6/script/helpers/SuckerDeploymentLib.sol";
+import {
+    BuybackDeployment,
+    BuybackDeploymentLib
+} from "@bananapus/buyback-hook-v6/script/helpers/BuybackDeploymentLib.sol";
 
 contract DeployScript is Script, Sphinx {
     /// @notice tracks the deployment of the core contracts for the chain we are deploying to.
@@ -35,6 +39,9 @@ contract DeployScript is Script, Sphinx {
 
     /// @notice tracks the deployment of the sucker contracts for the chain we are deploying to.
     SuckerDeployment suckers;
+
+    /// @notice tracks the deployment of the buyback-hook contracts for the chain we are deploying to.
+    BuybackDeployment buyback;
 
     /// @notice the salts used to deploy the contracts.
     bytes32 hookSalt = "JBUniswapV4LPSplitHookV6";
@@ -76,6 +83,11 @@ contract DeployScript is Script, Sphinx {
             vm.envOr("NANA_SUCKERS_DEPLOYMENT_PATH", string("node_modules/@bananapus/suckers-v6/deployments/"))
         );
 
+        // Get the deployment addresses for the buyback hook for this chain.
+        buyback = BuybackDeploymentLib.getDeployment(
+            vm.envOr("NANA_BUYBACK_DEPLOYMENT_PATH", string("node_modules/@bananapus/buyback-hook-v6/deployments/"))
+        );
+
         // Uniswap V4 PoolManager — per-chain addresses.
         // Verify at https://docs.uniswap.org/contracts/v4/deployments
         poolManager = _getPoolManager();
@@ -96,7 +108,8 @@ contract DeployScript is Script, Sphinx {
             core.permissions,
             address(core.tokens),
             IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
-            suckers.registry
+            suckers.registry,
+            address(buyback.registry)
         );
 
         address hookImplAddress = vm.computeCreate2Address({
@@ -111,7 +124,8 @@ contract DeployScript is Script, Sphinx {
                     permissions: core.permissions,
                     tokens: address(core.tokens),
                     permit2: IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
-                    suckerRegistry: suckers.registry
+                    suckerRegistry: suckers.registry,
+                    buybackHook: address(buyback.registry)
                 })
             );
         }

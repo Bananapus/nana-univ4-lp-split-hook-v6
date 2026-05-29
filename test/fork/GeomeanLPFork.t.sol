@@ -168,7 +168,8 @@ contract GeomeanLPForkTest is ForkDeployHelper {
             IJBPermissions(address(jbPermissions)),
             address(jbTokens),
             IAllowanceTransfer(address(PERMIT2)),
-            IJBSuckerRegistry(address(0))
+            IJBSuckerRegistry(address(0)),
+            address(0)
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize({
@@ -176,7 +177,7 @@ contract GeomeanLPForkTest is ForkDeployHelper {
             initialFeePercent: 3800,
             newPoolManager: V4_POOL_MANAGER,
             newPositionManager: V4_POSITION_MANAGER,
-            newOracleHook: IHooks(address(0))
+            newOracleHook: _deployGeomeanOracleHook(V4_POOL_MANAGER)
         });
     }
 
@@ -215,10 +216,11 @@ contract GeomeanLPForkTest is ForkDeployHelper {
             assertTrue(tokenId != 0, string.concat("no position NFT at index ", vm.toString(i)));
             uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
             assertTrue(posLiq > 0, string.concat("zero liquidity at index ", vm.toString(i)));
-            assertEq(
+            // Accumulation consumed by the deploy; only an unpaired remainder is carried forward (never burned).
+            assertLt(
                 hook.accumulatedProjectTokens(pid),
-                0,
-                string.concat("accumulated not cleared at index ", vm.toString(i))
+                amounts[i] / 10,
+                string.concat("bulk consumed; only remainder carried at index ", vm.toString(i))
             );
             PoolKey memory key = hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN);
             PoolId poolId = key.toId();
@@ -283,6 +285,9 @@ contract GeomeanLPForkTest is ForkDeployHelper {
         swapHelper.swap{value: projIsToken0 ? 0 : 0}(key, zeroForOne, -int256(5000e18));
         (uint160 sqrtPriceAfterSwap,,,) = V4_POOL_MANAGER.getSlot0(poolId);
         assertTrue(sqrtPriceAfterSwap != sqrtPriceBefore, "swap should have moved the price");
+        _mockOracleTwapEqualsSpot(
+            hook.oracleHook(), V4_POOL_MANAGER, hook.poolKeyOf(projectId, JBConstants.NATIVE_TOKEN)
+        );
         vm.prank(multisig);
         hook.rebalanceLiquidity(projectId, JBConstants.NATIVE_TOKEN, 0, 0);
         uint256 newTokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
@@ -318,10 +323,11 @@ contract GeomeanLPForkTest is ForkDeployHelper {
             assertTrue(tokenId != 0, string.concat("no USDC position NFT at index ", vm.toString(i)));
             uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
             assertTrue(posLiq > 0, string.concat("zero USDC liquidity at index ", vm.toString(i)));
-            assertEq(
+            // Accumulation consumed by the deploy; only an unpaired remainder is carried forward (never burned).
+            assertLt(
                 hook.accumulatedProjectTokens(pid),
-                0,
-                string.concat("USDC accumulated not cleared at index ", vm.toString(i))
+                50_000e18 / 10,
+                string.concat("bulk consumed; only remainder carried at index ", vm.toString(i))
             );
             emit log_named_uint("  USDC amount", usdcAmounts[i]);
             emit log_named_uint("  position liquidity", posLiq);
