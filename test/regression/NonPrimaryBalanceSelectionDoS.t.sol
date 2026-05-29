@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
+import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/IJBBuybackHookRegistry.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
@@ -27,7 +28,7 @@ contract HighestValueSelectionHarness is JBUniswapV4LPSplitHook {
         address tokens,
         IAllowanceTransfer permit2
     )
-        JBUniswapV4LPSplitHook(directory, permissions, tokens, permit2, IJBSuckerRegistry(address(0)), address(0))
+        JBUniswapV4LPSplitHook(directory, permissions, tokens, permit2, IJBSuckerRegistry(address(0)))
     {}
 
     function findHighestValueTerminalTokenOf(uint256 projectId, address controller) external view returns (address) {
@@ -131,7 +132,8 @@ contract NonPrimaryBalanceSelectionDoSTest is LPSplitHookV4TestBase {
             initialFeePercent: FEE_PERCENT,
             newPoolManager: IPoolManager(address(poolManager)),
             newPositionManager: IPositionManager(address(positionManager)),
-            newOracleHook: IHooks(address(0))
+            newOracleHook: IHooks(address(0)),
+            newBuybackHook: IJBBuybackHookRegistry(address(0))
         });
     }
 

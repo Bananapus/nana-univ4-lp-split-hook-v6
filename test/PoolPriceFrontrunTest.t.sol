@@ -8,7 +8,7 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 
-/// @notice Tests for the pool price frontrunning mitigation (finding AR).
+/// @notice Tests for the pool price frontrunning mitigation.
 /// @dev Validates that `_createAndInitializePool` rejects pre-initialized pools with prices
 ///      outside the project's economic tick range (cashout floor to issuance ceiling).
 contract PoolPriceFrontrunTest is LPSplitHookV4TestBase {

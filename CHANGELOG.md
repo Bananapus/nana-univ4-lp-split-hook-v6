@@ -11,6 +11,16 @@ This repo was not part of the deployed v5 ecosystem that the top-level changelog
 - `IJBUniswapV4LPSplitHook`
 - `IJBUniswapV4LPSplitHookDeployer`
 
+## 0.0.54 — Per-clone buyback hook, audit hardening, size refactor
+
+- **The buyback hook is now per-clone, not an implementation immutable.** Moved from a constructor immutable (`BUYBACK_HOOK`) to per-clone storage (`buybackHook`) set in `initialize`, and added as a per-deploy parameter on `JBUniswapV4LPSplitHookDeployer.deployHookFor`. Different projects' clones can now target different buyback hooks (or none). Removed the `buybackHook` argument from the hook's constructor; `initialize` gains `newBuybackHook` and `deployHookFor` gains `buybackHook`.
+- **Funding cash-out is always forced direct.** The deploy path now attaches the buyback `cashOut` skip metadata too (previously only `addLiquidity` did), so the initial funding cash-out can never route through a pre-existing AMM pool the hook is about to feed. The `forceDirectCashOut` toggle was removed — the direct path is unconditional.
+- **`rebalanceLiquidity` now validates spot vs the oracle TWAP** before the burn/re-mint, reverting on deviation or an unavailable TWAP — the same guard `addLiquidity` uses, since the re-mint prices against the live spot.
+- **Pre-held terminal tokens are folded into the cash-out ratio correctly.** `computeOptimalCashOutAmount` now reduces the cash-out by `H/(cashOutRate + R)` (the combined rate) instead of `H/cashOutRate`, so re-ranges that recover terminal-token principal no longer under-deploy capital and strand project tokens.
+- **Pricing/tick math extracted into a linked `JBUniswapV4LPSplitHookMath` library** so the hook stays under the EIP-170 24,576-byte runtime limit.
+- `package.json`: version 0.0.53 -> 0.0.54; `@bananapus/buyback-hook-v6` dependency ^0.0.63 -> ^0.0.64.
+- **Tests:** stripped audit-tool jargon from the suite (renamed the audit regression test); added regression coverage for the deploy-path force-direct cash-out, the rebalance TWAP guard, and the pre-held cash-out ratio.
+
 ## 0.0.53 — Continuous LP growth: replace post-deploy burn with `addLiquidity`
 
 - **The hook no longer burns.** Post-deployment, `processSplitWith` now ACCUMULATES reserved-token inflows into `accumulatedProjectTokens` (the same ledger used pre-deployment) instead of burning them. Supply-reducing burns are now a protocol-layer split-routing decision (route a reserved split to `{projectId:0, hook:0, beneficiary:0xdead}`), not this hook's job. Removed `_burnReceivedTokens` / `_burnProjectTokens` and the `TokensBurned` event.

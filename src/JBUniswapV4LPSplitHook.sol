@@ -160,17 +160,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     // --------------- public immutable stored properties ---------------- //
     //*********************************************************************//
 
-    /// @notice The buyback-hook registry, used to target the force-direct cash-out flag.
-    /// @dev When `addLiquidity` cashes out to fund the terminal side, it attaches the buyback hook's
-    /// `cashOut` skip metadata keyed to this registry so the cash-out is routed DIRECTLY through the
-    /// bonding curve (never through an AMM). Held as an immutable strong reference because the registry is chain-same
-    /// (one
-    /// canonical CREATE2 address per chain) — this contract does not resolve it per-call from a project's data hook,
-    /// so
-    /// it is decoupled from revnets / REVOwner. May be the zero address, in which case no force-direct metadata is
-    /// attached and the terminal's own `minTokensReclaimed` floor still applies.
-    IJBBuybackHookRegistry public immutable BUYBACK_HOOK;
-
     /// @notice JBDirectory (to find important control contracts for given projectId)
     address public immutable DIRECTORY;
 
@@ -189,6 +178,14 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     //*********************************************************************//
     // --------------------- public stored properties -------------------- //
     //*********************************************************************//
+
+    /// @notice The buyback-hook registry this clone targets for force-direct cash-outs.
+    /// @dev When a funding cash-out runs, the hook attaches the buyback hook's `cashOut` skip metadata keyed to this
+    /// registry so the cash-out is routed DIRECTLY through the bonding curve (never through an AMM). Held as per-clone
+    /// storage (set once via `initialize`) rather than an implementation immutable so different projects' clones can
+    /// target different buyback registries. May be the zero address, in which case no force-direct metadata is attached
+    /// and the terminal's own `minTokensReclaimed` floor still applies.
+    IJBBuybackHookRegistry public buybackHook;
 
     /// @notice The oracle hook used for configured Uniswap V4 pools (provides TWAP via observe()).
     /// @dev Set once per clone via `initialize` (alongside `feeProjectId` + `feePercent`). Held as storage rather
@@ -300,18 +297,15 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param tokens JBTokens address.
     /// @param permit2 The Permit2 utility.
     /// @param suckerRegistry The sucker registry for cross-chain surplus/supply queries.
-    /// @param buybackHook The buyback-hook registry to target for force-direct cash-outs (chain-same; may be zero).
     constructor(
         address directory,
         IJBPermissions permissions,
         address tokens,
         IAllowanceTransfer permit2,
-        IJBSuckerRegistry suckerRegistry,
-        address buybackHook
+        IJBSuckerRegistry suckerRegistry
     )
         JBPermissioned(permissions)
     {
-        BUYBACK_HOOK = IJBBuybackHookRegistry(buybackHook);
         DIRECTORY = directory;
         PERMIT2 = permit2;
         PROJECTS = IJBDirectory(directory).PROJECTS();
@@ -329,12 +323,15 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param newPoolManager The Uniswap V4 PoolManager on this chain.
     /// @param newPositionManager The Uniswap V4 PositionManager on this chain.
     /// @param newOracleHook The Uniswap V4 oracle hook deployed against `newPoolManager` on this chain.
+    /// @param newBuybackHook The buyback-hook registry this clone targets for force-direct cash-outs. May be the zero
+    /// address, in which case no force-direct metadata is attached.
     function initialize(
         uint256 initialFeeProjectId,
         uint256 initialFeePercent,
         IPoolManager newPoolManager,
         IPositionManager newPositionManager,
-        IHooks newOracleHook
+        IHooks newOracleHook,
+        IJBBuybackHookRegistry newBuybackHook
     )
         external
     {
@@ -378,6 +375,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         poolManager = newPoolManager;
         positionManager = newPositionManager;
         oracleHook = newOracleHook;
+        buybackHook = newBuybackHook;
     }
 
     /// @notice Accept ETH transfers (needed for cashOut with native ETH and V4 TAKE operations).
@@ -1473,15 +1471,15 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     }
 
     /// @notice Build the buyback hook's `cashOut` "skip" metadata that forces a cash-out directly through
-    /// the bonding curve (skipping the AMM). Keyed to this hook's strong `BUYBACK_HOOK` registry reference — the
+    /// the bonding curve (skipping the AMM). Keyed to this clone's `buybackHook` registry — the
     /// contract that reads and re-keys this entry to the project's resolved buyback hook. Returns empty metadata when
-    /// `BUYBACK_HOOK` is unset; the terminal's own `minTokensReclaimed` floor still applies.
+    /// `buybackHook` is unset; the terminal's own `minTokensReclaimed` floor still applies.
     function _forceDirectCashOutMetadata() internal view returns (bytes memory) {
-        if (address(BUYBACK_HOOK) == address(0)) return bytes("");
+        if (address(buybackHook) == address(0)) return bytes("");
 
         return JBMetadataResolver.addToMetadata({
             originalMetadata: bytes(""),
-            idToAdd: JBMetadataResolver.getId({purpose: "cashOut", target: address(BUYBACK_HOOK)}),
+            idToAdd: JBMetadataResolver.getId({purpose: "cashOut", target: address(buybackHook)}),
             // (minimumSwapAmountOut = 0, skip = true): force the direct bonding-curve cash-out. The terminal's own
             // `minTokensReclaimed` floor enforces slippage, so no hook-level minimum is needed here.
             dataToAdd: abi.encode(uint256(0), true)
@@ -1532,7 +1530,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
 
         // Force the cash-out directly through the bonding curve (skip the AMM this hook may be feeding). When
-        // `BUYBACK_HOOK` is unset this yields empty metadata and the terminal's `effectiveMinReturn` floor still
+        // `buybackHook` is unset this yields empty metadata and the terminal's `effectiveMinReturn` floor still
         // applies.
         bytes memory metadata = _forceDirectCashOutMetadata();
 

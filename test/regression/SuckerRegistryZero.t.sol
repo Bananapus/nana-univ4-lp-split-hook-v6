@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
+import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/IJBBuybackHookRegistry.sol";
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
 import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
@@ -18,7 +19,7 @@ import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 
-contract CodexNemesisCashOutRateHarness is JBUniswapV4LPSplitHook {
+contract CashOutRateHarness is JBUniswapV4LPSplitHook {
     constructor(
         address directory,
         IJBPermissions permissions,
@@ -26,7 +27,7 @@ contract CodexNemesisCashOutRateHarness is JBUniswapV4LPSplitHook {
         IAllowanceTransfer permit2,
         IJBSuckerRegistry suckerRegistry
     )
-        JBUniswapV4LPSplitHook(directory, permissions, tokens, permit2, suckerRegistry, address(0))
+        JBUniswapV4LPSplitHook(directory, permissions, tokens, permit2, suckerRegistry)
     {}
 
     function exposedGetCashOutRate(
@@ -45,13 +46,13 @@ contract CodexNemesisCashOutRateHarness is JBUniswapV4LPSplitHook {
     }
 }
 
-contract CodexNemesisSuckerRegistryZeroTest is LPSplitHookV4TestBase {
-    CodexNemesisCashOutRateHarness internal zeroRegistryHook;
+contract SuckerRegistryZeroTest is LPSplitHookV4TestBase {
+    CashOutRateHarness internal zeroRegistryHook;
 
     function setUp() public override {
         super.setUp();
 
-        zeroRegistryHook = new CodexNemesisCashOutRateHarness({
+        zeroRegistryHook = new CashOutRateHarness({
             directory: address(directory),
             permissions: IJBPermissions(address(permissions)),
             tokens: address(jbTokens),
@@ -63,7 +64,8 @@ contract CodexNemesisSuckerRegistryZeroTest is LPSplitHookV4TestBase {
             initialFeePercent: FEE_PERCENT,
             newPoolManager: IPoolManager(address(poolManager)),
             newPositionManager: IPositionManager(address(positionManager)),
-            newOracleHook: IHooks(address(0))
+            newOracleHook: IHooks(address(0)),
+            newBuybackHook: IJBBuybackHookRegistry(address(0))
         });
 
         vm.mockCall(

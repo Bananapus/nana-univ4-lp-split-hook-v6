@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 // ─── Test base and imports
 // ────────────────────────────────────────────
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
+import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/IJBBuybackHookRegistry.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
 import {MockJBController} from "../mock/MockJBContracts.sol";
 import {MockSuckerRegistry} from "../mock/MockSuckerRegistry.sol";
@@ -164,8 +165,7 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
             IJBPermissions(address(permissions)),
             address(jbTokens),
             IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
-            IJBSuckerRegistry(address(mockRegistry)),
-            address(0)
+            IJBSuckerRegistry(address(mockRegistry))
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize({
@@ -173,7 +173,8 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
             initialFeePercent: FEE_PERCENT,
             newPoolManager: IPoolManager(address(poolManager)),
             newPositionManager: IPositionManager(address(positionManager)),
-            newOracleHook: IHooks(address(baseOracleHook))
+            newOracleHook: IHooks(address(baseOracleHook)),
+            newBuybackHook: IJBBuybackHookRegistry(address(0))
         });
 
         // Deploy the custom controller that can flip the metadata flag.
@@ -325,8 +326,7 @@ contract FeeTokensExcludedFromRebalanceTest is LPSplitHookV4TestBase {
             IJBPermissions(address(permissions)),
             address(jbTokens),
             IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
-            IJBSuckerRegistry(address(mockRegistry)),
-            address(0)
+            IJBSuckerRegistry(address(mockRegistry))
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize({
@@ -334,7 +334,8 @@ contract FeeTokensExcludedFromRebalanceTest is LPSplitHookV4TestBase {
             initialFeePercent: FEE_PERCENT,
             newPoolManager: IPoolManager(address(poolManager)),
             newPositionManager: IPositionManager(address(positionManager)),
-            newOracleHook: IHooks(address(baseOracleHook))
+            newOracleHook: IHooks(address(baseOracleHook)),
+            newBuybackHook: IJBBuybackHookRegistry(address(0))
         });
 
         // We need a controller that can actually burn tokens so rebalance works.
@@ -442,8 +443,7 @@ contract FeeTokensExcludedFromSplitBalanceCheckTest is LPSplitHookV4TestBase {
             IJBPermissions(address(permissions)),
             address(jbTokens),
             IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
-            IJBSuckerRegistry(address(mockRegistry)),
-            address(0)
+            IJBSuckerRegistry(address(mockRegistry))
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
         hook.initialize({
@@ -451,7 +451,8 @@ contract FeeTokensExcludedFromSplitBalanceCheckTest is LPSplitHookV4TestBase {
             initialFeePercent: FEE_PERCENT,
             newPoolManager: IPoolManager(address(poolManager)),
             newPositionManager: IPositionManager(address(positionManager)),
-            newOracleHook: IHooks(address(baseOracleHook))
+            newOracleHook: IHooks(address(baseOracleHook)),
+            newBuybackHook: IJBBuybackHookRegistry(address(0))
         });
 
         burnController = new TotalSurplusController();
