@@ -103,7 +103,7 @@ contract RegressionFixM4Test is LPSplitHookV4TestBase {
             currency1: currency1,
             fee: hook.POOL_FEE(),
             tickSpacing: hook.TICK_SPACING(),
-            hooks: IHooks(address(0))
+            hooks: hook.oracleHook()
         });
 
         // Pre-initialize the pool at a price within the project's economic bounds.
@@ -165,7 +165,7 @@ contract RegressionFixM4Test is LPSplitHookV4TestBase {
             currency1: currency1,
             fee: hook.POOL_FEE(),
             tickSpacing: hook.TICK_SPACING(),
-            hooks: IHooks(address(0))
+            hooks: hook.oracleHook()
         });
 
         // Pre-initialize at the expected price.
@@ -202,7 +202,7 @@ contract RegressionFixM4Test is LPSplitHookV4TestBase {
             currency1: currency1,
             fee: hook.POOL_FEE(),
             tickSpacing: hook.TICK_SPACING(),
-            hooks: IHooks(address(0))
+            hooks: hook.oracleHook()
         });
 
         // Pre-initialize at an extreme price (far below expected LP range).

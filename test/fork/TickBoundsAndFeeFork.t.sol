@@ -174,7 +174,7 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
             initialFeePercent: 3800,
             newPoolManager: V4_POOL_MANAGER,
             newPositionManager: V4_POSITION_MANAGER,
-            newOracleHook: IHooks(address(0))
+            newOracleHook: _deployGeomeanOracleHook(V4_POOL_MANAGER)
         });
     }
 
@@ -385,6 +385,9 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
         uint256 oldTokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         uint128 oldLiq = V4_POSITION_MANAGER.getPositionLiquidity(oldTokenId);
         emit log_named_uint("  Old position liquidity", oldLiq);
+        _mockOracleTwapEqualsSpot(
+            hook.oracleHook(), V4_POOL_MANAGER, hook.poolKeyOf(projectId, JBConstants.NATIVE_TOKEN)
+        );
         vm.prank(multisig);
         hook.rebalanceLiquidity({
             projectId: projectId, terminalToken: JBConstants.NATIVE_TOKEN, decreaseAmount0Min: 0, decreaseAmount1Min: 0

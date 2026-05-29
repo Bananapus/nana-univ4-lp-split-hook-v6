@@ -144,7 +144,7 @@ contract RegressionPreinitializedPoolPriceRegression is LPSplitHookV4TestBase {
             currency1: currency1,
             fee: hook.POOL_FEE(),
             tickSpacing: hook.TICK_SPACING(),
-            hooks: IHooks(address(0))
+            hooks: hook.oracleHook()
         });
 
         positionManager.initializePool(key, attackerSqrtPrice);
@@ -181,7 +181,7 @@ contract RegressionPreinitializedPoolPriceRegression is LPSplitHookV4TestBase {
             currency1: currency1,
             fee: hook.POOL_FEE(),
             tickSpacing: hook.TICK_SPACING(),
-            hooks: IHooks(address(0))
+            hooks: hook.oracleHook()
         });
 
         positionManager.initializePool(key, inBandSqrtPrice);

@@ -173,7 +173,7 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
             initialFeePercent: FEE_PERCENT,
             newPoolManager: IPoolManager(address(poolManager)),
             newPositionManager: IPositionManager(address(positionManager)),
-            newOracleHook: IHooks(address(0))
+            newOracleHook: IHooks(address(baseOracleHook))
         });
 
         // Deploy the custom controller that can flip the metadata flag.
@@ -334,7 +334,7 @@ contract FeeTokensExcludedFromRebalanceTest is LPSplitHookV4TestBase {
             initialFeePercent: FEE_PERCENT,
             newPoolManager: IPoolManager(address(poolManager)),
             newPositionManager: IPositionManager(address(positionManager)),
-            newOracleHook: IHooks(address(0))
+            newOracleHook: IHooks(address(baseOracleHook))
         });
 
         // We need a controller that can actually burn tokens so rebalance works.
@@ -451,7 +451,7 @@ contract FeeTokensExcludedFromSplitBalanceCheckTest is LPSplitHookV4TestBase {
             initialFeePercent: FEE_PERCENT,
             newPoolManager: IPoolManager(address(poolManager)),
             newPositionManager: IPositionManager(address(positionManager)),
-            newOracleHook: IHooks(address(0))
+            newOracleHook: IHooks(address(baseOracleHook))
         });
 
         burnController = new TotalSurplusController();

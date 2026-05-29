@@ -25,7 +25,7 @@ contract RegressionRegressionsTest is LPSplitHookV4TestBase {
             currency1: currency1,
             fee: hook.POOL_FEE(),
             tickSpacing: hook.TICK_SPACING(),
-            hooks: IHooks(address(0))
+            hooks: hook.oracleHook()
         });
 
         int24 attackerTick = 50_000;

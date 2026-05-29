@@ -941,6 +941,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         address projectToken = _tokenOf(projectId);
         PoolKey memory key = poolKeysOf[projectId][terminalToken];
 
+        // Reject the rebalance while the pool's spot price is off the oracle TWAP. The burn and re-mint below price
+        // against the live spot, so a sandwiched/JIT-skewed spot would make the re-mint deploy at a manipulated ratio.
+        // Mirrors `addLiquidity`'s guard (and, like it, reverts if the oracle TWAP has not warmed up yet).
+        _requireSpotNearTwap({projectId: projectId, terminalToken: terminalToken, key: key});
+
         _collectAndRouteFees({
             projectId: projectId, projectToken: projectToken, terminalToken: terminalToken, tokenId: tokenId, key: key
         });

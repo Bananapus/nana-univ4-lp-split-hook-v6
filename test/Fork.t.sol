@@ -315,7 +315,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
             currency1: currency1,
             fee: hook.POOL_FEE(),
             tickSpacing: hook.TICK_SPACING(),
-            hooks: IHooks(address(0))
+            hooks: hook.oracleHook()
         });
         uint160 externalSqrtPrice = TickMath.getSqrtPriceAtTick(int24(88_000));
         V4_POSITION_MANAGER.initializePool(key, externalSqrtPrice);
@@ -338,7 +338,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
             currency1: currency1,
             fee: hook.POOL_FEE(),
             tickSpacing: hook.TICK_SPACING(),
-            hooks: IHooks(address(0))
+            hooks: hook.oracleHook()
         });
         address controller = address(jbDirectory.controllerOf(projectId));
         (JBRuleset memory ruleset,) = JBController(controller).currentRulesetOf(projectId);

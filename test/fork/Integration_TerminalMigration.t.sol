@@ -77,7 +77,7 @@ contract Integration_TerminalMigration is ForkDeployHelper {
             initialFeePercent: 3800,
             newPoolManager: V4_POOL_MANAGER,
             newPositionManager: V4_POSITION_MANAGER,
-            newOracleHook: IHooks(address(0))
+            newOracleHook: _deployGeomeanOracleHook(V4_POOL_MANAGER)
         });
     }
 
@@ -119,6 +119,7 @@ contract Integration_TerminalMigration is ForkDeployHelper {
             memo: "",
             metadata: ""
         });
+        _mockOracleTwapEqualsSpot(hook.oracleHook(), V4_POOL_MANAGER, hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN));
         vm.prank(multisig);
         hook.rebalanceLiquidity({
             projectId: pid, terminalToken: JBConstants.NATIVE_TOKEN, decreaseAmount0Min: 0, decreaseAmount1Min: 0

@@ -141,7 +141,7 @@ contract RegressionPreinitializedRangeRegression is LPSplitHookV4TestBase {
             currency1: Currency.wrap(address(projectToken)),
             fee: hook.POOL_FEE(),
             tickSpacing: hook.TICK_SPACING(),
-            hooks: IHooks(address(0))
+            hooks: hook.oracleHook()
         });
         positionManager.initializePool(key, sqrtPriceBelowRange);
 

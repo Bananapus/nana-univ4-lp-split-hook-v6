@@ -157,7 +157,7 @@ contract TokenIdFork is ForkDeployHelper {
             initialFeePercent: 3800,
             newPoolManager: V4_POOL_MANAGER,
             newPositionManager: V4_POSITION_MANAGER,
-            newOracleHook: IHooks(address(0))
+            newOracleHook: _deployGeomeanOracleHook(V4_POOL_MANAGER)
         });
     }
 
@@ -195,6 +195,9 @@ contract TokenIdFork is ForkDeployHelper {
         swapHelper.swap(key, projIsToken0, -int256(20_000e18));
         _accumulateTokens(projectId, address(projectToken), 50_000e18);
         uint256 nextTokenIdBeforeRebalance = V4_POSITION_MANAGER.nextTokenId();
+        _mockOracleTwapEqualsSpot(
+            hook.oracleHook(), V4_POOL_MANAGER, hook.poolKeyOf(projectId, JBConstants.NATIVE_TOKEN)
+        );
         vm.prank(multisig);
         hook.rebalanceLiquidity({
             projectId: projectId, terminalToken: JBConstants.NATIVE_TOKEN, decreaseAmount0Min: 0, decreaseAmount1Min: 0

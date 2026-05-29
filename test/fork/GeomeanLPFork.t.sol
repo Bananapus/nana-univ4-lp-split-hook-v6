@@ -177,7 +177,7 @@ contract GeomeanLPForkTest is ForkDeployHelper {
             initialFeePercent: 3800,
             newPoolManager: V4_POOL_MANAGER,
             newPositionManager: V4_POSITION_MANAGER,
-            newOracleHook: IHooks(address(0))
+            newOracleHook: _deployGeomeanOracleHook(V4_POOL_MANAGER)
         });
     }
 
@@ -285,6 +285,9 @@ contract GeomeanLPForkTest is ForkDeployHelper {
         swapHelper.swap{value: projIsToken0 ? 0 : 0}(key, zeroForOne, -int256(5000e18));
         (uint160 sqrtPriceAfterSwap,,,) = V4_POOL_MANAGER.getSlot0(poolId);
         assertTrue(sqrtPriceAfterSwap != sqrtPriceBefore, "swap should have moved the price");
+        _mockOracleTwapEqualsSpot(
+            hook.oracleHook(), V4_POOL_MANAGER, hook.poolKeyOf(projectId, JBConstants.NATIVE_TOKEN)
+        );
         vm.prank(multisig);
         hook.rebalanceLiquidity(projectId, JBConstants.NATIVE_TOKEN, 0, 0);
         uint256 newTokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);

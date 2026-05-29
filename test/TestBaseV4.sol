@@ -20,6 +20,7 @@ import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerR
 import {MockERC20} from "./mock/MockERC20.sol";
 import {MockPositionManager} from "./mock/MockPositionManager.sol";
 import {MockPoolManager} from "./mock/MockPoolManager.sol";
+import {MockGeomeanOracle} from "./mock/MockGeomeanOracle.sol";
 import {
     MockJBDirectory,
     MockJBController,
@@ -63,6 +64,9 @@ contract LPSplitHookV4TestBase is Test {
     MockJBTerminalStore public store;
     MockPositionManager public positionManager;
     MockPoolManager public poolManager;
+    /// @notice Spot-tracking oracle wired into the base `hook`. Subclasses that re-deploy the hook should reuse this
+    /// (it tracks the base `poolManager`) so the spot-vs-TWAP guard on addLiquidity/rebalanceLiquidity passes.
+    MockGeomeanOracle public baseOracleHook;
     MockJBProjects public jbProjects;
     MockJBPermissions public permissions;
 
@@ -175,12 +179,25 @@ contract LPSplitHookV4TestBase is Test {
             BUYBACK_REGISTRY
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
+
+        // Wire a spot-tracking oracle so the hook's spot-vs-TWAP guard (on addLiquidity AND rebalanceLiquidity) passes
+        // by default: it reports a TWAP equal to the pool's live spot tick. Tests that exercise TWAP deviation or an
+        // un-warmed oracle override `oracleHook` (slot 0) with their own fixed-tick MockGeomeanOracle.
+        //
+        // Etch it at a fixed address via deployCodeTo (NOT `new`): a fresh CREATE here would advance the deployment
+        // nonce and shift every contract address that subclasses deploy after super.setUp(), flipping token0/token1
+        // ordering in the pre-initialized-pool / frontrun tests. deployCodeTo consumes no nonce, keeping setUp neutral.
+        address baseOracleAddr = address(uint160(uint256(keccak256("jb.univ4-lp-split.test.baseOracle"))));
+        deployCodeTo("MockGeomeanOracle.sol", baseOracleAddr);
+        baseOracleHook = MockGeomeanOracle(baseOracleAddr);
+        baseOracleHook.enableSpotTracking(IPoolManager(address(poolManager)));
+
         hook.initialize({
             initialFeeProjectId: FEE_PROJECT_ID,
             initialFeePercent: FEE_PERCENT,
             newPoolManager: IPoolManager(address(poolManager)),
             newPositionManager: IPositionManager(address(positionManager)),
-            newOracleHook: IHooks(address(0))
+            newOracleHook: IHooks(address(baseOracleHook))
         });
     }
 

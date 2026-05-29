@@ -4,11 +4,20 @@ pragma solidity 0.8.28;
 import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
 import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 import {MockERC20} from "./mock/MockERC20.sol";
+import {MockGeomeanOracle} from "./mock/MockGeomeanOracle.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
 /// @notice Tests for JBUniswapV4LPSplitHook.rebalanceLiquidity function.
 /// @dev Covers revert conditions, PositionManager interactions (modifyLiquidities with
 ///      DECREASE_LIQUIDITY, BURN_POSITION, MINT_POSITION, TAKE_PAIR, SETTLE, SWEEP), and access control.
 contract RebalanceTest is LPSplitHookV4TestBase {
+    using PoolIdLibrary for PoolKey;
+    using StateLibrary for IPoolManager;
+
     uint256 poolTokenId;
 
     function setUp() public override {
@@ -209,7 +218,45 @@ contract RebalanceTest is LPSplitHookV4TestBase {
         assertTrue(feesRouted, "Collected fees should be routed via pay or addToBalance");
     }
 
+    // -----------------------------------------------------------------------
+    // TWAP guard (Codex/Pashov lead): rebalance re-mints against the live spot,
+    // so it must reject when spot has deviated from the oracle TWAP — same guard
+    // as addLiquidity. Without it, an owner's rebalance could be sandwiched into
+    // re-minting at a manipulated ratio.
+    // -----------------------------------------------------------------------
+
+    /// @notice rebalanceLiquidity reverts when the pool's spot price has deviated too far from the oracle TWAP.
+    function test_Rebalance_RevertsWhenSpotDeviatesFromTwap() public {
+        // Replace the base spot-tracking oracle with a fixed-tick one pinned far from the live spot.
+        MockGeomeanOracle fixedOracle = new MockGeomeanOracle();
+        fixedOracle.setTwapTick(_spotTick() + 1000);
+        vm.store(address(hook), bytes32(uint256(0)), bytes32(uint256(uint160(address(fixedOracle)))));
+
+        vm.prank(owner);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PriceDeviationTooHigh.selector);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+    }
+
+    /// @notice rebalanceLiquidity reverts when the oracle TWAP cannot be read (un-warmed oracle), rather than
+    ///         re-minting against an unvalidated spot price.
+    function test_Rebalance_RevertsWhenTwapUnavailable() public {
+        MockGeomeanOracle fixedOracle = new MockGeomeanOracle();
+        fixedOracle.setShouldRevert(true);
+        vm.store(address(hook), bytes32(uint256(0)), bytes32(uint256(uint160(address(fixedOracle)))));
+
+        vm.prank(owner);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_TwapUnavailable.selector);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+    }
+
     // --- Helper ------------------------------------------------------------
+
+    /// @notice The pool's current spot tick (from Slot0), used to position the oracle TWAP in the guard tests.
+    function _spotTick() internal view returns (int24) {
+        PoolKey memory key = hook.poolKeyOf(PROJECT_ID, address(terminalToken));
+        (uint160 sqrtPriceX96,,,) = IPoolManager(address(poolManager)).getSlot0(key.toId());
+        return TickMath.getTickAtSqrtPrice(sqrtPriceX96);
+    }
 
     function _sortTokens(address tokenA, address tokenB) internal pure returns (address token0, address token1) {
         return tokenA < tokenB ? (tokenA, tokenB) : (tokenB, tokenA);
