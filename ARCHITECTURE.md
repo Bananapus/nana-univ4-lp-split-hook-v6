@@ -86,6 +86,7 @@ It also owns claim segregation for routed LP fees. Outstanding fee-token claims 
 
 - `src/JBUniswapV4LPSplitHook.sol`
 - `src/JBUniswapV4LPSplitHookDeployer.sol`
+- `src/libraries/JBUniswapV4LPSplitHookMath.sol` (linked pricing/tick math, kept out of the hook's runtime bytecode)
 - `test/IntegrationLifecycle.t.sol`
 - `test/regression/FeeTokenTerminalAccountingRegression.t.sol`
 - `test/invariant/LPSplitHookInvariant.t.sol`
