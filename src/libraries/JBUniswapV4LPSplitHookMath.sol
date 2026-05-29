@@ -306,6 +306,8 @@ library JBUniswapV4LPSplitHookMath {
     /// @param terminalToken The terminal token address.
     /// @param projectToken The project token address.
     /// @param totalProjectTokens Total project tokens available for the LP position.
+    /// @param preHeldTerminalTokens Terminal tokens already held (e.g. recovered from a re-range burn) that count
+    /// toward the position's terminal side, so the cash-out is reduced accordingly. Pass 0 when none are held.
     /// @param sqrtPriceInit The initial sqrt price of the pool.
     /// @param tickLower The lower tick bound of the LP position.
     /// @param tickUpper The upper tick bound of the LP position.
@@ -319,6 +321,7 @@ library JBUniswapV4LPSplitHookMath {
         address terminalToken,
         address projectToken,
         uint256 totalProjectTokens,
+        uint256 preHeldTerminalTokens,
         uint160 sqrtPriceInit,
         int24 tickLower,
         int24 tickUpper,
@@ -400,15 +403,27 @@ library JBUniswapV4LPSplitHookMath {
         // Degenerate ratio (rounds to 0): the position needs effectively no terminal side, so cash out nothing.
         if (ratioE18 == 0) return 0;
 
-        // Solve for the cash-out amount `c`. After cashing out c project tokens we hold c·cashOutRate terminal tokens
-        // and (T − c) project tokens; we want terminal/project == ratioE18, i.e. c·cashOutRate/(T − c) = ratioE18.
-        // Rearranged: c = T · ratioE18 / (cashOutRate + ratioE18). `denom` is that combined divisor.
+        // Solve for the cash-out amount `c`, folding in any pre-held terminal tokens `H`. After cashing out c project
+        // tokens the position holds (c·cashOutRate + H) terminal and (T − c) project; we want terminal/project ==
+        // ratioE18 (= R), i.e. (c·cashOutRate + H)/(T − c) = R. Rearranged:
+        //   c = (T·R − H) / (cashOutRate + R)  →  c = T·ratioE18/(r+R) − H/(r+R).
+        // The pre-held reduction MUST use the combined divisor (cashOutRate + ratioE18), not cashOutRate alone:
+        // subtracting H/cashOutRate over-subtracts (since r+R > r), under-deploying capital and stranding project
+        // tokens as leftovers. `denom` is that combined divisor.
         uint256 denom = cashOutRate + ratioE18;
         if (denom == 0) return 0;
 
-        // Final fraction of the project-token pile to cash out so the leftover project side and the cashed-out terminal
-        // side land exactly on the position's required ratio.
-        cashOutAmount = mulDiv({x: totalProjectTokens, y: ratioE18, denominator: denom});
+        // Gross optimum ignoring pre-held tokens: T·R/(r+R).
+        uint256 grossCashOut = mulDiv({x: totalProjectTokens, y: ratioE18, denominator: denom});
+
+        // Project-token equivalent of the pre-held terminal tokens at the SAME combined rate: H/(r+R).
+        uint256 preHeldReduction =
+            preHeldTerminalTokens == 0 ? 0 : mulDiv({x: preHeldTerminalTokens, y: _WAD, denominator: denom});
+
+        // Cash out the gross optimum minus the pre-held offset, so the cashed-out + pre-held terminal side and the
+        // leftover project side land exactly on the position's required ratio. Clamp at 0 if pre-held already covers
+        // it.
+        cashOutAmount = grossCashOut > preHeldReduction ? grossCashOut - preHeldReduction : 0;
     }
 
     /// @notice Find the primary terminal token with the highest ETH-denominated value across the project's terminals.

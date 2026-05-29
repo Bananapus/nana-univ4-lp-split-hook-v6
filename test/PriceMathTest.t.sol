@@ -143,6 +143,7 @@ contract TestableJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
         address terminalToken,
         address projectToken,
         uint256 totalProjectTokens,
+        uint256 preHeldTerminalTokens,
         uint160 sqrtPriceInit,
         int24 tickLower,
         int24 tickUpper
@@ -159,6 +160,7 @@ contract TestableJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
             terminalToken,
             projectToken,
             totalProjectTokens,
+            preHeldTerminalTokens,
             sqrtPriceInit,
             tickLower,
             tickUpper,
@@ -477,7 +479,14 @@ contract PriceMathTest is LPSplitHookV4TestBase {
             testableHook.exposed_computeInitialSqrtPrice(PROJECT_ID, address(terminalToken), address(projectToken));
 
         uint256 cashOut = testableHook.exposed_computeOptimalCashOutAmount(
-            PROJECT_ID, address(terminalToken), address(projectToken), totalTokens, sqrtPriceInit, tickLower, tickUpper
+            PROJECT_ID,
+            address(terminalToken),
+            address(projectToken),
+            totalTokens,
+            0,
+            sqrtPriceInit,
+            tickLower,
+            tickUpper
         );
 
         assertLe(cashOut, totalTokens / 2, "Optimal cash-out should be <= 50% of total");
@@ -506,6 +515,7 @@ contract PriceMathTest is LPSplitHookV4TestBase {
             address(terminalToken),
             address(projectToken),
             totalTokens,
+            0,
             sqrtPriceInit,
             int24(-200),
             int24(200)
@@ -526,14 +536,72 @@ contract PriceMathTest is LPSplitHookV4TestBase {
             testableHook.exposed_computeInitialSqrtPrice(PROJECT_ID, address(terminalToken), address(projectToken));
 
         uint256 cashOut100 = testableHook.exposed_computeOptimalCashOutAmount(
-            PROJECT_ID, address(terminalToken), address(projectToken), 100e18, sqrtPriceInit, tickLower, tickUpper
+            PROJECT_ID, address(terminalToken), address(projectToken), 100e18, 0, sqrtPriceInit, tickLower, tickUpper
         );
         uint256 cashOut200 = testableHook.exposed_computeOptimalCashOutAmount(
-            PROJECT_ID, address(terminalToken), address(projectToken), 200e18, sqrtPriceInit, tickLower, tickUpper
+            PROJECT_ID, address(terminalToken), address(projectToken), 200e18, 0, sqrtPriceInit, tickLower, tickUpper
         );
 
         // Should be ~2x (linear scaling); allow 1 wei tolerance for mulDiv rounding.
         assertApproxEqAbs(cashOut200, cashOut100 * 2, 1, "Cash-out should scale linearly with total tokens");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // 21. Optimal cash-out: pre-held terminal tokens reduce the cash-out at the
+    //     COMBINED rate H/(r+R), not H/r.
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// @notice With pre-held terminal tokens H, the cash-out must be reduced so the position's terminal:project ratio
+    ///         is unchanged: (c·r + H)/(T − c) must equal the same ratio R the no-pre-held optimum targets. The old
+    ///         logic subtracted H/r (the cash-out rate alone), which over-subtracts because the position also needs
+    ///         R terminal per project — the correct offset is H/(r+R). This test pins the post-cash-out ratio.
+    function test_OptimalCashOut_PreHeldPreservesPositionRatio() public view {
+        uint256 totalTokens = 100e18;
+        // Pre-held must be small enough to be fully consumable by the position (H < R·T), so the cashed-out + pre-held
+        // terminal side still lands on the target ratio rather than leaving excess terminal as leftover.
+        uint256 preHeld = 1e18; // terminal tokens recovered from a (hypothetical) re-range burn
+
+        (int24 tickLower, int24 tickUpper) =
+            testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
+        uint160 sqrtPriceInit =
+            testableHook.exposed_computeInitialSqrtPrice(PROJECT_ID, address(terminalToken), address(projectToken));
+        uint256 r = testableHook.exposed_getCashOutRate(PROJECT_ID, address(terminalToken)); // terminal per project,
+        // WAD
+
+        uint256 c0 = testableHook.exposed_computeOptimalCashOutAmount(
+            PROJECT_ID,
+            address(terminalToken),
+            address(projectToken),
+            totalTokens,
+            0,
+            sqrtPriceInit,
+            tickLower,
+            tickUpper
+        );
+        uint256 cH = testableHook.exposed_computeOptimalCashOutAmount(
+            PROJECT_ID,
+            address(terminalToken),
+            address(projectToken),
+            totalTokens,
+            preHeld,
+            sqrtPriceInit,
+            tickLower,
+            tickUpper
+        );
+
+        // Pre-held tokens should reduce the cash-out, but by LESS than H/r (the old over-subtraction).
+        assertLt(cH, c0, "pre-held should reduce the cash-out");
+        uint256 oldBuggyReduction = (preHeld * 1e18) / r; // H/r in project-token terms
+        assertLt(c0 - cH, oldBuggyReduction, "reduction must be smaller than the old H/r over-subtraction");
+
+        // The decisive check: the post-cash-out terminal:project ratio is the SAME with and without pre-held — i.e.
+        // the
+        // pre-held path lands on the position's required ratio R, instead of skewing toward an over-large project side.
+        uint256 ratioNoPreHeld = ((c0 * r / 1e18) * 1e18) / (totalTokens - c0);
+        uint256 ratioWithPreHeld = ((cH * r / 1e18 + preHeld) * 1e18) / (totalTokens - cH);
+        assertApproxEqRel(
+            ratioWithPreHeld, ratioNoPreHeld, 1e15, "pre-held add must preserve the position's terminal:project ratio"
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────────

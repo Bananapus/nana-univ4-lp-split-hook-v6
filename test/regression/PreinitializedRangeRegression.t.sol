@@ -76,6 +76,7 @@ contract RegressionMathHook is JBUniswapV4LPSplitHook {
             terminalToken,
             projectToken,
             totalProjectTokens,
+            0,
             sqrtPriceInit,
             tickLower,
             tickUpper,

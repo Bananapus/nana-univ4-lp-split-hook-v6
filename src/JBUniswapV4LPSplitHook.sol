@@ -1386,6 +1386,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint160 sqrtPriceInit = _getSqrtPriceX96(p.key);
 
         // Determine the optimal fraction of project tokens to cash out for terminal-token pairing within these ticks.
+        // Determine the optimal fraction to cash out, folding in any pre-held terminal tokens (recovered from a
+        // re-range burn) so the position's terminal:project ratio is solved ONCE. Pre-held tokens substitute for part
+        // of the cash-out at the combined (cashOutRate + in-range-ratio) rate — keeping funds deployed and minimizing
+        // both the cashed-out project amount and the leftover.
         uint256 cashOutAmount = JBUniswapV4LPSplitHookMath.computeOptimalCashOutAmount({
             directory: IJBDirectory(DIRECTORY),
             suckerRegistry: SUCKER_REGISTRY,
@@ -1393,31 +1397,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             terminalToken: p.terminalToken,
             projectToken: p.projectToken,
             totalProjectTokens: p.projectTokenBalance,
+            preHeldTerminalTokens: p.preHeldTerminalTokens,
             sqrtPriceInit: sqrtPriceInit,
             tickLower: p.tickLower,
             tickUpper: p.tickUpper,
             controller: p.controller,
             ruleset: p.ruleset
         });
-
-        // If terminal tokens are already held (recovered from a re-range burn), cash out less project: each held
-        // terminal token substitutes for ~ (1 / cashOutRate) project tokens. This keeps funds deployed and minimizes
-        // both the burned-project amount and the leftover, rather than cashing out fresh and stranding the recovered
-        // terminal.
-        if (p.preHeldTerminalTokens > 0 && cashOutAmount > 0) {
-            uint256 cashOutRate = JBUniswapV4LPSplitHookMath.getCashOutRate({
-                directory: IJBDirectory(DIRECTORY),
-                suckerRegistry: SUCKER_REGISTRY,
-                projectId: p.projectId,
-                terminalToken: p.terminalToken,
-                controller: p.controller,
-                ruleset: p.ruleset
-            });
-            if (cashOutRate > 0) {
-                uint256 reduction = mulDiv({x: p.preHeldTerminalTokens, y: _WAD, denominator: cashOutRate});
-                cashOutAmount = cashOutAmount > reduction ? cashOutAmount - reduction : 0;
-            }
-        }
 
         // Fund the terminal-token side via a cash-out (optionally forced directly through the bonding curve), then add
         // any pre-held terminal tokens so the full terminal side is deployed into the position.

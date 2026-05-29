@@ -52,6 +52,7 @@ contract OutOfRangeAmountHarness is JBUniswapV4LPSplitHook {
             terminalToken,
             _projectToken,
             totalProjectTokens,
+            0,
             sqrtPriceInit,
             tickLower,
             tickUpper,

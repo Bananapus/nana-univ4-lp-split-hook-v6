@@ -52,7 +52,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         assertGt(terminal.lastCashOutAmount(), 0, "cashOut amount should be > 0 with positive cash-out rate");
     }
 
-    /// @notice Regression (Codex Nemesis NM-001): the deploy-path funding cash-out must also be forced DIRECTLY
+    /// @notice Regression: the deploy-path funding cash-out must also be forced DIRECTLY
     ///         through the bonding curve. `deployPool` can join a pre-existing in-band pool, so the old "fresh pool has
     ///         no AMM" assumption was unsafe — the initial cash-out could otherwise route through the buyback AMM the
     ///         hook is about to feed. The fix removed the `forceDirectCashOut` toggle and always attaches the skip

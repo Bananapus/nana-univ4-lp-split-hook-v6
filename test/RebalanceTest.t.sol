@@ -219,7 +219,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
     }
 
     // -----------------------------------------------------------------------
-    // TWAP guard (Codex/Pashov lead): rebalance re-mints against the live spot,
+    // TWAP guard: rebalance re-mints against the live spot,
     // so it must reject when spot has deviated from the oracle TWAP — same guard
     // as addLiquidity. Without it, an owner's rebalance could be sandwiched into
     // re-minting at a manipulated ratio.
