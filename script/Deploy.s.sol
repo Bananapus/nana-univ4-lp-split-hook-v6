@@ -108,8 +108,7 @@ contract DeployScript is Script, Sphinx {
             core.permissions,
             address(core.tokens),
             IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
-            suckers.registry,
-            address(buyback.registry)
+            suckers.registry
         );
 
         address hookImplAddress = vm.computeCreate2Address({
@@ -124,8 +123,7 @@ contract DeployScript is Script, Sphinx {
                     permissions: core.permissions,
                     tokens: address(core.tokens),
                     permit2: IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
-                    suckerRegistry: suckers.registry,
-                    buybackHook: address(buyback.registry)
+                    suckerRegistry: suckers.registry
                 })
             );
         }

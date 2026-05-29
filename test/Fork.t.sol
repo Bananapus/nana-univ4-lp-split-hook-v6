@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {ForkDeployHelper} from "./helpers/ForkDeployHelper.sol";
+import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/IJBBuybackHookRegistry.sol";
 
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
@@ -43,7 +44,7 @@ contract ExposedJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
         address tokens,
         IAllowanceTransfer permit2
     )
-        JBUniswapV4LPSplitHook(directory, permissions, tokens, permit2, IJBSuckerRegistry(address(0)), address(0))
+        JBUniswapV4LPSplitHook(directory, permissions, tokens, permit2, IJBSuckerRegistry(address(0)))
     {}
 
     function exposed_calculateTickBounds(
@@ -128,7 +129,8 @@ contract LPSplitHookForkTest is ForkDeployHelper {
             initialFeePercent: 3800,
             newPoolManager: V4_POOL_MANAGER,
             newPositionManager: V4_POSITION_MANAGER,
-            newOracleHook: IHooks(address(0))
+            newOracleHook: IHooks(address(0)),
+            newBuybackHook: IJBBuybackHookRegistry(address(0))
         }); // 38% fee to fee project.
         vm.prank(multisig);
         jbController.mintTokensOf({

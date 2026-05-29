@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
+import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/IJBBuybackHookRegistry.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
 import {JBUniswapV4LPSplitHookMath} from "../../src/libraries/JBUniswapV4LPSplitHookMath.sol";
 import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
@@ -24,7 +25,7 @@ contract CashOutRateHook is JBUniswapV4LPSplitHook {
         IAllowanceTransfer _permit2,
         IJBSuckerRegistry _suckerRegistry
     )
-        JBUniswapV4LPSplitHook(_directory, _permissions, _tokens, _permit2, _suckerRegistry, address(0))
+        JBUniswapV4LPSplitHook(_directory, _permissions, _tokens, _permit2, _suckerRegistry)
     {}
 
     // forge-lint: disable-next-line(mixed-case-function)
@@ -72,7 +73,8 @@ contract ScopeCashOutsLPHookTest is LPSplitHookV4TestBase {
             initialFeePercent: FEE_PERCENT,
             newPoolManager: IPoolManager(address(poolManager)),
             newPositionManager: IPositionManager(address(positionManager)),
-            newOracleHook: IHooks(address(0))
+            newOracleHook: IHooks(address(0)),
+            newBuybackHook: IJBBuybackHookRegistry(address(0))
         });
 
         // Mock controller.totalTokenSupplyWithReservedTokensOf (needed for unscoped path)

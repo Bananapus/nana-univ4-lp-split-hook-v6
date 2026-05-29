@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {Test} from "forge-std/Test.sol";
+import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/IJBBuybackHookRegistry.sol";
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
 import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -24,7 +25,7 @@ contract AllowanceHarness is JBUniswapV4LPSplitHook {
         address tokens,
         IAllowanceTransfer permit2
     )
-        JBUniswapV4LPSplitHook(directory, permissions, tokens, permit2, IJBSuckerRegistry(address(0)), address(0))
+        JBUniswapV4LPSplitHook(directory, permissions, tokens, permit2, IJBSuckerRegistry(address(0)))
     {}
 
     function exposed_addToProjectBalance(uint256 projectId, address token, uint256 amount, bool isNative) external {
@@ -66,7 +67,8 @@ contract PersistentAllowanceStealTest is Test {
             initialFeePercent: 0,
             newPoolManager: IPoolManager(address(0xBEEF)),
             newPositionManager: IPositionManager(address(0xCAFE)),
-            newOracleHook: IHooks(address(0))
+            newOracleHook: IHooks(address(0)),
+            newBuybackHook: IJBBuybackHookRegistry(address(0))
         });
     }
 

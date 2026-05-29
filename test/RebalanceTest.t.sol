@@ -230,7 +230,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
         // Replace the base spot-tracking oracle with a fixed-tick one pinned far from the live spot.
         MockGeomeanOracle fixedOracle = new MockGeomeanOracle();
         fixedOracle.setTwapTick(_spotTick() + 1000);
-        vm.store(address(hook), bytes32(uint256(0)), bytes32(uint256(uint160(address(fixedOracle)))));
+        vm.store(address(hook), bytes32(uint256(1)), bytes32(uint256(uint160(address(fixedOracle)))));
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PriceDeviationTooHigh.selector);
@@ -242,7 +242,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
     function test_Rebalance_RevertsWhenTwapUnavailable() public {
         MockGeomeanOracle fixedOracle = new MockGeomeanOracle();
         fixedOracle.setShouldRevert(true);
-        vm.store(address(hook), bytes32(uint256(0)), bytes32(uint256(uint160(address(fixedOracle)))));
+        vm.store(address(hook), bytes32(uint256(1)), bytes32(uint256(uint160(address(fixedOracle)))));
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_TwapUnavailable.selector);

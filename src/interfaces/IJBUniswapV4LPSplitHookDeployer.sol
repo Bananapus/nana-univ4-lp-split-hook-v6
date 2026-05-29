@@ -2,6 +2,7 @@
 pragma solidity ^0.8.0;
 
 import {IJBAddressRegistry} from "@bananapus/address-registry-v6/src/interfaces/IJBAddressRegistry.sol";
+import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/IJBBuybackHookRegistry.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
@@ -46,6 +47,7 @@ interface IJBUniswapV4LPSplitHookDeployer {
     function deployHookFor(
         uint256 feeProjectId,
         uint256 feePercent,
+        IJBBuybackHookRegistry buybackHook,
         bytes32 salt
     )
         external
