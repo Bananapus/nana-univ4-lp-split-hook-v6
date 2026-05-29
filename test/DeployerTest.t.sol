@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {Test, Vm} from "forge-std/Test.sol";
+import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/IJBBuybackHookRegistry.sol";
 
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
 import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
@@ -46,8 +47,7 @@ contract DeployerTest is Test {
             IJBPermissions(address(permissions)),
             address(1), // tokens placeholder
             IAllowanceTransfer(address(0)),
-            IJBSuckerRegistry(address(0)),
-            address(0)
+            IJBSuckerRegistry(address(0))
         );
 
         addressRegistry = new JBAddressRegistry();
@@ -75,14 +75,15 @@ contract DeployerTest is Test {
         JBUniswapV4LPSplitHookDeployer freshDeployer = _freshDeployer();
 
         vm.expectRevert(JBUniswapV4LPSplitHookDeployer.JBUniswapV4LPSplitHookDeployer_NotConfigured.selector);
-        freshDeployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, bytes32(0));
+        freshDeployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, IJBBuybackHookRegistry(address(0)), bytes32(0));
     }
 
     // ─── CREATE deployment registers in address registry ─────────────
 
     function test_deployHookFor_CREATE_registersInAddressRegistry() public {
         vm.prank(caller);
-        IJBUniswapV4LPSplitHook hook = deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, bytes32(0));
+        IJBUniswapV4LPSplitHook hook =
+            deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, IJBBuybackHookRegistry(address(0)), bytes32(0));
 
         // The deployed hook should be registered with this deployer.
         address registeredDeployer = addressRegistry.deployerOf(address(hook));
@@ -95,7 +96,8 @@ contract DeployerTest is Test {
         bytes32 salt = bytes32(uint256(0xBEEF));
 
         vm.prank(caller);
-        IJBUniswapV4LPSplitHook hook = deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, salt);
+        IJBUniswapV4LPSplitHook hook =
+            deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, IJBBuybackHookRegistry(address(0)), salt);
 
         address registeredDeployer = addressRegistry.deployerOf(address(hook));
         assertEq(registeredDeployer, address(deployer), "CREATE2: deployer not registered");
@@ -105,8 +107,10 @@ contract DeployerTest is Test {
 
     function test_deployHookFor_CREATE_multipleDeployments() public {
         vm.startPrank(caller);
-        IJBUniswapV4LPSplitHook hook1 = deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, bytes32(0));
-        IJBUniswapV4LPSplitHook hook2 = deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, bytes32(0));
+        IJBUniswapV4LPSplitHook hook1 =
+            deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, IJBBuybackHookRegistry(address(0)), bytes32(0));
+        IJBUniswapV4LPSplitHook hook2 =
+            deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, IJBBuybackHookRegistry(address(0)), bytes32(0));
         vm.stopPrank();
 
         // Both should be different addresses.
@@ -122,7 +126,8 @@ contract DeployerTest is Test {
 
     function test_deployHookFor_initializesHook() public {
         vm.prank(caller);
-        IJBUniswapV4LPSplitHook hook = deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, bytes32(0));
+        IJBUniswapV4LPSplitHook hook =
+            deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, IJBBuybackHookRegistry(address(0)), bytes32(0));
 
         JBUniswapV4LPSplitHook concreteHook = JBUniswapV4LPSplitHook(payable(address(hook)));
         assertEq(concreteHook.feeProjectId(), FEE_PROJECT_ID, "feeProjectId not set");
@@ -136,7 +141,7 @@ contract DeployerTest is Test {
         vm.recordLogs();
 
         vm.prank(caller);
-        deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, bytes32(0));
+        deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, IJBBuybackHookRegistry(address(0)), bytes32(0));
 
         Vm.Log[] memory logs = vm.getRecordedLogs();
         bytes32 hookDeployedSig = keccak256("HookDeployed(uint256,uint256,address,address)");

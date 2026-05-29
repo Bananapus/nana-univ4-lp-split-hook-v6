@@ -60,11 +60,11 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
     function test_DeployPool_ForcesDirectCashOut_ViaBuybackRegistryMetadata() public {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
 
-        // The deploy-time funding cash-out carried the buyback "skip" metadata keyed to the hook's `BUYBACK_HOOK`
+        // The deploy-time funding cash-out carried the buyback "skip" metadata keyed to the hook's `buybackHook`
         // reference, forcing a direct bonding-curve cash-out (never the AMM).
         bytes memory metadata = terminal.lastCashOutMetadata();
         (bool exists, bytes memory data) = JBMetadataResolver.getDataFor({
-            id: JBMetadataResolver.getId({purpose: "cashOut", target: address(hook.BUYBACK_HOOK())}), metadata: metadata
+            id: JBMetadataResolver.getId({purpose: "cashOut", target: address(hook.buybackHook())}), metadata: metadata
         });
         assertTrue(exists, "deploy cash-out must carry force-direct metadata keyed to the buyback registry");
         (uint256 minSwapOut, bool skip) = abi.decode(data, (uint256, bool));

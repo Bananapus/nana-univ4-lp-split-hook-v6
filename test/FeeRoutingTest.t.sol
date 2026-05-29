@@ -168,14 +168,15 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
     function test_CollectFees_RevertsIfNoTokenId() public {
         // tokenIdOf is: mapping(uint256 => mapping(address => uint256))
         // Storage layout (from forge inspect):
-        //   slot  0 = ORACLE_HOOK
-        //   slot  1 = POOL_MANAGER
-        //   slot  2 = POSITION_MANAGER
-        //   slot  3 = FEE_PROJECT_ID
-        //   slot  4 = FEE_PERCENT
-        //   slot 11 = poolKeysOf
-        //   slot 12 = tokenIdOf
-        bytes32 outerSlot = keccak256(abi.encode(PROJECT_ID, uint256(12)));
+        //   slot  0 = buybackHook
+        //   slot  1 = oracleHook
+        //   slot  2 = poolManager
+        //   slot  3 = positionManager
+        //   slot  4 = feeProjectId
+        //   slot  5 = feePercent
+        //   slot 12 = poolKeysOf
+        //   slot 13 = tokenIdOf
+        bytes32 outerSlot = keccak256(abi.encode(PROJECT_ID, uint256(13)));
         bytes32 slot = keccak256(abi.encode(address(terminalToken), outerSlot));
         vm.store(address(hook), slot, bytes32(0));
 

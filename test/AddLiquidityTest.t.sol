@@ -25,10 +25,10 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
     function setUp() public override {
         super.setUp();
         // Override the base's spot-tracking oracle with a fixed-tick one so these tests can drive the TWAP explicitly
-        // (deviation / unavailable cases). `oracleHook` is the first storage slot (slot 0); overwrite it before any
-        // pool is deployed so the pool key embeds this oracle.
+        // (deviation / unavailable cases). `oracleHook` is storage slot 1 (slot 0 is `buybackHook`); overwrite it
+        // before any pool is deployed so the pool key embeds this oracle.
         oracle = new MockGeomeanOracle();
-        vm.store(address(hook), bytes32(uint256(0)), bytes32(uint256(uint160(address(oracle)))));
+        vm.store(address(hook), bytes32(uint256(1)), bytes32(uint256(uint160(address(oracle)))));
     }
 
     // ─── Helpers
@@ -79,11 +79,11 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
 
-        // The funding cash-out carried the buyback "skip" metadata keyed to the hook's strong `BUYBACK_HOOK` reference,
+        // The funding cash-out carried the buyback "skip" metadata keyed to the hook's `buybackHook` registry,
         // forcing a direct bonding-curve cash-out (never the AMM).
         bytes memory metadata = terminal.lastCashOutMetadata();
         (bool exists, bytes memory data) = JBMetadataResolver.getDataFor({
-            id: JBMetadataResolver.getId({purpose: "cashOut", target: address(hook.BUYBACK_HOOK())}), metadata: metadata
+            id: JBMetadataResolver.getId({purpose: "cashOut", target: address(hook.buybackHook())}), metadata: metadata
         });
         assertTrue(exists, "force-direct metadata should be keyed to the buyback registry");
         (uint256 minSwapOut, bool skip) = abi.decode(data, (uint256, bool));
@@ -92,10 +92,10 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
     }
 
     function test_AddLiquidity_NoBuybackRegistry_SendsEmptyMetadata() public {
-        // When the hook holds no buyback registry (`BUYBACK_HOOK == address(0)`), no force-direct metadata is attached;
+        // When the hook holds no buyback registry (`buybackHook == address(0)`), no force-direct metadata is attached;
         // the terminal's own `minTokensReclaimed` floor still applies. The base wires a non-zero registry, so this
         // path is exercised by sanity-checking the metadata builder is gated on a set registry.
-        assertTrue(address(hook.BUYBACK_HOOK()) != address(0), "base wires a buyback registry");
+        assertTrue(address(hook.buybackHook()) != address(0), "base wires a buyback registry");
 
         _deployAndAccumulateMore(40e18);
 

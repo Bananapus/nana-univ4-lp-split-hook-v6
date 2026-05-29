@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {Test} from "forge-std/Test.sol";
+import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/IJBBuybackHookRegistry.sol";
 import {StdInvariant} from "forge-std/StdInvariant.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
@@ -338,8 +339,7 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
             IJBPermissions(address(permissions)),
             address(jbTokens),
             IAllowanceTransfer(permit2Addr),
-            IJBSuckerRegistry(address(0)),
-            address(0)
+            IJBSuckerRegistry(address(0))
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
 
@@ -355,7 +355,8 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
             initialFeePercent: FEE_PERCENT,
             newPoolManager: IPoolManager(address(poolManager)),
             newPositionManager: IPositionManager(address(positionManager)),
-            newOracleHook: IHooks(address(invOracle))
+            newOracleHook: IHooks(address(invOracle)),
+            newBuybackHook: IJBBuybackHookRegistry(address(0))
         });
 
         // Deploy the handler

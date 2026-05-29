@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
+import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/IJBBuybackHookRegistry.sol";
 import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
@@ -107,12 +108,14 @@ interface IJBUniswapV4LPSplitHook {
     /// @param newPoolManager The Uniswap V4 PoolManager on this chain.
     /// @param newPositionManager The Uniswap V4 PositionManager on this chain.
     /// @param newOracleHook The Uniswap V4 oracle hook deployed against `newPoolManager` on this chain.
+    /// @param newBuybackHook The buyback-hook registry this clone targets for force-direct cash-outs (may be zero).
     function initialize(
         uint256 initialFeeProjectId,
         uint256 initialFeePercent,
         IPoolManager newPoolManager,
         IPositionManager newPositionManager,
-        IHooks newOracleHook
+        IHooks newOracleHook,
+        IJBBuybackHookRegistry newBuybackHook
     )
         external;
 }

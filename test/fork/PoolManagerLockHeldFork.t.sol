@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {Test} from "forge-std/Test.sol";
+import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/IJBBuybackHookRegistry.sol";
 
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
@@ -90,7 +91,8 @@ contract PoolManagerLockHeldFork is Test {
             initialFeePercent: 0,
             newPoolManager: POOL_MANAGER,
             newPositionManager: POSITION_MANAGER,
-            newOracleHook: IHooks(address(0))
+            newOracleHook: IHooks(address(0)),
+            newBuybackHook: IJBBuybackHookRegistry(address(0))
         });
 
         attacker = new _LockHoldingAttacker(POOL_MANAGER, hook);

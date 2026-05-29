@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {Test} from "forge-std/Test.sol";
+import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/IJBBuybackHookRegistry.sol";
 
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
 import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
@@ -50,8 +51,7 @@ contract RegressionFixM31Test is Test {
             IJBPermissions(address(permissions)),
             address(1), // tokens placeholder
             IAllowanceTransfer(address(0)),
-            IJBSuckerRegistry(address(0)),
-            address(0)
+            IJBSuckerRegistry(address(0))
         );
 
         addressRegistry = new JBAddressRegistry();
@@ -73,7 +73,8 @@ contract RegressionFixM31Test is Test {
         // Step 1: Deploy with CREATE2.
         bytes32 salt = bytes32(uint256(0xCAFE));
         vm.prank(caller);
-        IJBUniswapV4LPSplitHook create2Hook = deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, salt);
+        IJBUniswapV4LPSplitHook create2Hook =
+            deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, IJBBuybackHookRegistry(address(0)), salt);
 
         // The CREATE2 hook should be registered.
         assertEq(
@@ -82,7 +83,8 @@ contract RegressionFixM31Test is Test {
 
         // Step 2: Deploy with CREATE.
         vm.prank(caller);
-        IJBUniswapV4LPSplitHook createHook = deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, bytes32(0));
+        IJBUniswapV4LPSplitHook createHook =
+            deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, IJBBuybackHookRegistry(address(0)), bytes32(0));
 
         // The CREATE hook should also be registered — nonce tracking stays in sync because
         // both CREATE and CREATE2 increment the EVM nonce.
@@ -95,12 +97,19 @@ contract RegressionFixM31Test is Test {
     /// @notice Multiple CREATE2 deploys followed by a CREATE deploy — all registered correctly.
     function test_multipleCREATE2ThenCREATE_allRegistered() public {
         vm.startPrank(caller);
-        IJBUniswapV4LPSplitHook hook1 = deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, bytes32(uint256(1)));
-        IJBUniswapV4LPSplitHook hook2 = deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, bytes32(uint256(2)));
-        IJBUniswapV4LPSplitHook hook3 = deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, bytes32(uint256(3)));
+        IJBUniswapV4LPSplitHook hook1 = deployer.deployHookFor(
+            FEE_PROJECT_ID, FEE_PERCENT, IJBBuybackHookRegistry(address(0)), bytes32(uint256(1))
+        );
+        IJBUniswapV4LPSplitHook hook2 = deployer.deployHookFor(
+            FEE_PROJECT_ID, FEE_PERCENT, IJBBuybackHookRegistry(address(0)), bytes32(uint256(2))
+        );
+        IJBUniswapV4LPSplitHook hook3 = deployer.deployHookFor(
+            FEE_PROJECT_ID, FEE_PERCENT, IJBBuybackHookRegistry(address(0)), bytes32(uint256(3))
+        );
 
         // Deploy 1 hook via CREATE.
-        IJBUniswapV4LPSplitHook createHook = deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, bytes32(0));
+        IJBUniswapV4LPSplitHook createHook =
+            deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, IJBBuybackHookRegistry(address(0)), bytes32(0));
         vm.stopPrank();
 
         assertEq(addressRegistry.deployerOf(address(hook1)), address(deployer), "hook1 not registered");
@@ -118,15 +127,22 @@ contract RegressionFixM31Test is Test {
         vm.startPrank(caller);
 
         // CREATE
-        IJBUniswapV4LPSplitHook hook1 = deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, bytes32(0));
+        IJBUniswapV4LPSplitHook hook1 =
+            deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, IJBBuybackHookRegistry(address(0)), bytes32(0));
         // CREATE2
-        IJBUniswapV4LPSplitHook hook2 = deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, bytes32(uint256(42)));
+        IJBUniswapV4LPSplitHook hook2 = deployer.deployHookFor(
+            FEE_PROJECT_ID, FEE_PERCENT, IJBBuybackHookRegistry(address(0)), bytes32(uint256(42))
+        );
         // CREATE
-        IJBUniswapV4LPSplitHook hook3 = deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, bytes32(0));
+        IJBUniswapV4LPSplitHook hook3 =
+            deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, IJBBuybackHookRegistry(address(0)), bytes32(0));
         // CREATE2
-        IJBUniswapV4LPSplitHook hook4 = deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, bytes32(uint256(99)));
+        IJBUniswapV4LPSplitHook hook4 = deployer.deployHookFor(
+            FEE_PROJECT_ID, FEE_PERCENT, IJBBuybackHookRegistry(address(0)), bytes32(uint256(99))
+        );
         // CREATE
-        IJBUniswapV4LPSplitHook hook5 = deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, bytes32(0));
+        IJBUniswapV4LPSplitHook hook5 =
+            deployer.deployHookFor(FEE_PROJECT_ID, FEE_PERCENT, IJBBuybackHookRegistry(address(0)), bytes32(0));
 
         vm.stopPrank();
 

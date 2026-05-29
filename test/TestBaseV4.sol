@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {Test} from "forge-std/Test.sol";
+import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/IJBBuybackHookRegistry.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
@@ -82,7 +83,7 @@ contract LPSplitHookV4TestBase is Test {
     uint256 public constant DEFAULT_WEIGHT = 1000e18;
     uint256 public constant DEFAULT_FIRST_WEIGHT = 1000e18;
     uint16 public constant DEFAULT_RESERVED_PERCENT = 1000; // 10%
-    /// @notice Stand-in buyback-hook registry the hook holds as `BUYBACK_HOOK` (force-direct cash-out target).
+    /// @notice Stand-in buyback-hook registry the hook holds as `buybackHook` (force-direct cash-out target).
     address public constant BUYBACK_REGISTRY = address(0xB0B);
 
     address public owner;
@@ -175,8 +176,7 @@ contract LPSplitHookV4TestBase is Test {
             IJBPermissions(address(permissions)),
             address(jbTokens),
             IAllowanceTransfer(permit2Addr),
-            IJBSuckerRegistry(address(0)),
-            BUYBACK_REGISTRY
+            IJBSuckerRegistry(address(0))
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
 
@@ -197,7 +197,8 @@ contract LPSplitHookV4TestBase is Test {
             initialFeePercent: FEE_PERCENT,
             newPoolManager: IPoolManager(address(poolManager)),
             newPositionManager: IPositionManager(address(positionManager)),
-            newOracleHook: IHooks(address(baseOracleHook))
+            newOracleHook: IHooks(address(baseOracleHook)),
+            newBuybackHook: IJBBuybackHookRegistry(BUYBACK_REGISTRY)
         });
     }
 

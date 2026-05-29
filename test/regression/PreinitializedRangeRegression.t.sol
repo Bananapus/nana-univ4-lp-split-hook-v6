@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
+import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/IJBBuybackHookRegistry.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
 import {JBUniswapV4LPSplitHookMath} from "../../src/libraries/JBUniswapV4LPSplitHookMath.sol";
 import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
@@ -26,7 +27,7 @@ contract RegressionMathHook is JBUniswapV4LPSplitHook {
         address _tokens,
         IAllowanceTransfer _permit2
     )
-        JBUniswapV4LPSplitHook(_directory, _permissions, _tokens, _permit2, IJBSuckerRegistry(address(0)), address(0))
+        JBUniswapV4LPSplitHook(_directory, _permissions, _tokens, _permit2, IJBSuckerRegistry(address(0)))
     {}
 
     function _fetchControllerAndRuleset(uint256 projectId)
@@ -111,7 +112,8 @@ contract RegressionPreinitializedRangeRegression is LPSplitHookV4TestBase {
             initialFeePercent: 0,
             newPoolManager: IPoolManager(address(poolManager)),
             newPositionManager: IPositionManager(address(positionManager)),
-            newOracleHook: IHooks(address(0))
+            newOracleHook: IHooks(address(0)),
+            newBuybackHook: IJBBuybackHookRegistry(address(0))
         });
 
         directory.setTerminal(PROJECT_ID, JBConstants.NATIVE_TOKEN, address(terminal));

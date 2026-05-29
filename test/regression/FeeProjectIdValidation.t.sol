@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {Test} from "forge-std/Test.sol";
+import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/IJBBuybackHookRegistry.sol";
 
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
 import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
@@ -38,8 +39,7 @@ contract FeeProjectIdValidationTest is Test {
             IJBPermissions(address(permissions)),
             address(jbTokens),
             IAllowanceTransfer(address(0)),
-            IJBSuckerRegistry(address(0)),
-            address(0)
+            IJBSuckerRegistry(address(0))
         );
     }
 
@@ -53,7 +53,8 @@ contract FeeProjectIdValidationTest is Test {
             initialFeePercent: 3800,
             newPoolManager: IPoolManager(address(1)),
             newPositionManager: IPositionManager(address(positionManager)),
-            newOracleHook: IHooks(address(0))
+            newOracleHook: IHooks(address(0)),
+            newBuybackHook: IJBBuybackHookRegistry(address(0))
         }); // feeProjectId=0, feePercent=38%
     }
 
@@ -66,7 +67,8 @@ contract FeeProjectIdValidationTest is Test {
             initialFeePercent: 0,
             newPoolManager: IPoolManager(address(1)),
             newPositionManager: IPositionManager(address(positionManager)),
-            newOracleHook: IHooks(address(0))
+            newOracleHook: IHooks(address(0)),
+            newBuybackHook: IJBBuybackHookRegistry(address(0))
         }); // both zero is fine
 
         assertEq(clone.feePercent(), 0);
@@ -86,7 +88,8 @@ contract FeeProjectIdValidationTest is Test {
             initialFeePercent: 3800,
             newPoolManager: IPoolManager(address(1)),
             newPositionManager: IPositionManager(address(positionManager)),
-            newOracleHook: IHooks(address(0))
+            newOracleHook: IHooks(address(0)),
+            newBuybackHook: IJBBuybackHookRegistry(address(0))
         }); // feeProjectId=2, feePercent=38%
 
         assertEq(clone.feePercent(), 3800);
