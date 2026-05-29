@@ -7,6 +7,7 @@ import {JBUniswapV4LPSplitHookMath} from "../src/libraries/JBUniswapV4LPSplitHoo
 import {IJBUniswapV4LPSplitHook} from "../src/interfaces/IJBUniswapV4LPSplitHook.sol";
 import {JBPermissioned} from "@bananapus/core-v6/src/abstract/JBPermissioned.sol";
 import {JBPermissionIds} from "@bananapus/permission-ids-v6/src/JBPermissionIds.sol";
+import {JBMetadataResolver} from "@bananapus/core-v6/src/libraries/JBMetadataResolver.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
 
 /// @notice Tests for JBUniswapV4LPSplitHook deployment stage behavior.
@@ -49,6 +50,26 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         assertLe(terminal.lastCashOutAmount(), 50e18, "cashOut amount should be <= 50% of accumulated");
         // Should cash out some nonzero amount (we have a positive cash-out rate)
         assertGt(terminal.lastCashOutAmount(), 0, "cashOut amount should be > 0 with positive cash-out rate");
+    }
+
+    /// @notice Regression (Codex Nemesis NM-001): the deploy-path funding cash-out must also be forced DIRECTLY
+    ///         through the bonding curve. `deployPool` can join a pre-existing in-band pool, so the old "fresh pool has
+    ///         no AMM" assumption was unsafe — the initial cash-out could otherwise route through the buyback AMM the
+    ///         hook is about to feed. The fix removed the `forceDirectCashOut` toggle and always attaches the skip
+    ///         metadata, so deploy must now carry the same buyback "skip" key that `addLiquidity` does.
+    function test_DeployPool_ForcesDirectCashOut_ViaBuybackRegistryMetadata() public {
+        _accumulateAndDeploy(PROJECT_ID, 100e18);
+
+        // The deploy-time funding cash-out carried the buyback "skip" metadata keyed to the hook's `BUYBACK_HOOK`
+        // reference, forcing a direct bonding-curve cash-out (never the AMM).
+        bytes memory metadata = terminal.lastCashOutMetadata();
+        (bool exists, bytes memory data) = JBMetadataResolver.getDataFor({
+            id: JBMetadataResolver.getId({purpose: "cashOut", target: address(hook.BUYBACK_HOOK())}), metadata: metadata
+        });
+        assertTrue(exists, "deploy cash-out must carry force-direct metadata keyed to the buyback registry");
+        (uint256 minSwapOut, bool skip) = abi.decode(data, (uint256, bool));
+        assertEq(minSwapOut, 0, "no hook-level minimum; terminal min enforces the floor");
+        assertTrue(skip, "skip flag must be set to force the direct cash-out on deploy");
     }
 
     // ─────────────────────────────────────────────────────────────────────

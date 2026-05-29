@@ -15,7 +15,6 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 /// @custom:member tickUpper The upper tick of the position to add into.
 /// @custom:member projectTokenBalance The accumulated project-token balance to deploy as liquidity.
 /// @custom:member minCashOutReturn Minimum terminal tokens to accept from the funding cash-out (slippage protection).
-/// @custom:member forceDirectCashOut Whether to force the funding cash-out directly through the bonding curve.
 /// @custom:member preHeldTerminalTokens Terminal tokens already held (e.g. recovered from a re-range burn) to fold into
 /// the position; reduces the funding cash-out by their project-token equivalent so funds stay deployed.
 /// @custom:member isNewPosition Whether to mint a new position (true) or increase the existing one (false).
@@ -31,7 +30,6 @@ struct AddLiquidityParams {
     int24 tickUpper;
     uint256 projectTokenBalance;
     uint256 minCashOutReturn;
-    bool forceDirectCashOut;
     uint256 preHeldTerminalTokens;
     bool isNewPosition;
     uint256 existingTokenId;

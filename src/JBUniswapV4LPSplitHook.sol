@@ -615,7 +615,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 tickUpper: rerange ? liveUpper : activeTickUpperOf[projectId][terminalToken],
                 projectTokenBalance: projectTokenBalance,
                 minCashOutReturn: minCashOutReturn,
-                forceDirectCashOut: true,
                 preHeldTerminalTokens: preHeldTerminal,
                 isNewPosition: rerange,
                 existingTokenId: rerange ? 0 : activeTokenId,
@@ -1058,8 +1057,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             ruleset: ruleset
         });
 
-        // Mint the initial position. The deploy path does not force-direct the cash-out (pool is freshly initialized,
-        // so there is no AMM to self-route through) — preserving the established deploy behavior.
+        // Mint the initial position. The funding cash-out is always forced directly through the bonding curve (never
+        // the AMM this hook may be feeding) — `deployPool` can join a pre-existing in-band pool, so a "fresh pool has
+        // no AMM" assumption would be unsafe.
         _executeAddToPosition(
             AddLiquidityParams({
                 projectId: projectId,
@@ -1070,7 +1070,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 tickUpper: tickUpper,
                 projectTokenBalance: projectTokenBalance,
                 minCashOutReturn: minCashOutReturn,
-                forceDirectCashOut: false,
                 preHeldTerminalTokens: 0,
                 isNewPosition: true,
                 existingTokenId: 0,
@@ -1423,7 +1422,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 terminalToken: p.terminalToken,
                 cashOutAmount: cashOutAmount,
                 minCashOutReturn: p.minCashOutReturn,
-                forceDirectCashOut: p.forceDirectCashOut,
                 controller: p.controller,
                 ruleset: p.ruleset
             });
@@ -1501,16 +1499,15 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Cash out `cashOutAmount` project tokens for terminal tokens to fund one side of an LP add.
     /// @dev Enforces a rate-derived slippage floor (a caller minimum can only raise it) and reconciles the terminal's
-    /// reported amount against the actual spendable balance delta (fee-on-transfer / fee-token-segregation safe). When
-    /// `forceDirectCashOut` is set, attaches the buyback hook's `cashOut` skip flag so the cash-out is
-    /// routed DIRECTLY through the bonding curve, never through the AMM this hook is feeding.
+    /// reported amount against the actual spendable balance delta (fee-on-transfer / fee-token-segregation safe).
+    /// ALWAYS attaches the buyback hook's `cashOut` skip flag so the funding cash-out is routed DIRECTLY through the
+    /// bonding curve, never through the AMM this hook may be feeding (it must never self-route, on deploy or add).
     /// @return terminalTokenAmount The reconciled terminal-token amount obtained for LP pairing.
     function _fundTerminalTokenSide(
         uint256 projectId,
         address terminalToken,
         uint256 cashOutAmount,
         uint256 minCashOutReturn,
-        bool forceDirectCashOut,
         address controller,
         JBRuleset memory ruleset
     )
@@ -1543,9 +1540,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             if (derivedMinReturn > effectiveMinReturn) effectiveMinReturn = derivedMinReturn;
         }
 
-        // Optionally force the cash-out directly through the bonding curve (skip the AMM). Empty metadata falls back to
-        // the project's normal cash-out path; the terminal still enforces `effectiveMinReturn`.
-        bytes memory metadata = forceDirectCashOut ? _forceDirectCashOutMetadata() : bytes("");
+        // Force the cash-out directly through the bonding curve (skip the AMM this hook may be feeding). When
+        // `BUYBACK_HOOK` is unset this yields empty metadata and the terminal's `effectiveMinReturn` floor still
+        // applies.
+        bytes memory metadata = _forceDirectCashOutMetadata();
 
         // Ask the terminal to cash out. The reported amount is the optimistic upper bound for what to credit to LP.
         uint256 reportedTerminalTokenAmount = IJBMultiTerminal(terminal)
