@@ -18,7 +18,7 @@ import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 
-contract CodexNemesisCashOutRateHarness is JBUniswapV4LPSplitHook {
+contract CashOutRateHarness is JBUniswapV4LPSplitHook {
     constructor(
         address directory,
         IJBPermissions permissions,
@@ -45,13 +45,13 @@ contract CodexNemesisCashOutRateHarness is JBUniswapV4LPSplitHook {
     }
 }
 
-contract CodexNemesisSuckerRegistryZeroTest is LPSplitHookV4TestBase {
-    CodexNemesisCashOutRateHarness internal zeroRegistryHook;
+contract SuckerRegistryZeroTest is LPSplitHookV4TestBase {
+    CashOutRateHarness internal zeroRegistryHook;
 
     function setUp() public override {
         super.setUp();
 
-        zeroRegistryHook = new CodexNemesisCashOutRateHarness({
+        zeroRegistryHook = new CashOutRateHarness({
             directory: address(directory),
             permissions: IJBPermissions(address(permissions)),
             tokens: address(jbTokens),

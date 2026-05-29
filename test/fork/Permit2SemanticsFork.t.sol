@@ -5,7 +5,7 @@ import "forge-std/Test.sol";
 import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
 
 /// @notice Fork tests that verify Permit2's allowance/expiration semantics against the live canonical contract.
-/// @dev These pin the audit finding behind a real-bytecode assertion: a clearer reader doesn't have to trust the
+/// @dev These pin the behavior behind a real-bytecode assertion: a clearer reader doesn't have to trust the
 /// `MockPermit2` in `DeploymentStageTest.t.sol` to behave the same way as the deployed Permit2.
 contract Permit2SemanticsFork is Test {
     IAllowanceTransfer internal constant PERMIT2 = IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3);
@@ -20,7 +20,7 @@ contract Permit2SemanticsFork is Test {
         spender = makeAddr("spender");
     }
 
-    /// @notice Confirms the audit finding: `expiration: 0` is rewritten to `block.timestamp` by Permit2.
+    /// @notice Confirms that `expiration: 0` is rewritten to `block.timestamp` by Permit2.
     /// @dev Allowance.updateAmountAndExpiration: `expiration == 0 ? uint48(block.timestamp) : expiration`.
     function testFork_expirationZero_storedAsBlockTimestamp() public {
         vm.startPrank(owner);
