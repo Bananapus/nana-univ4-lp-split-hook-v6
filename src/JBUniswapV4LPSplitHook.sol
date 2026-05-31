@@ -1174,6 +1174,22 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
     }
 
+    /// @notice Converts this hook's internal project-token credits into the registered ERC-20.
+    /// @dev Core burns holder credits before ERC-20 balances during cash-out. Normalizing first keeps LP sizing and
+    /// post-add dust accounting scoped to transferable project tokens already visible to Uniswap V4.
+    /// @param projectId The Juicebox project whose credits are being normalized.
+    /// @param controller The project's controller.
+    /// @return creditCount The number of credits claimed into ERC-20 project tokens.
+    function _claimHookCreditsFor(uint256 projectId, address controller) internal returns (uint256 creditCount) {
+        creditCount = IJBTokens(TOKENS).creditBalanceOf({holder: address(this), projectId: projectId});
+        if (creditCount == 0) return 0;
+
+        IJBController(controller)
+            .claimTokensFor({
+            holder: address(this), projectId: projectId, tokenCount: creditCount, beneficiary: address(this)
+        });
+    }
+
     /// @notice Clear both Permit2's internal spender allowance and the ERC-20 allowance granted to Permit2.
     /// @dev V4 mints can consume less than the max amount approved for SETTLE, so clean up any residual authority
     /// after the position manager returns.
@@ -1378,6 +1394,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // CEI: clear the accumulation ledger before any external call. A reentrant `addLiquidity` then reverts
         // (NoTokensAccumulated) and a reentrant `deployPool` reverts (already deployed). Leftovers are re-added below.
         accumulatedProjectTokens[p.projectId] = 0;
+
+        // Treat any externally received project credits as additional project-token principal. Without this, a
+        // cash-out can burn those credits before ERC-20s and leave the intended cash-out amount stranded here.
+        p.projectTokenBalance += _claimHookCreditsFor({projectId: p.projectId, controller: p.controller});
 
         // Read the pool's actual current price. It may have been initialized by another party (e.g. REVDeployer) or
         // moved by trading since the last add.

@@ -118,6 +118,7 @@ contract LPSplitHookV4TestBase is Test {
 
         // Wire JB contracts
         controller.setPrices(address(prices));
+        controller.setTokens(address(jbTokens));
         controller.setWeight(PROJECT_ID, DEFAULT_WEIGHT);
         controller.setFirstWeight(PROJECT_ID, DEFAULT_FIRST_WEIGHT);
         controller.setReservedPercent(PROJECT_ID, DEFAULT_RESERVED_PERCENT);

@@ -148,6 +148,7 @@ contract MockJBDirectory {
 
 contract MockJBController {
     address public pricesContract;
+    address public tokensContract;
 
     mapping(uint256 projectId => uint256 weight) public weights;
     mapping(uint256 projectId => uint16 reservedPercent) public reservedPercents;
@@ -170,6 +171,10 @@ contract MockJBController {
 
     function setPrices(address _prices) external {
         pricesContract = _prices;
+    }
+
+    function setTokens(address _tokens) external {
+        tokensContract = _tokens;
     }
 
     function setWeight(uint256 projectId, uint256 weight) external {
@@ -311,6 +316,11 @@ contract MockJBController {
         // This is handled by the test setup - tokens are burned from the holder
     }
 
+    function claimTokensFor(address holder, uint256 projectId, uint256 tokenCount, address beneficiary) external {
+        MockJBTokens tokens = MockJBTokens(tokensContract);
+        tokens.claimTokensFor({holder: holder, projectId: projectId, count: tokenCount, beneficiary: beneficiary});
+    }
+
     function transferCreditsFrom(address holder, uint256 projectId, address recipient, uint256 creditCount) external {
         transferCreditsCallCount++;
         lastTransferCreditsHolder = holder;
@@ -331,6 +341,7 @@ contract MockJBController {
 
 contract MockJBMultiTerminal {
     address public storeAddress;
+    address public tokensAddress;
 
     // Per-project accounting contexts
     mapping(uint256 projectId => mapping(address token => JBAccountingContext)) public _contexts;
@@ -358,6 +369,10 @@ contract MockJBMultiTerminal {
 
     function setStore(address store) external {
         storeAddress = store;
+    }
+
+    function setTokens(address tokens) external {
+        tokensAddress = tokens;
     }
 
     function setAccountingContext(uint256 projectId, address token, uint32 currency, uint8 decimals) external {
@@ -461,7 +476,9 @@ contract MockJBMultiTerminal {
         // Burn the holder's project tokens like the real terminal does, so the hook's project-token balance reflects
         // the cash-out (the holder must hold at least `cashOutCount`).
         address projectToken = projectTokens[projectId];
-        if (projectToken != address(0) && cashOutCount > 0) {
+        if (tokensAddress != address(0) && cashOutCount > 0) {
+            MockJBTokens(tokensAddress).burnFrom({holder: holder, projectId: projectId, count: cashOutCount});
+        } else if (projectToken != address(0) && cashOutCount > 0) {
             MockERC20(projectToken).burn(holder, cashOutCount);
         }
 
@@ -515,13 +532,32 @@ contract MockJBMultiTerminal {
 
 contract MockJBTokens {
     mapping(uint256 projectId => address token) public _tokens;
+    mapping(address holder => mapping(uint256 projectId => uint256 credits)) public creditBalanceOf;
 
     function setToken(uint256 projectId, address token) external {
         _tokens[projectId] = token;
     }
 
+    function setCreditBalance(address holder, uint256 projectId, uint256 creditCount) external {
+        creditBalanceOf[holder][projectId] = creditCount;
+    }
+
     function tokenOf(uint256 projectId) external view returns (address) {
         return _tokens[projectId];
+    }
+
+    function burnFrom(address holder, uint256 projectId, uint256 count) external {
+        uint256 creditCount = creditBalanceOf[holder][projectId];
+        uint256 creditsToBurn = count < creditCount ? count : creditCount;
+        if (creditsToBurn != 0) creditBalanceOf[holder][projectId] = creditCount - creditsToBurn;
+
+        uint256 tokenCount = count - creditsToBurn;
+        if (tokenCount != 0) MockERC20(_tokens[projectId]).burn({from: holder, amount: tokenCount});
+    }
+
+    function claimTokensFor(address holder, uint256 projectId, uint256 count, address beneficiary) external {
+        creditBalanceOf[holder][projectId] -= count;
+        MockERC20(_tokens[projectId]).mint({to: beneficiary, amount: count});
     }
 }
 
