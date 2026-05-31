@@ -104,6 +104,10 @@ contract BurningController {
         MockERC20 token = tokens[projectId];
         if (address(token) != address(0) && amount != 0) token.burn(holder, amount);
     }
+
+    function totalTokenSupplyWithReservedTokensOf(uint256) external pure returns (uint256) {
+        return 1000e18;
+    }
 }
 
 contract MintThenReenterFeeTerminal {

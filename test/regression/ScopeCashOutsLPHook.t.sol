@@ -8,6 +8,7 @@ import {JBUniswapV4LPSplitHookMath} from "../../src/libraries/JBUniswapV4LPSplit
 import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
+import {IJBTerminalStore} from "@bananapus/core-v6/src/interfaces/IJBTerminalStore.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
 import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
@@ -155,6 +156,34 @@ contract ScopeCashOutsLPHookTest is LPSplitHookV4TestBase {
         assertGt(rate, 0, "scoped rate should be non-zero");
     }
 
+    /// @notice Scoped cash-out rates use a smaller probe when project supply is below 1e18.
+    function test_scopedPath_scalesProbeWhenSupplyBelowWad() public {
+        uint256 scarceSupply = 0.5e18;
+        uint256 localSurplus = 1 ether;
+        uint256 currency = uint256(uint32(uint160(address(terminalToken))));
+
+        vm.mockCall(
+            address(controller),
+            abi.encodeWithSelector(IJBController.totalTokenSupplyWithReservedTokensOf.selector, PROJECT_ID),
+            abi.encode(scarceSupply)
+        );
+        vm.mockCallRevert(
+            address(store),
+            abi.encodeWithSelector(
+                IJBTerminalStore.currentTotalReclaimableSurplusOf.selector, PROJECT_ID, 1e18, 18, currency
+            ),
+            "oversized probe"
+        );
+        store.setSurplus(PROJECT_ID, localSurplus);
+        store.setUseProvidedCashOutInputs(true);
+
+        uint256 rate = cashOutHook.exposed_getCashOutRate(
+            PROJECT_ID, address(terminalToken), address(controller), _buildRuleset(true)
+        );
+
+        assertEq(rate, 2e18, "0.5 project tokens reclaiming 1 ETH should scale to 2 ETH per token");
+    }
+
     /// @notice When no suckers exist (remote = 0), both flag states produce the same rate.
     function test_noSuckers_flagDoesNotAffectRate() public {
         // Override remote values to zero
@@ -179,5 +208,35 @@ contract ScopeCashOutsLPHookTest is LPSplitHookV4TestBase {
         );
 
         assertEq(rateScoped, rateUnscoped, "no suckers: both flag states should produce identical rates");
+    }
+
+    /// @notice Unscoped cash-out rates also scale the probe after adding remote supply and surplus.
+    function test_unscopedPath_scalesProbeWhenCombinedSupplyBelowWad() public {
+        uint256 scarceSupply = 0.5e18;
+        uint256 localSurplus = 1 ether;
+
+        vm.mockCall(
+            address(controller),
+            abi.encodeWithSelector(IJBController.totalTokenSupplyWithReservedTokensOf.selector, PROJECT_ID),
+            abi.encode(scarceSupply)
+        );
+        vm.mockCall(
+            SUCKER_REGISTRY_ADDR,
+            abi.encodeWithSelector(IJBSuckerRegistry.remoteTotalSupplyOf.selector, PROJECT_ID),
+            abi.encode(uint256(0))
+        );
+        vm.mockCall(
+            SUCKER_REGISTRY_ADDR,
+            abi.encodeWithSelector(IJBSuckerRegistry.remoteSurplusOf.selector),
+            abi.encode(uint256(0))
+        );
+        store.setSurplus(PROJECT_ID, localSurplus);
+        store.setUseProvidedCashOutInputs(true);
+
+        uint256 rate = cashOutHook.exposed_getCashOutRate(
+            PROJECT_ID, address(terminalToken), address(controller), _buildRuleset(false)
+        );
+
+        assertEq(rate, 2e18, "combined scarce supply should use the valid supply-sized probe");
     }
 }

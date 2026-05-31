@@ -153,6 +153,7 @@ contract MockJBController {
     mapping(uint256 projectId => uint16 reservedPercent) public reservedPercents;
     mapping(uint256 projectId => uint32 baseCurrency) public baseCurrencies;
     mapping(uint256 projectId => uint256 firstWeight) public firstWeights;
+    mapping(uint256 projectId => uint256 totalSupply) public totalTokenSupplies;
 
     // Track burn calls for verification
     uint256 public burnCallCount;
@@ -185,6 +186,10 @@ contract MockJBController {
 
     function setFirstWeight(uint256 projectId, uint256 weight) external {
         firstWeights[projectId] = weight;
+    }
+
+    function setTotalTokenSupplyWithReservedTokensOf(uint256 projectId, uint256 totalSupply) external {
+        totalTokenSupplies[projectId] = totalSupply;
     }
 
     function PRICES() external view returns (address) {
@@ -312,6 +317,11 @@ contract MockJBController {
         lastTransferCreditsProjectId = projectId;
         lastTransferCreditsRecipient = recipient;
         lastTransferCreditsCreditCount = creditCount;
+    }
+
+    function totalTokenSupplyWithReservedTokensOf(uint256 projectId) external view returns (uint256) {
+        uint256 totalSupply = totalTokenSupplies[projectId];
+        return totalSupply == 0 ? 1000e18 : totalSupply;
     }
 }
 

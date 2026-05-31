@@ -172,6 +172,10 @@ contract BurningController {
     function burnTokensOf(address holder, uint256 projectId, uint256 amount, string calldata) external {
         MockERC20(tokens[projectId]).burn(holder, amount);
     }
+
+    function totalTokenSupplyWithReservedTokensOf(uint256) external pure returns (uint256) {
+        return 1000e18;
+    }
 }
 
 contract FeeProjectSelfBurnRegression is LPSplitHookV4TestBase {
