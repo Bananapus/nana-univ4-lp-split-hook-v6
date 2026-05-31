@@ -11,6 +11,11 @@ This repo was not part of the deployed v5 ecosystem that the top-level changelog
 - `IJBUniswapV4LPSplitHook`
 - `IJBUniswapV4LPSplitHookDeployer`
 
+## 0.0.55 — Scale cash-out probes for scarce-supply projects
+
+- `JBUniswapV4LPSplitHookMath.getCashOutRate` now probes the bonding curve with `min(1e18, totalSupply)` and scales the result back to a per-`1e18` rate. Normal-supply projects keep the existing `1e18` probe, while scarce-supply projects no longer look like they have zero reclaim value.
+- Added scoped and unscoped regression coverage for total supply below `1e18`.
+
 ## 0.0.54 — Per-clone buyback hook, audit hardening, size refactor
 
 - **The buyback hook is now per-clone, not an implementation immutable.** Moved from a constructor immutable (`BUYBACK_HOOK`) to per-clone storage (`buybackHook`) set in `initialize`, and added as a per-deploy parameter on `JBUniswapV4LPSplitHookDeployer.deployHookFor`. Different projects' clones can now target different buyback hooks (or none). Removed the `buybackHook` argument from the hook's constructor; `initialize` gains `newBuybackHook` and `deployHookFor` gains `buybackHook`.

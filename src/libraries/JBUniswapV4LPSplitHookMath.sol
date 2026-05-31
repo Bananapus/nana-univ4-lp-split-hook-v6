@@ -595,26 +595,42 @@ library JBUniswapV4LPSplitHookMath {
                 totalSupply += suckerRegistry.remoteTotalSupplyOf(projectId);
 
                 // Apply the bonding curve with the combined on-chain + remote values.
-                try store.currentReclaimableSurplusOf({
-                    projectId: projectId, cashOutCount: _WAD, totalSupply: totalSupply, surplus: surplus
-                }) returns (
-                    uint256 reclaimableAmount
-                ) {
-                    terminalTokensPerProjectToken = reclaimableAmount;
-                } catch {
-                    terminalTokensPerProjectToken = 0;
-                }
+                terminalTokensPerProjectToken = _terminalTokensPerProjectToken({
+                    store: store, projectId: projectId, totalSupply: totalSupply, surplus: surplus
+                });
             } catch {
                 terminalTokensPerProjectToken = 0;
             }
         } else {
-            // Scoped to local balances — use total on-chain surplus directly.
-            try store.currentTotalReclaimableSurplusOf({
-                projectId: projectId, cashOutCount: _WAD, decimals: decimals, currency: currency
-            }) returns (
-                uint256 reclaimableAmount
+            // Scoped to local balances — keep the terminal store's direct helper for normal supply, but avoid asking
+            // it to preview burning 1e18 tokens when fewer than 1e18 project tokens exist.
+            try IJBController(controller).totalTokenSupplyWithReservedTokensOf(projectId) returns (
+                uint256 totalSupply
             ) {
-                terminalTokensPerProjectToken = reclaimableAmount;
+                if (totalSupply >= _WAD) {
+                    try store.currentTotalReclaimableSurplusOf({
+                        projectId: projectId, cashOutCount: _WAD, decimals: decimals, currency: currency
+                    }) returns (
+                        uint256 reclaimableAmount
+                    ) {
+                        terminalTokensPerProjectToken = reclaimableAmount;
+                    } catch {
+                        terminalTokensPerProjectToken = 0;
+                    }
+                } else {
+                    try store.currentTotalSurplusOf({
+                        projectId: projectId, decimals: decimals, currency: currency
+                    }) returns (
+                        uint256 surplus
+                    ) {
+                        terminalTokensPerProjectToken =
+                            _terminalTokensPerProjectToken({
+                                store: store, projectId: projectId, totalSupply: totalSupply, surplus: surplus
+                            });
+                    } catch {
+                        terminalTokensPerProjectToken = 0;
+                    }
+                }
             } catch {
                 terminalTokensPerProjectToken = 0;
             }
@@ -886,6 +902,37 @@ library JBUniswapV4LPSplitHookMath {
     //*********************************************************************//
     // ------------------------- private views --------------------------- //
     //*********************************************************************//
+
+    /// @notice Convert a reclaim preview into a per-1e18 project-token cash-out rate.
+    /// @param store The terminal store to query.
+    /// @param projectId The ID of the project.
+    /// @param totalSupply The project token supply used by the cash-out curve.
+    /// @param surplus The surplus used by the cash-out curve.
+    /// @return terminalTokensPerProjectToken Terminal tokens returned per 1e18 project tokens burned.
+    function _terminalTokensPerProjectToken(
+        IJBTerminalStore store,
+        uint256 projectId,
+        uint256 totalSupply,
+        uint256 surplus
+    )
+        private
+        view
+        returns (uint256 terminalTokensPerProjectToken)
+    {
+        if (totalSupply == 0) return 0;
+
+        uint256 cashOutCount = totalSupply < _WAD ? totalSupply : _WAD;
+        try store.currentReclaimableSurplusOf({
+            projectId: projectId, cashOutCount: cashOutCount, totalSupply: totalSupply, surplus: surplus
+        }) returns (
+            uint256 reclaimableAmount
+        ) {
+            if (cashOutCount == _WAD) return reclaimableAmount;
+            terminalTokensPerProjectToken = mulDiv({x: reclaimableAmount, y: _WAD, denominator: cashOutCount});
+        } catch {
+            terminalTokensPerProjectToken = 0;
+        }
+    }
 
     /// @notice Look up the primary terminal for a project/token pair.
     /// @param directory The JBDirectory to query.
