@@ -11,6 +11,12 @@ This repo was not part of the deployed v5 ecosystem that the top-level changelog
 - `IJBUniswapV4LPSplitHook`
 - `IJBUniswapV4LPSplitHookDeployer`
 
+## 0.0.57 — Raise dependency floors and document conventions
+
+- Raised the caret floors of the Bananapus dependencies to the latest published versions (`@bananapus/core-v6` 0.0.78, `@bananapus/buyback-hook-v6` 0.0.66, `@bananapus/suckers-v6` 0.0.67, `@bananapus/permission-ids-v6` 0.0.28, `@bananapus/address-registry-v6` 0.0.32) and refreshed `package-lock.json`.
+- Documented the NatSpec, comment, and lint conventions in `STYLE_GUIDE.md` to make the existing house style explicit.
+- `package.json`: version 0.0.56 -> 0.0.57.
+
 ## 0.0.56 — Normalize hook-held credits before LP cash-outs
 
 - `JBUniswapV4LPSplitHook` now claims any hook-held project credits into the project's ERC-20 before sizing and funding deploy/add liquidity. This keeps credit-first cash-out burns from leaving ERC-20 project tokens outside `accumulatedProjectTokens`.
