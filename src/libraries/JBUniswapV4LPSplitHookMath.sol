@@ -903,6 +903,23 @@ library JBUniswapV4LPSplitHookMath {
     // ------------------------- private views --------------------------- //
     //*********************************************************************//
 
+    /// @notice Look up the primary terminal for a project/token pair.
+    /// @param directory The JBDirectory to query.
+    /// @param projectId The ID of the project.
+    /// @param token The token whose primary terminal to resolve.
+    /// @return The project's primary terminal for `token` (address(0) if none is set).
+    function _primaryTerminalOf(
+        IJBDirectory directory,
+        uint256 projectId,
+        address token
+    )
+        private
+        view
+        returns (address)
+    {
+        return address(directory.primaryTerminalOf({projectId: projectId, token: token}));
+    }
+
     /// @notice Convert a reclaim preview into a per-1e18 project-token cash-out rate.
     /// @param store The terminal store to query.
     /// @param projectId The ID of the project.
@@ -932,22 +949,5 @@ library JBUniswapV4LPSplitHookMath {
         } catch {
             terminalTokensPerProjectToken = 0;
         }
-    }
-
-    /// @notice Look up the primary terminal for a project/token pair.
-    /// @param directory The JBDirectory to query.
-    /// @param projectId The ID of the project.
-    /// @param token The token whose primary terminal to resolve.
-    /// @return The project's primary terminal for `token` (address(0) if none is set).
-    function _primaryTerminalOf(
-        IJBDirectory directory,
-        uint256 projectId,
-        address token
-    )
-        private
-        view
-        returns (address)
-    {
-        return address(directory.primaryTerminalOf({projectId: projectId, token: token}));
     }
 }

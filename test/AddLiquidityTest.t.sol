@@ -221,6 +221,25 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         );
     }
 
+    function test_AddLiquidity_NoStrandedProjectTokens_WhenHookHasCredits() public {
+        _deployAndAccumulateMore(40e18);
+
+        // Model core cash-outs that burn a holder's credits before touching the ERC-20 balance. A third party can
+        // send credits to the hook even though the normal reserved-token flow only accumulates ERC-20s here.
+        terminal.setTokens(address(jbTokens));
+        jbTokens.setCreditBalance(address(hook), PROJECT_ID, 100e18);
+
+        vm.prank(owner);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
+
+        // Every project token the hook still holds is exactly the accounted accumulation ledger — nothing stranded.
+        assertEq(
+            projectToken.balanceOf(address(hook)),
+            hook.accumulatedProjectTokens(PROJECT_ID),
+            "hook holds no unaccounted project tokens after a credit-backed cash-out"
+        );
+    }
+
     function testFuzz_AddLiquidity_NoValueLeak(uint256 extra) public {
         extra = bound(extra, 1e15, 1_000_000e18);
         _accumulateAndDeploy(PROJECT_ID, 100e18);

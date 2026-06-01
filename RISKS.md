@@ -68,6 +68,7 @@ This file focuses on the lifecycle, pricing, and fee-accounting risks in `JBUnis
 - Fee routing completeness for collected fees.
 - `tokenIdOf` stays nonzero for deployed project paths unless the whole transaction reverts.
 - `accumulatedProjectTokens` is consumed by a successful deploy/add down to at most an unpaired remainder, which is carried forward (never burned); post-deploy inflows re-accumulate into it.
+- Hook-held project credits are claimed into ERC-20 project tokens before deploy/add funding cash-outs, so credit-first burns cannot leave project tokens outside the accumulation ledger.
 - `addLiquidity` never mints at a price far from the oracle TWAP, and its funding cash-out never routes through the AMM.
 - Cross-project isolation holds across all keyed storage.
 - Fee-token and fee-credit bookkeeping match actual claimable balances.

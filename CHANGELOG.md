@@ -11,6 +11,13 @@ This repo was not part of the deployed v5 ecosystem that the top-level changelog
 - `IJBUniswapV4LPSplitHook`
 - `IJBUniswapV4LPSplitHookDeployer`
 
+## 0.0.56 — Normalize hook-held credits before LP cash-outs
+
+- `JBUniswapV4LPSplitHook` now claims any hook-held project credits into the project's ERC-20 before sizing and funding deploy/add liquidity. This keeps credit-first cash-out burns from leaving ERC-20 project tokens outside `accumulatedProjectTokens`.
+- Ordered `JBUniswapV4LPSplitHookMath` private view helpers to match the style guide.
+- `package.json`: version 0.0.55 -> 0.0.56.
+- Added regression coverage for externally credited hook balances during `addLiquidity`.
+
 ## 0.0.55 — Scale cash-out probes for scarce-supply projects
 
 - `JBUniswapV4LPSplitHookMath.getCashOutRate` now probes the bonding curve with `min(1e18, totalSupply)` and scales the result back to a per-`1e18` rate. Normal-supply projects keep the existing `1e18` probe, while scarce-supply projects no longer look like they have zero reclaim value.
