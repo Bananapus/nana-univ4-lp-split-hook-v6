@@ -244,15 +244,41 @@ interface IJBExample is IJBBase {
 
 ## NatSpec
 
+Every contract, interface, library, error, event, function, return value, state variable, mapping, and struct
+member carries complete NatSpec. NatSpec describes the current behavior as the only behavior (see Comments).
+
+Required tags by member:
+- **Contract / interface / library** — `@notice` (what it is and does). Add `@dev` for cross-cutting notes such as storage-layout choices, invariants it upholds, or integration assumptions.
+- **Error** — `@notice` stating exactly when it reverts and the reason the guard exists.
+- **Event** — `@notice` (when it's emitted) and a `@param` for every field.
+- **Function** — `@notice` (what it does, user-facing), a `@param` for every parameter, and a named `@return` for every return value. Add `@dev` whenever a non-obvious mechanic, ordering requirement, edge case, rounding choice, permission rule, or invariant explains the WHY behind the behavior.
+- **State variable** — `@notice` (what it holds). Add `@dev` for how/when it is maintained or any invariant it preserves. For a mapping, also a `@custom:param` for every key, outer to inner.
+- **Struct** — `@custom:member` for every field.
+
 **Contracts:**
 ```solidity
 /// @notice One-line description of what the contract does.
 contract JBExample is IJBExample {
 ```
 
+**Errors:**
+```solidity
+/// @notice Thrown when the caller is not the project's controller, so only the controller can record balances.
+error JBExample_Unauthorized(address caller);
+```
+
+**Events:**
+```solidity
+/// @notice Emitted when funds are added to a project's balance.
+/// @param projectId The ID of the project funds were added to.
+/// @param amount The amount added.
+event AddToBalance(uint256 indexed projectId, uint256 amount);
+```
+
 **Functions:**
 ```solidity
 /// @notice Records funds being added to a project's balance.
+/// @dev Reverts if the project has no accounting context for the token, so the token must be registered first.
 /// @param projectId The ID of the project which funds are being added to.
 /// @param token The token being added.
 /// @param amount The amount added, as a fixed point number with the same decimals as the terminal.
@@ -262,6 +288,15 @@ function recordAddedBalanceFor(
     address token,
     uint256 amount
 ) external override returns (uint256 surplus) {
+```
+
+**State variables and mappings:**
+```solidity
+/// @notice How many NFTs an address owns from a hook, totaled across all tiers.
+/// @dev Maintained as a running aggregate in `recordTransferForTier`, so this read is O(1) instead of O(tiers).
+/// @custom:param hook The 721 contract to check.
+/// @custom:param owner The address to get the balance of.
+mapping(address hook => mapping(address owner => uint256)) public override balanceOf;
 ```
 
 **Structs:**
@@ -276,13 +311,22 @@ struct JBRulesetConfig {
 }
 ```
 
-**Mappings:**
-```solidity
-/// @notice Context describing how a token is accounted for by a project.
-/// @custom:param projectId The ID of the project.
-/// @custom:param token The address of the token.
-mapping(uint256 projectId => mapping(address token => JBAccountingContext)) internal _accountingContextForTokenOf;
-```
+## Comments
+
+Every non-trivial statement or block carries an inline `//` comment that explains WHY it exists — the reason,
+invariant, edge case, ordering requirement, or guarantee it provides — in plain English. Comment the intent, not
+the literal syntax: `// increment i` adds nothing; `// advance the index before the external call so a re-entrant
+call cannot replay this entry` does.
+
+Write every comment and NatSpec as if the current implementation is the first and the last:
+- No references to other implementations in time: no "previously", "now", "used to", "changed to", "legacy",
+  "old/new approach", "v1/v2", "temporary", or "for backwards compatibility".
+- No references to audits, audit tools, reviewers, or finding/issue codes. The code stands on its own reasoning;
+  describe the mechanism and its rationale directly.
+- Describe a behavior by what it guarantees, not by the history of how it came to be.
+
+A `// forge-lint: disable-next-line(<rule>)` directive sits on its own line directly above the line it applies to —
+never merged into a prose comment, or the formatter reflows it into the prose and it silently disables nothing.
 
 ## Numbers
 
@@ -512,9 +556,15 @@ Only add extra remappings for:
 
 ### Linting
 
-Solar (Foundry's built-in linter) runs automatically during `forge build`. It scans all `.sol` files in `libs` directories, including `node_modules`.
+The committed source builds, lints, and tests with zero errors, warnings, and notes. CI runs
+`forge build --deny notes --sizes ...` and `forge test --deny notes ...`; `--deny notes` escalates any solc warning
+or solar lint note to a hard failure, so anything less than clean fails CI. Do not silence a real issue — fix it.
+The only acceptable suppression is a justified, standalone `// forge-lint: disable-next-line(<rule>)` for a rule
+that is genuinely inapplicable (for example a multi-day timestamp comparison flagged by `block-timestamp`).
 
-**All test helpers must use relative imports** (e.g. `../../src/structs/JBRuleset.sol`), not bare `src/` imports. This ensures solar can resolve paths when the helper is consumed via npm in downstream repos.
+Solar (Foundry's built-in linter) runs automatically during `forge build`. It scans all `.sol` files in `libs`
+directories, including `node_modules`. All test helpers use relative imports (e.g. `../../src/structs/JBRuleset.sol`),
+not bare `src/` imports, so solar can resolve paths when the helper is consumed via npm in downstream repos.
 
 ### Fork Tests
 
