@@ -11,6 +11,13 @@ This repo was not part of the deployed v5 ecosystem that the top-level changelog
 - `IJBUniswapV4LPSplitHook`
 - `IJBUniswapV4LPSplitHookDeployer`
 
+## 0.0.58 — Document + regression-test that an out-of-band pool squat is recoverable (no contract change)
+
+- No `src` changes. Confirms — with a real-V4 fork test — that an out-of-band pre-initialization ("squat") of a project's deterministic Uniswap V4 pool is a transient, gas-only griefing, **not** a durable DoS and not a theft, so `JBUniswapV4LPSplitHook` needs no fix for it. The existing `ExistingPoolPriceOutOfBounds` revert is intentionally kept.
+- Mechanism: the routing oracle (`JBUniswapV4Hook`) quotes the V4 side on price rather than liquidity (`estimateUniswapOutput = amountIn × pool_price`), so for the toward-band direction the V4 quote at the squatted price beats the issuance-mint / floor-cashout-capped Juicebox quote; the router runs the real V4 curve swap, and on a zero-liquidity pool a price-limited swap walks the spot to the limit for ~0 tokens (`_afterSwap` skips its slippage check on a zero delta). Anyone can therefore reprice a squatted pool back into the `[cashOut, issuance]` band permissionlessly and then `deployPool` succeeds; recovery should bundle the reprice swap and `deployPool` in one transaction so a squatter cannot re-squat in between.
+- Added `test/fork/SquatRepriceFork.t.sol`: proves the recovery on the real Uniswap V4 PoolManager for both an above-issuance and a below-floor squat (the spot moves into the band for zero tokens and `deployPool` then mints liquidity).
+- `package.json`: version 0.0.57 -> 0.0.58.
+
 ## 0.0.57 — Raise dependency floors and document conventions
 
 - Raised the caret floors of the Bananapus dependencies to the latest published versions (`@bananapus/core-v6` 0.0.78, `@bananapus/buyback-hook-v6` 0.0.66, `@bananapus/suckers-v6` 0.0.67, `@bananapus/permission-ids-v6` 0.0.28, `@bananapus/address-registry-v6` 0.0.32) and refreshed `package-lock.json`.
