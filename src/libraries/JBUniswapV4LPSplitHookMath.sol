@@ -589,7 +589,7 @@ library JBUniswapV4LPSplitHookMath {
                 uint256 totalSupply = IJBController(controller).totalTokenSupplyWithReservedTokensOf(projectId);
 
                 // Add remote cross-chain surplus and supply.
-                surplus += suckerRegistry.remoteSurplusOf({
+                surplus += suckerRegistry.totalRemoteSurplusOf({
                     projectId: projectId, decimals: decimals, currency: currency
                 });
                 totalSupply += suckerRegistry.remoteTotalSupplyOf(projectId);

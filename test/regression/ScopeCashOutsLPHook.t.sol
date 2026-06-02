@@ -93,7 +93,7 @@ contract ScopeCashOutsLPHookTest is LPSplitHookV4TestBase {
         );
         vm.mockCall(
             SUCKER_REGISTRY_ADDR,
-            abi.encodeWithSelector(IJBSuckerRegistry.remoteSurplusOf.selector),
+            abi.encodeWithSelector(IJBSuckerRegistry.totalRemoteSurplusOf.selector),
             abi.encode(REMOTE_SURPLUS)
         );
     }
@@ -126,7 +126,7 @@ contract ScopeCashOutsLPHookTest is LPSplitHookV4TestBase {
     function test_unscopedPath_callsSuckerRegistry() public {
         JBRuleset memory rulesetUnscoped = _buildRuleset(false);
 
-        // Expect the unscoped path to call remoteTotalSupplyOf and remoteSurplusOf
+        // Expect the unscoped path to call remoteTotalSupplyOf and totalRemoteSurplusOf
         vm.expectCall(
             SUCKER_REGISTRY_ADDR, abi.encodeWithSelector(IJBSuckerRegistry.remoteTotalSupplyOf.selector, PROJECT_ID)
         );
@@ -194,7 +194,7 @@ contract ScopeCashOutsLPHookTest is LPSplitHookV4TestBase {
         );
         vm.mockCall(
             SUCKER_REGISTRY_ADDR,
-            abi.encodeWithSelector(IJBSuckerRegistry.remoteSurplusOf.selector),
+            abi.encodeWithSelector(IJBSuckerRegistry.totalRemoteSurplusOf.selector),
             abi.encode(uint256(0))
         );
 
@@ -227,7 +227,7 @@ contract ScopeCashOutsLPHookTest is LPSplitHookV4TestBase {
         );
         vm.mockCall(
             SUCKER_REGISTRY_ADDR,
-            abi.encodeWithSelector(IJBSuckerRegistry.remoteSurplusOf.selector),
+            abi.encodeWithSelector(IJBSuckerRegistry.totalRemoteSurplusOf.selector),
             abi.encode(uint256(0))
         );
         store.setSurplus(PROJECT_ID, localSurplus);

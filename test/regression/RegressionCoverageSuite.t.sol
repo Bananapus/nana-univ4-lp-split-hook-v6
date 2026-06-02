@@ -158,7 +158,7 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
         super.setUp();
 
         // Redeploy hook with a real mock sucker registry so the `scopeCashOutsToLocalBalances: false`
-        // path can call SUCKER_REGISTRY.remoteSurplusOf / remoteTotalSupplyOf without reverting.
+        // path can call SUCKER_REGISTRY.totalRemoteSurplusOf / remoteTotalSupplyOf without reverting.
         mockRegistry = new MockSuckerRegistry();
         JBUniswapV4LPSplitHook hookImpl = new JBUniswapV4LPSplitHook(
             address(directory),
