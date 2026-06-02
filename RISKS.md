@@ -69,7 +69,7 @@ This file focuses on the lifecycle, pricing, and fee-accounting risks in `JBUnis
 - `tokenIdOf` stays nonzero for deployed project paths unless the whole transaction reverts.
 - `accumulatedProjectTokens` is consumed by a successful deploy/add down to at most an unpaired remainder, which is carried forward (never burned); post-deploy inflows re-accumulate into it.
 - Hook-held project credits are claimed into ERC-20 project tokens before deploy/add funding cash-outs, so credit-first burns cannot leave project tokens outside the accumulation ledger.
-- `addLiquidity` never mints at a price far from the oracle TWAP, and its funding cash-out never routes through the AMM.
+- `addLiquidity` never mints at a price far from the oracle TWAP. Its funding cash-out is force-routed to the bonding curve (never through the AMM) **when a buyback hook is configured** — the production deployment path. A clone initialized with `buybackHook == address(0)` skips the force-direct metadata, so the project's own cash-out data hook runs instead: if that hook routes cash-outs through the same pool the LP hook feeds, it can move spot price within the call before liquidity is sized against the pre-cash-out `sqrtPriceInit`. Pair the LP hook with a buyback hook to preserve this invariant.
 - Cross-project isolation holds across all keyed storage.
 - Fee-token and fee-credit bookkeeping match actual claimable balances.
 - Tick bounds stay valid, aligned, and ordered.
