@@ -63,6 +63,7 @@ This repo was not part of the deployed v5 ecosystem that the top-level changelog
 - The current repo includes dedicated deployment, fork, invariant, and regression coverage around concentrated-liquidity behavior, fee routing, rebalance logic, and lifecycle staging.
 - The implementation baseline matches the rest of the v6 tree around Solidity `0.8.28`.
 - Pool deployment validates outsider pre-initialization against the project's economic tick bounds and reverts if the price is out of range.
+- An out-of-band pre-initialization ("squat") of a project's deterministic Uniswap V4 pool is a transient, gas-only griefing — **not** a durable denial of service, and not a theft. Because the routing oracle (`JBUniswapV4Hook`) quotes the V4 side on price rather than liquidity, anyone can move a squatted (zero-liquidity) pool's price back inside the `[cashOut, issuance]` band with a permissionless, price-limited swap for ~0 tokens, after which `deployPool` succeeds normally. Recovery should bundle the reprice swap and `deployPool` in a single transaction so a squatter cannot re-squat in between. No contract change is required; `test/fork/SquatRepriceFork.t.sol` proves the recovery on the real Uniswap V4 PoolManager for both an above-issuance and a below-floor squat (price moves into the band for zero tokens; `deployPool` then mints liquidity).
 
 
 ## Migration notes
