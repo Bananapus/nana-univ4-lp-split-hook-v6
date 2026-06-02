@@ -11,6 +11,13 @@ This repo was not part of the deployed v5 ecosystem that the top-level changelog
 - `IJBUniswapV4LPSplitHook`
 - `IJBUniswapV4LPSplitHookDeployer`
 
+## 0.0.59 — Adopt per-context oracle-free cross-chain surplus
+
+- Raised `@bananapus/suckers-v6` `^0.0.67 → ^0.0.69` to adopt the per-context cross-chain surplus API.
+- `JBUniswapV4LPSplitHookMath` now calls `SUCKER_REGISTRY.totalRemoteSurplusOf(projectId, currency, decimals)`
+  (renamed from `remoteSurplusOf`, with `currency` and `decimals` swapped); the call uses named arguments, so the
+  swap is preserved. `remoteTotalSupplyOf` is unchanged.
+
 ## 0.0.58 — Document + regression-test that an out-of-band pool squat is recoverable (no contract change)
 
 - No `src` changes. Confirms — with a real-V4 fork test — that an out-of-band pre-initialization ("squat") of a project's deterministic Uniswap V4 pool is a transient, gas-only griefing, **not** a durable DoS and not a theft, so `JBUniswapV4LPSplitHook` needs no fix for it. The existing `ExistingPoolPriceOutOfBounds` revert is intentionally kept.
