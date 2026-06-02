@@ -59,6 +59,14 @@ interface IJBUniswapV4LPSplitHook {
         uint256 indexed projectId, address indexed terminalToken, bytes32 indexed poolId, address caller
     );
 
+    /// @notice Emitted when a project's escrowed reserved tokens are burned because no in-band Uniswap pool can be
+    /// deployed for them (e.g. an attacker permissionlessly pre-initialized the deterministic pool at an out-of-band
+    /// price, which `deployPool` refuses to mint against).
+    /// @param projectId The Juicebox project ID.
+    /// @param amount The amount of project tokens burned from escrow.
+    /// @param caller The address that triggered the burn.
+    event AccumulatedTokensBurned(uint256 indexed projectId, uint256 amount, address caller);
+
     /// @notice Check if a pool has been deployed for a project/terminal token pair.
     /// @param projectId The Juicebox project ID.
     /// @param terminalToken The terminal token address.

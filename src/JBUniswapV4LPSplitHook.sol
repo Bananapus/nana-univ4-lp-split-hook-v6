@@ -93,6 +93,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     error JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported(uint256 projectId, address terminalToken);
     error JBUniswapV4LPSplitHook_Permit2AmountOverflow(address token, uint256 amount, uint256 maxAmount);
     error JBUniswapV4LPSplitHook_PoolAlreadyDeployed(uint256 projectId, address terminalToken, uint256 tokenId);
+    /// @notice Thrown when `burnAccumulatedTokens` is called after the project's one-shot pool has already been
+    /// deployed (a live position is recovered via `rebalanceLiquidity`, never burned out from under the LP).
+    error JBUniswapV4LPSplitHook_PoolAlreadyDeployedForRecovery(uint256 projectId);
     /// @notice Thrown when the pool's current price has deviated too far from the oracle TWAP, which would let a
     /// sandbox/JIT attacker make the hook add liquidity at a manipulated ratio.
     error JBUniswapV4LPSplitHook_PriceDeviationTooHigh(int24 spotTick, int24 twapTick, int24 maxDeviationTicks);
@@ -973,6 +976,52 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             projectTokenBalance: recoveredProjectTokens,
             terminalTokenBalance: recoveredTerminalTokens
         });
+    }
+
+    /// @notice Burn the reserved project tokens accumulated in escrow when no in-band Uniswap pool can be deployed for
+    /// them. The pool's `PoolKey` is deterministic and its `initialize` is permissionless, so a lone actor can
+    /// pre-initialize it at an out-of-band price for the cost of gas; `deployPool` then correctly refuses to mint a
+    /// single-sided position against that squatted price (`ExistingPoolPriceOutOfBounds`), and — because the pool's
+    /// oracle hook routes every swap on a zero-liquidity pool through Juicebox rather than the curve — the squatted
+    /// price can never be moved back in-band. Without this valve the reserved tokens would sit in escrow forever.
+    /// Burning
+    /// removes them from supply, raising the cash-out floor for every remaining holder. This is the protocol's native
+    /// removal of reserved tokens (equivalent to routing the split to `{projectId:0, hook:0, beneficiary:0xdead}`).
+    /// @dev Owner-only (`SET_BUYBACK_POOL`, the same gate as `rebalanceLiquidity`). It reads no pool price, makes no
+    /// Uniswap call, and sends nothing to any caller-controlled address, so it cannot extract value, seed the shared
+    /// oracle, or be used to drain a healthy project. It is only callable while the project's one-shot pool is
+    /// undeployed (a live position is recovered via `rebalanceLiquidity`) and deliberately does not set
+    /// `hasDeployedPool`, so a later `deployPool` on an un-squatted terminal-token pairing remains possible.
+    /// @param projectId The ID of the project whose escrowed reserved tokens should be burned.
+    function burnAccumulatedTokens(uint256 projectId) external {
+        // Owner-only — identical gate to `rebalanceLiquidity`. No permissionless variant: a healthy project's
+        // pre-deploy escrow is also undeployed, so a permissionless burn would let anyone destroy a legitimate LP seed
+        // before its
+        // owner deploys.
+        _requirePermissionFrom({
+            account: _ownerOf(projectId), projectId: projectId, permissionId: JBPermissionIds.SET_BUYBACK_POOL
+        });
+
+        // Only reachable while the one-shot pool is undeployed; once a live position exists this valve is closed so the
+        // LP can never be burned out from under itself.
+        if (hasDeployedPool[projectId]) {
+            revert JBUniswapV4LPSplitHook_PoolAlreadyDeployedForRecovery({projectId: projectId});
+        }
+
+        uint256 amount = accumulatedProjectTokens[projectId];
+        if (amount == 0) revert JBUniswapV4LPSplitHook_NoTokensAccumulated({projectId: projectId});
+
+        // CEI: zero the ledger before the external burn so a reentrant `processSplitWith`/`deployPool` finds nothing to
+        // double-spend (mirrors `_executeAddToPosition`). A concurrent inflow re-credits via `+=` afterwards.
+        accumulatedProjectTokens[projectId] = 0;
+
+        // Native protocol burn of the escrowed reserved tokens from this hook's own balance. `burnTokensOf` burns this
+        // hook's credits first then its ERC-20 (no approval needed — the hook is the holder), so it works whether the
+        // accumulation arrived as credits or ERC-20.
+        IJBController(_controllerOf(projectId))
+            .burnTokensOf({holder: address(this), projectId: projectId, tokenCount: amount, memo: ""});
+
+        emit AccumulatedTokensBurned({projectId: projectId, amount: amount, caller: msg.sender});
     }
 
     //*********************************************************************//

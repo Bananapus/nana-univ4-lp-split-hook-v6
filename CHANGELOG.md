@@ -11,6 +11,13 @@ This repo was not part of the deployed v5 ecosystem that the top-level changelog
 - `IJBUniswapV4LPSplitHook`
 - `IJBUniswapV4LPSplitHookDeployer`
 
+## 0.0.58 — Recover reserved tokens stranded by an out-of-band pool squat
+
+- Added `burnAccumulatedTokens(uint256 projectId)`: an owner-gated (`SET_BUYBACK_POOL`) recovery valve that burns a project's escrowed reserved tokens when its deterministic Uniswap V4 pool has been permissionlessly pre-initialized at an out-of-band price (so `deployPool` correctly refuses to mint against it, and the oracle-hook routing makes the squatted zero-liquidity price unmovable). Previously those tokens were stranded in escrow forever. The burn reads no pool price, makes no Uniswap call, and sends nothing to any caller-controlled address — it removes the tokens from supply, raising the cash-out floor for remaining holders (the protocol's native reserved-token removal). It is only callable while the project's one-shot pool is undeployed and deliberately does not set `hasDeployedPool`, so a later `deployPool` on a fresh terminal-token pairing remains possible. The `ExistingPoolPriceOutOfBounds` revert that prevents minting a drainable single-sided position is retained unchanged.
+- Added the `AccumulatedTokensBurned(projectId, amount, caller)` event and the `JBUniswapV4LPSplitHook_PoolAlreadyDeployedForRecovery(projectId)` error.
+- Added `test/regression/SquatRecoveryRegression.t.sol` covering recovery, the owner gate, the deployed-pool and empty-ledger guards, graceful accumulation under a squat, and that recovery keeps a later deploy possible.
+- `package.json`: version 0.0.57 -> 0.0.58.
+
 ## 0.0.57 — Raise dependency floors and document conventions
 
 - Raised the caret floors of the Bananapus dependencies to the latest published versions (`@bananapus/core-v6` 0.0.78, `@bananapus/buyback-hook-v6` 0.0.66, `@bananapus/suckers-v6` 0.0.67, `@bananapus/permission-ids-v6` 0.0.28, `@bananapus/address-registry-v6` 0.0.32) and refreshed `package-lock.json`.
