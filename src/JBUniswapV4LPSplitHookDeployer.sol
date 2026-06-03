@@ -21,8 +21,14 @@ contract JBUniswapV4LPSplitHookDeployer is IJBUniswapV4LPSplitHookDeployer {
     // --------------------------- custom errors ------------------------- //
     //*********************************************************************//
 
+    /// @notice Thrown when configuring the pool manager after it has already been set, since the one-shot binding is
+    /// immutable.
     error JBUniswapV4LPSplitHookDeployer_AlreadyConfigured();
+
+    /// @notice Thrown when a hook deployment is attempted before the deployer's pool manager has been configured.
     error JBUniswapV4LPSplitHookDeployer_NotConfigured();
+
+    /// @notice Thrown when an address other than the binder deployer attempts to configure the pool manager.
     error JBUniswapV4LPSplitHookDeployer_Unauthorized(address caller);
 
     //*********************************************************************//

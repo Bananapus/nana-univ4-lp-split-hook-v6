@@ -1,14 +1,12 @@
 # Invariants of `@bananapus/univ4-lp-split-hook-v6`
 
-Last updated: 2026-05-31.
-
 Scope: the `JBUniswapV4LPSplitHook` split hook and its `JBUniswapV4LPSplitHookDeployer` clone factory. Each cloned hook receives reserved-token distributions from one or more Juicebox V6 projects, accumulates them, and at a project owner's (or, after sufficient weight decay, anyone's) signal mints a single concentrated Uniswap V4 LP position per `(projectId, terminalToken)` pair. After deployment the hook stays in accumulate-and-grow mode: incoming reserved tokens keep accumulating, `addLiquidity` converts that accumulation into more liquidity (topping up the active position or re-ranging into a new one, under a TWAP-deviation guard), accumulated LP fees can be collected and routed back to the project terminal, and the position can be rebalanced. **The hook never burns** — supply-reducing burns are a protocol-layer split-routing decision (route a split to `{projectId:0, hook:0, beneficiary:0xdead}`), not this hook's job.
 
 The hook is one Juicebox V6 split-hook implementation among many. It does NOT own project issuance, ruleset behavior, or terminal accounting. Those invariants live in [`nana-core-v6/INVARIANTS.md`](../nana-core-v6/INVARIANTS.md) — read that first if you are reasoning about reserved-token economics, controller permissions, or terminal try/catch behavior. The router/oracle hook side lives in [`univ4-router-v6`](../univ4-router-v6/).
 
 ---
 
-# Section A — Guarantees to Users (Token Holders, Payers, Beneficiaries)
+## Section A — Guarantees to users (token holders, payers, beneficiaries)
 
 ## A.1 Reserved-token routing (pre-deployment)
 
@@ -98,7 +96,7 @@ The hook is one Juicebox V6 split-hook implementation among many. It does NOT ow
 
 ---
 
-# Section B — Guarantees to Operators (Project Owner / `SET_BUYBACK_POOL` Delegate)
+## Section B — Guarantees to operators (project owner / `SET_BUYBACK_POOL` delegate)
 
 ## B.1 Powers the operator has
 
@@ -132,7 +130,7 @@ The hook is one Juicebox V6 split-hook implementation among many. It does NOT ow
 
 ---
 
-# Section C — Per-Contract Operation Inventory
+## Section C — Per-contract operation inventory
 
 ## C.1 `JBUniswapV4LPSplitHook` — `src/JBUniswapV4LPSplitHook.sol`
 
@@ -208,7 +206,7 @@ Pure library. `alignTickToSpacing` (floor), `alignTickToSpacingCeil` (ceiling, a
 
 ---
 
-# Section D — Cross-Cutting Invariants
+## Section D — Cross-cutting invariants
 
 1. **Balance-delta accounting everywhere.** All token-side amounts that drive subsequent state (accumulation, leftover handling, routed fee amount, rebalance leftover) are measured as `balanceAfter − balanceBefore`, not from external return values. Fee-on-transfer tokens and nonstandard terminals cannot inflate the hook's internal ledger.
 
@@ -236,7 +234,7 @@ Pure library. `alignTickToSpacing` (floor), `alignTickToSpacingCeil` (ceiling, a
 
 ---
 
-# Section E — Out-of-Scope Centralization Caveats
+## Section E — Out-of-scope centralization caveats
 
 These are NOT third-party attack vectors but are powers held outside the hook itself:
 
@@ -249,7 +247,7 @@ These are NOT third-party attack vectors but are powers held outside the hook it
 
 ---
 
-# Section F — Key Code References
+## Section F — Key code references
 
 - Accumulation accounting and balance-delta reconciliation: `src/JBUniswapV4LPSplitHook.sol:1062-1095`
 - Post-deploy accumulation (no burn) in `processSplitWith`: `src/JBUniswapV4LPSplitHook.sol:1274`

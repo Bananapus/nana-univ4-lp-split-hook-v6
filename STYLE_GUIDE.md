@@ -2,7 +2,7 @@
 
 How we write Solidity and organize repos across the Juicebox V6 ecosystem. `nana-core-v6` is the gold standard — when in doubt, match what it does.
 
-## File Organization
+## File organization
 
 ```
 src/
@@ -17,7 +17,7 @@ src/
 
 One contract/interface/struct/enum per file. Name the file after the type it contains.
 
-## Pragma Versions
+## Pragma versions
 
 ```solidity
 // Contracts — pin to exact version
@@ -58,7 +58,7 @@ import {JBAccountingContext} from "./structs/JBAccountingContext.sol";
 import {JBSplit} from "./structs/JBSplit.sol";
 ```
 
-## Contract Structure
+## Contract structure
 
 Section banners divide the contract into a fixed ordering. Every contract with 50+ lines uses these banners:
 
@@ -191,7 +191,7 @@ Use these additional section labels where they better match the contents of the 
 
 Functions are alphabetized within each section.
 
-## Interface Structure
+## Interface structure
 
 ```solidity
 /// @notice One-line description.
@@ -338,7 +338,7 @@ uint32 public constant MAX_WEIGHT_CUT_PERCENT = 1_000_000_000;
 uint256 public constant MAX_RESERVED_PERCENT = 10_000;
 ```
 
-## Function Calls
+## Function calls
 
 Use named arguments for all function calls with 2 or more arguments — in both `src/` and `script/`:
 
@@ -366,7 +366,7 @@ This also applies to constructor calls, struct literals, and inherited/library c
 
 Named argument keys must use **camelCase** — never underscores. If a function's parameter names use underscores, rename them to camelCase first.
 
-## Multiline Signatures
+## Multiline signatures
 
 ```solidity
 function recordCashOutFor(
@@ -387,7 +387,7 @@ function recordCashOutFor(
 
 Modifiers and return types go on their own indented lines.
 
-## Error Handling
+## Error handling
 
 - Validate inputs with explicit `revert` + custom error
 - Use `try-catch` only for external calls to untrusted contracts (hooks, fee processing)
@@ -442,7 +442,7 @@ wrap_comments = true
 - `optimizer = false` when optimization causes stack-too-deep
 - `optimizer_runs` reduced when deep struct nesting causes stack-too-deep at 200 runs
 
-### CI Workflows
+### CI workflows
 
 Every repo has at minimum `test.yml` and `lint.yml`:
 
@@ -566,7 +566,7 @@ Solar (Foundry's built-in linter) runs automatically during `forge build`. It sc
 directories, including `node_modules`. All test helpers use relative imports (e.g. `../../src/structs/JBRuleset.sol`),
 not bare `src/` imports, so solar can resolve paths when the helper is consumed via npm in downstream repos.
 
-### Fork Tests
+### Fork tests
 
 Fork tests use named RPC endpoints defined in `[rpc_endpoints]` of `foundry.toml`. No skip guards — fork tests should hard-fail if the RPC endpoint is unavailable, making CI failures explicit.
 
@@ -610,6 +610,6 @@ CI checks formatting via `forge fmt --check`.
 - Cross-repo references use `file:../sibling-repo` in local development
 - Published versions use semver ranges (`^0.0.x`) for npm
 
-### Contract Size Checks
+### Contract size checks
 
 CI runs `forge build --sizes` to catch contracts approaching the 24KB limit. When the repo's default `optimizer_runs` differs from what you want for size checking, use `FOUNDRY_PROFILE=ci_sizes forge build --sizes` with a `[profile.ci_sizes]` section in `foundry.toml`.
