@@ -1,11 +1,11 @@
 # Juicebox UniV4 LP Split Hook
 
-## Use This File For
+## Use this file for
 
 - Use this file when the task involves LP split accumulation, pool deployment, fee routing, rebalancing, fee claiming, or concentrated-liquidity math around the V4 LP split hook.
 - Start here, then decide whether the issue is still in pre-deploy accumulation, in post-deployment accumulate-and-grow mode (`addLiquidity`, fee collection, rebalance), or actually in clone/deployer setup.
 
-## Read This Next
+## Read this next
 
 | If you need... | Open this next |
 |---|---|
@@ -17,7 +17,7 @@
 | Lifecycle, fee-routing, and rebalancing coverage | [`test/AccumulationStageTest.t.sol`](./test/AccumulationStageTest.t.sol), [`test/DeploymentStageTest.t.sol`](./test/DeploymentStageTest.t.sol), [`test/FeeRoutingTest.t.sol`](./test/FeeRoutingTest.t.sol), [`test/RebalanceTest.t.sol`](./test/RebalanceTest.t.sol), [`test/IntegrationLifecycle.t.sol`](./test/IntegrationLifecycle.t.sol) |
 | Security, deployment, and weight-decay edge cases | [`test/SecurityTest.t.sol`](./test/SecurityTest.t.sol), [`test/ReentrancyTest.t.sol`](./test/ReentrancyTest.t.sol), [`test/DeployerTest.t.sol`](./test/DeployerTest.t.sol), [`test/WeightDecayDeployTest.t.sol`](./test/WeightDecayDeployTest.t.sol), [`test/SplitHookRegressions.t.sol`](./test/SplitHookRegressions.t.sol), [`test/TestRegressionGaps.sol`](./test/TestRegressionGaps.sol) |
 
-## Repo Map
+## Repo map
 
 | Area | Where to look |
 |---|---|
@@ -30,12 +30,12 @@
 
 Reserved-token split hook that accumulates Juicebox project tokens, deploys them into a Uniswap V4 concentrated-liquidity position derived from project economics, and routes resulting fees back into the project and fee project.
 
-## Reference Files
+## Reference files
 
 - Open [`references/runtime.md`](./references/runtime.md) for lifecycle stages, pool-deployment math, and the main invariants around accumulation, post-deploy liquidity growth, and fee routing.
 - Open [`references/operations.md`](./references/operations.md) for deployer behavior, permission gates, test breadcrumbs, and common stale assumptions around rebalancing and terminal-token choice.
 
-## Working Rules
+## Working rules
 
 - Start in [`src/JBUniswapV4LPSplitHook.sol`](./src/JBUniswapV4LPSplitHook.sol) for runtime behavior, but check the deployer when the problem might be clone config or provenance.
 - Pool deployment is a one-way lifecycle transition. Once a project has a pool, assume the repo is in accumulate-and-grow mode (later inflows re-accumulate and are added as liquidity via `addLiquidity`); the hook never burns.

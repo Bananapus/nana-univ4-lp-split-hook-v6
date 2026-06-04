@@ -75,50 +75,76 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     // --------------------------- custom errors ------------------------- //
     //*********************************************************************//
 
+    /// @notice Thrown when `initialize` is called on a clone whose chain-specific properties have already been set.
     error JBUniswapV4LPSplitHook_AlreadyInitialized();
     /// @notice Thrown when a pre-initialized pool's price falls outside the project's economic tick range.
     /// @dev This prevents frontrunning attacks where an attacker initializes the pool at an extreme price.
     error JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds(
         uint160 existingPrice, uint160 lowerBound, uint160 upperBound
     );
+    /// @notice Thrown when a non-zero fee percent is configured without a fee project to route the fee to.
     error JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject(uint256 feePercent, uint256 feeProjectId);
+    /// @notice Thrown when the hook's held balance of a token is less than the amount an operation requires.
     error JBUniswapV4LPSplitHook_InsufficientBalance(uint256 available, uint256 required);
+    /// @notice Thrown when the liquidity computed for a position is too low to mint a valid LP position.
     error JBUniswapV4LPSplitHook_InsufficientLiquidity(uint128 liquidity);
+    /// @notice Thrown when the configured fee percent exceeds the maximum the hook allows.
     error JBUniswapV4LPSplitHook_InvalidFeePercent(uint256 feePercent, uint256 maxFeePercent);
+    /// @notice Thrown when a project's controller or token cannot be resolved, so the project is not usable by the
+    /// hook.
     error JBUniswapV4LPSplitHook_InvalidProjectId(uint256 projectId, address controller, address projectToken);
+    /// @notice Thrown when an action is attempted in a lifecycle stage that does not permit it (e.g. growing a pool
+    /// that does not exist yet).
     error JBUniswapV4LPSplitHook_InvalidStageForAction(uint256 projectId, address terminalToken, uint256 tokenId);
+    /// @notice Thrown when the terminal token supplied for an operation is not the one this clone's pool is paired
+    /// against.
     error JBUniswapV4LPSplitHook_InvalidTerminalToken(uint256 projectId, address terminalToken);
+    /// @notice Thrown when an operation that requires accumulated project tokens finds none held for the project.
     error JBUniswapV4LPSplitHook_NoTokensAccumulated(uint256 projectId);
+    /// @notice Thrown when the split hook context names a hook other than this one, so the split was not routed here.
     error JBUniswapV4LPSplitHook_NotHookSpecifiedInContext(address expectedHook, address actualHook);
+    /// @notice Thrown when a project routes more than one terminal token to the hook, which it cannot pair into a
+    /// single pool.
     error JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported(uint256 projectId, address terminalToken);
+    /// @notice Thrown when an amount to approve through Permit2 exceeds the maximum a Permit2 allowance can hold.
     error JBUniswapV4LPSplitHook_Permit2AmountOverflow(address token, uint256 amount, uint256 maxAmount);
+    /// @notice Thrown when pool deployment is attempted for a project that already has a deployed pool.
     error JBUniswapV4LPSplitHook_PoolAlreadyDeployed(uint256 projectId, address terminalToken, uint256 tokenId);
     /// @notice Thrown when the pool's current price has deviated too far from the oracle TWAP, which would let a
-    /// sandbox/JIT attacker make the hook add liquidity at a manipulated ratio.
+    /// sandwich/JIT attacker make the hook add liquidity at a manipulated ratio.
     error JBUniswapV4LPSplitHook_PriceDeviationTooHigh(int24 spotTick, int24 twapTick, int24 maxDeviationTicks);
+    /// @notice Thrown when a reserved-token split is sent from an address that is neither the project's controller nor
+    /// a valid terminal, so it cannot be trusted as a genuine distribution.
     error JBUniswapV4LPSplitHook_SplitSenderNotValidControllerOrTerminal(
         uint256 projectId, address sender, address controller
     );
+    /// @notice Thrown when a temporary Permit2 allowance granted for an operation is not fully consumed by it.
     error JBUniswapV4LPSplitHook_TemporaryAllowanceNotConsumed(address token, address spender, uint256 allowance);
+    /// @notice Thrown when no terminal accepting the given token can be found for the project.
     error JBUniswapV4LPSplitHook_TerminalNotFound(uint256 projectId, address token);
+    /// @notice Thrown when a split is routed to the hook under a group ID other than the one reserved for terminal
+    /// tokens.
     error JBUniswapV4LPSplitHook_TerminalTokensNotAllowed(uint256 groupId, uint256 requiredGroupId);
     /// @notice Thrown when the oracle TWAP cannot be read (e.g. the pool oracle has not warmed up yet), so the pool
     /// price cannot be validated and liquidity must not be added.
     error JBUniswapV4LPSplitHook_TwapUnavailable(uint256 projectId, address terminalToken);
+    /// @notice Thrown when the token backing a project's unclaimed fee balance changes, so the prior balance can no
+    /// longer be safely settled in the new token.
     error JBUniswapV4LPSplitHook_UnclaimedFeeTokenChanged(address previousToken, address nextToken);
+    /// @notice Thrown when the token amounts paired for a position yield zero liquidity.
     error JBUniswapV4LPSplitHook_ZeroLiquidity(uint256 amount0, uint256 amount1);
 
     //*********************************************************************//
     // ------------------------- public constants ------------------------ //
     //*********************************************************************//
 
-    /// @notice Basis points constant (10000 = 100%)
+    /// @notice The basis-points denominator (10_000 = 100%).
     uint256 public constant BPS = 10_000;
 
-    /// @notice Uniswap V4 pool fee (10000 = 1% fee tier)
+    /// @notice The Uniswap V4 pool fee tier this hook deploys into (10_000 = 1%).
     uint24 public constant POOL_FEE = 10_000;
 
-    /// @notice Tick spacing for 1% fee tier (200 ticks)
+    /// @notice The tick spacing of the 1% fee tier the hook uses (200).
     int24 public constant TICK_SPACING = 200;
 
     //*********************************************************************//
@@ -126,8 +152,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     //*********************************************************************//
 
     /// @notice Default minimum cash-out return as a fraction of expected return (97/100 = 3% slippage tolerance).
-    /// @dev Widened from 1% to 3% because the linear cash-out estimate diverges from the bonding curve
-    ///      at higher cashOutTaxRates, especially with the corrected (wider) LP tick bounds.
+    /// @dev 3% rather than a tighter band because the linear cash-out estimate diverges from the bonding curve
+    ///      at higher cashOutTaxRates, and the LP tick bounds are intentionally wide.
     uint256 internal constant _CASH_OUT_SLIPPAGE_DENOMINATOR = 100;
 
     /// @notice Default minimum cash-out return numerator (97 out of 100 = 3% slippage tolerance).
@@ -160,19 +186,19 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     // --------------- public immutable stored properties ---------------- //
     //*********************************************************************//
 
-    /// @notice JBDirectory (to find important control contracts for given projectId)
+    /// @notice The JBDirectory used to resolve a project's controller and terminals.
     address public immutable DIRECTORY;
 
     /// @notice The Permit2 utility used to approve tokens for PositionManager.
     IAllowanceTransfer public immutable PERMIT2;
 
-    /// @notice JBProjects (to find project owners)
+    /// @notice The JBProjects registry used to resolve project owners.
     IJBProjects public immutable PROJECTS;
 
     /// @notice The sucker registry for querying remote cross-chain surplus and supply.
     IJBSuckerRegistry public immutable SUCKER_REGISTRY;
 
-    /// @notice JBTokens (to find project tokens)
+    /// @notice The JBTokens registry used to resolve a project's ERC-20.
     address public immutable TOKENS;
 
     //*********************************************************************//
@@ -204,10 +230,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// constructor inputs are byte-identical on every chain (the V4 PositionManager varies per chain).
     IPositionManager public positionManager;
 
-    /// @notice Project ID to receive LP fees
+    /// @notice The project ID that receives the LP-fee cut.
     uint256 public feeProjectId;
 
-    /// @notice Percentage of LP fees to route to fee project (in basis points, e.g., 3800 = 38%)
+    /// @notice The percentage of LP fees routed to the fee project, in basis points (e.g. 3800 = 38%).
     uint256 public feePercent;
 
     /// @notice The accumulated project-token balance currently held for each project before its first pool deployment.
@@ -278,6 +304,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     //*********************************************************************//
 
     /// @notice Token address => number of in-flight fee routes currently finalizing claims for that token.
+    /// @custom:param token The token whose in-flight fee route count is being tracked.
     mapping(address token => uint256 count) internal _inflightFeeRoutingCount;
 
     /// @notice Token address => total outstanding fee token claims across all projects.

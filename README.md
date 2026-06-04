@@ -25,14 +25,14 @@ The LP range is derived from project economics rather than from an arbitrary pri
 
 Use this repo when reserved-token issuance should become managed concentrated liquidity. Do not use it when a project only needs a buyback hook or normal reserved-token splits.
 
-## Key Contracts
+## Key contracts
 
 | Contract | Role |
 | --- | --- |
 | `JBUniswapV4LPSplitHook` | Main split hook that accumulates tokens, deploys a V4 pool position, rebalances, and routes fees. |
 | `JBUniswapV4LPSplitHookDeployer` | Clone factory for deploying hook instances and registering them in the address registry. |
 
-## Mental Model
+## Mental model
 
 This repo owns a post-issuance lifecycle:
 
@@ -42,14 +42,14 @@ This repo owns a post-issuance lifecycle:
 
 It does not own the project's issuance logic itself.
 
-## Read These Files First
+## Read these files first
 
 1. `src/JBUniswapV4LPSplitHook.sol`
 2. `src/JBUniswapV4LPSplitHookDeployer.sol`
 3. `univ4-router-v6/src/JBUniswapV4Hook.sol`
 4. `nana-core-v6/src/JBController.sol` for reserved-token origin context
 
-## Integration Traps
+## Integration traps
 
 - this hook governs post-issuance liquidity, so it should not be used to infer how project tokens were originally priced or minted
 - first-pool deployment validates any pre-initialized pool price against the project's economic tick bounds and reverts if out of range
@@ -57,7 +57,7 @@ It does not own the project's issuance logic itself.
 - newly received reserved tokens keep accumulating after deployment and are converted into additional liquidity via `addLiquidity` (the hook never burns; supply-reducing burns are a protocol-layer split-routing decision)
 - the normal reserved-token path requires a deployed project ERC-20; if the hook also holds internal project credits, deploy/add liquidity claims them into that ERC-20 before the funding cash-out so accounting remains tied to transferable tokens
 
-## Where State Lives
+## Where state lives
 
 - accumulation-stage and deployed-position behavior live in `JBUniswapV4LPSplitHook`
 - deployment and registration flows live in `JBUniswapV4LPSplitHookDeployer`
@@ -82,11 +82,11 @@ Useful scripts:
 
 - `npm run test:fork`
 
-## Deployment Notes
+## Deployment notes
 
 This repo composes with the UniV4 router package, the address registry, core protocol contracts, and Permit2. Teams should usually deploy one hook instance per project and terminal-token pair they want to manage.
 
-## Repository Layout
+## Repository layout
 
 ```text
 src/
@@ -99,7 +99,7 @@ script/
   Deploy.s.sol
 ```
 
-## Risks And Notes
+## Risks and notes
 
 - once a pool path is chosen for a deployed project-token pair, that choice becomes part of the hook's operational identity
 - first-pool deployment is publicly observable and can be front-run by outside initialization
@@ -107,7 +107,7 @@ script/
 - after deployment, newly received reserved tokens keep accumulating and are added as more liquidity via `addLiquidity`; the hook never burns
 - TWAP and oracle assumptions come from the UniV4 router and should be evaluated together with this hook
 
-## For AI Agents
+## For AI agents
 
 - Treat this repo as reserved-token liquidity management, not as the swap router itself.
 - Read the deployment-stage, rebalance, frontrun-validation, and preinitialized-pool tests before summarizing failure modes.

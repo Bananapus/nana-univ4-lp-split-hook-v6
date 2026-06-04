@@ -2,7 +2,7 @@
 
 What does this PR do, how, and why?
 
-## Risk Surface
+## Risk surface
 
 What new trust boundary, failure mode, operational dependency, or integration caveat does this PR introduce or remove?
 

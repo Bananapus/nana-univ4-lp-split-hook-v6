@@ -16,7 +16,7 @@ This file focuses on the lifecycle, pricing, and fee-accounting risks in `JBUnis
 | P1 | Public first-pool initialization | Outside actors can initialize the target pool first. | Contract-side range validation and operator awareness. |
 | P1 | Post-deploy accumulate / add-liquidity and fee-accounting assumptions | After deployment, `addLiquidity` cashes out directly through the bonding curve and adds liquidity under a TWAP-deviation guard; tracked fee value must remain separate from LP-spendable balances. | Lifecycle docs, TWAP-guard + claim-segregation tests, and accounting invariants. |
 
-## 1. Trust Assumptions
+## 1. Trust assumptions
 
 - **Uniswap V4 PoolManager.** All LP positions are ultimately held through PoolManager.
 - **Uniswap V4 PositionManager.** Burn, mint, decrease-liquidity, and fee collection depend on it.
@@ -25,7 +25,7 @@ This file focuses on the lifecycle, pricing, and fee-accounting risks in `JBUnis
 - **JB Directory and Controller.** `controllerOf`, `primaryTerminalOf`, and project-owner resolution are all trusted integration points.
 - **Fee routing config.** `FEE_PROJECT_ID` and `FEE_PERCENT` are fixed at initialization.
 
-## 2. Economic Risks
+## 2. Economic risks
 
 - **LP range derived from bonding-curve state.** Tick bounds come from live Juicebox issuance and cash-out economics, not from a market oracle.
 - **Local versus total surplus.** Cash-out-rate derivation depends on whether the project uses local surplus or total surplus for cash outs.
@@ -38,14 +38,14 @@ This file focuses on the lifecycle, pricing, and fee-accounting risks in `JBUnis
 - **Impermanent loss amplification.** This is concentrated liquidity. If price exits the range, the position becomes single-sided.
 - **Accumulation-period idle capital.** Before deployment, accumulated reserved tokens are idle.
 
-## 3. MEV And Timing Risks
+## 3. MEV and timing risks
 
 - **Rebalance sandwich risk.** Rebalance depends on spot pool price at execution time. A searcher can try to skew the price around the transaction.
 - **`addLiquidity` sandwich/JIT risk.** `addLiquidity` mints at the pool's live price, so it is bounded by a TWAP-deviation check (rejects adds whose spot is too far from the oracle TWAP, and refuses to add when the TWAP is unavailable) and by a force-direct cash-out that never routes through the AMM being fed.
 - **Permissionless fee collection timing.** Anyone can trigger some fee-collection paths, so adversarial timing is possible even if direct extraction is limited.
 - **Public pool pre-initialization.** The target pool can be initialized before the hook deploys its first position. The contract validates the existing price against the project's economic tick bounds and reverts if out of range — see §7.4.
 
-## 4. Rebalance Risks
+## 4. Rebalance risks
 
 - **Authorization is narrower than fee collection.** Rebalance is owner or delegate gated, but fee collection is not always gated.
 - **Consecutive rebalance safety matters.** New position IDs must only be stored after successful remint.
@@ -53,7 +53,7 @@ This file focuses on the lifecycle, pricing, and fee-accounting risks in `JBUnis
 - **Fee collection order matters.** Collected fees should be separated before reminting principal; the project-token fee side is carried into the accumulation ledger (not burned).
 - **Spot price is used during rebalance.** Operators should treat rebalance timing as economically sensitive.
 
-## 5. Access Control Risks
+## 5. Access control risks
 
 - **`deployPool` can become permissionless after weight decay.** This is intentional so tokens do not remain locked forever.
 - **`addLiquidity` shares `deployPool`'s authorization** (permissionless once the ruleset weight has decayed 10x, else `SET_BUYBACK_POOL`). It reverts if the pool spot price deviates from the oracle TWAP by more than the bound, or if the TWAP is unavailable — accumulation continues safely until it can run.
@@ -61,7 +61,7 @@ This file focuses on the lifecycle, pricing, and fee-accounting risks in `JBUnis
 - **`claimFeeTokensFor` is gated.** Unclaimed fee tokens or fee credits can sit in the hook indefinitely.
 - **`initialize` is one-shot.** First-call semantics on clones matter.
 
-## 6. Invariants to Verify
+## 6. Invariants to verify
 
 - Token conservation across rebalance.
 - No value creation from rebalance.
@@ -75,7 +75,7 @@ This file focuses on the lifecycle, pricing, and fee-accounting risks in `JBUnis
 - Tick bounds stay valid, aligned, and ordered.
 - Only one deployed pool identity exists per `(projectId, terminalToken)` path.
 
-## 7. Accepted Behaviors
+## 7. Accepted behaviors
 
 ### 7.1 Reentrancy trust boundary during `deployPool`
 
