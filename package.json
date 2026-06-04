@@ -35,8 +35,5 @@
     "@uniswap/v4-core": "1.0.2",
     "@uniswap/v4-periphery": "1.0.3",
     "solady": "0.1.26"
-  },
-  "devDependencies": {
-    "@sphinx-labs/plugins": "0.33.3"
   }
 }
