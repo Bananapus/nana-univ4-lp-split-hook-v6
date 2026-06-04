@@ -4,8 +4,7 @@ pragma solidity ^0.8.0;
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 
-/// @notice Bundled arguments for `JBUniswapV4LPSplitHook._executeAddToPosition`, shared by the deploy and
-/// `addLiquidity` paths.
+/// @notice Arguments for `JBUniswapV4LPSplitHook._executeAddToPosition`, shared by deploy and `addLiquidity`.
 /// @dev Bundled into a struct so the shared mint/increase internal stays within the Yul stack budget under `via_ir`.
 /// @custom:member projectId The ID of the project.
 /// @custom:member projectToken The project's ERC-20 token address.

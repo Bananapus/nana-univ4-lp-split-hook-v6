@@ -7,8 +7,7 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 /// @notice Pure helper functions shared by the Uniswap V4 LP split hook and formal proof harnesses.
 library JBLPSplitHookHelpers {
     /// @notice Align a tick down to the nearest spacing boundary using floor semantics.
-    /// @dev Solidity integer division truncates toward zero, so negative non-boundary ticks need an extra step to
-    /// round toward negative infinity.
+    /// @dev Solidity integer division truncates toward zero, so negative non-boundary ticks need an extra floor step.
     /// @param tick The tick to align.
     /// @param spacing The positive tick spacing to align to.
     /// @return alignedTick The greatest spacing-aligned tick less than or equal to `tick`.

@@ -76,9 +76,8 @@ interface IJBUniswapV4LPSplitHook {
     function poolKeyOf(uint256 projectId, address terminalToken) external view returns (PoolKey memory key);
 
     /// @notice Convert the project's post-deployment accumulated reserved tokens into additional liquidity. Tops up the
-    /// active position, or — once the live corridor has drifted — burns the stale position and re-mints a single
-    /// fresh
-    /// position at the current corridor. Permissionless once the ruleset weight has decayed 10x from accumulation;
+    /// active position, or remints a fresh position once the live corridor has drifted. Permissionless once the
+    /// ruleset weight has decayed 10x from accumulation;
     /// otherwise requires `SET_BUYBACK_POOL` from the project owner.
     /// @param projectId The Juicebox project ID.
     /// @param terminalToken The terminal token paired with the project token in the deployed pool.

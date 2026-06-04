@@ -46,8 +46,7 @@ import {AddLiquidityParams} from "./structs/AddLiquidityParams.sol";
 /// project owner (or anyone, after sufficient weight decay) triggers `deployPool`, the accumulated tokens are paired
 /// with terminal tokens obtained via a proportional cash-out, and the resulting Uniswap V4 LP position is minted.
 ///
-/// 2. Grow-and-route — After the pool exists, any further reserved tokens sent to the hook keep accumulating in
-/// escrow.
+/// 2. Grow-and-route — After the pool exists, further reserved tokens sent to the hook keep accumulating in escrow.
 /// Anyone can later call `addLiquidity` (permissionless once the weight has decayed 10x, otherwise owner-gated) to
 /// convert the accumulated tokens into more protocol-owned liquidity: it cashes out the optimal fraction DIRECTLY at
 /// the bonding-curve floor (never through the AMM it is feeding), checks the pool price against the oracle TWAP to
@@ -56,8 +55,7 @@ import {AddLiquidityParams} from "./structs/AddLiquidityParams.sol";
 /// (folding the recovered principal back in), so all funds stay consolidated in one position. LP trading fees are
 /// collected periodically from the single active position and routed back to the project's terminal balance, with an
 /// optional protocol fee split to a configurable fee project. The hook never burns project tokens: supply-reducing
-/// burns are a split-routing decision handled at the protocol layer, so every token this hook touches ends up as
-/// liquidity.
+/// burns are a protocol-layer split-routing decision, so every token this hook touches ends up as liquidity.
 ///
 /// The hook also supports `rebalanceLiquidity`, which re-centers the LP tick range around the project's current
 /// issuance and cash-out prices when they drift from the original deployment parameters.
@@ -175,8 +173,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @notice How far (in ticks) the live cash-out/issuance corridor must drift from the active position's stored
     /// ticks before `addLiquidity` burns the stale position and re-mints at the current corridor instead of topping up.
     /// ~400 ticks ≈ 4.0%. A wider threshold re-ranges (and pays the burn/re-mint gas) less often while still tracking
-    /// a
-    /// maturing project's band.
+    /// a maturing project's band.
     int24 internal constant _RERANGE_THRESHOLD_TICKS = 400;
 
     /// @notice 1e18 scale factor used as a unit amount in rate calculations.
