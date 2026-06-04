@@ -12,7 +12,7 @@
 - Invariants: [INVARIANTS.md](./INVARIANTS.md)
 - Administration: [ADMINISTRATION.md](./ADMINISTRATION.md)
 - Audit instructions: [AUDIT_INSTRUCTIONS.md](./AUDIT_INSTRUCTIONS.md)
-- Changelog: [CHANGELOG.md](./CHANGELOG.md)
+- V5 to V6 migration changelog: [CHANGELOG.md](./CHANGELOG.md)
 
 ## Overview
 

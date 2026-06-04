@@ -1,86 +1,93 @@
-# Changelog
+# V5 to V6 Changelog
 
 ## Scope
 
-This repo was not part of the deployed v5 ecosystem that the top-level changelog measures, so it is excluded from the ecosystem delta.
+This is a V5-to-V6 migration changelog, not a package release log or commit history. The closest V5 source comparison is `nana-lp-split-hook-v5` in `../../v5/evm`; the current repo is the V6 Uniswap V4 LP split hook package.
 
-## Current v6 surface
+## Current V6 Surface
 
 - `JBUniswapV4LPSplitHook`
 - `JBUniswapV4LPSplitHookDeployer`
 - `IJBUniswapV4LPSplitHook`
 - `IJBUniswapV4LPSplitHookDeployer`
-
-## 0.0.59 — Adopt per-context oracle-free cross-chain surplus
-
-- Raised `@bananapus/suckers-v6` `^0.0.67 → ^0.0.69` to adopt the per-context cross-chain surplus API.
-- `JBUniswapV4LPSplitHookMath` now calls `SUCKER_REGISTRY.totalRemoteSurplusOf(projectId, currency, decimals)`
-  (renamed from `remoteSurplusOf`, with `currency` and `decimals` swapped); the call uses named arguments, so the
-  swap is preserved. `remoteTotalSupplyOf` is unchanged.
-
-## 0.0.58 — Document + regression-test that an out-of-band pool squat is recoverable (no contract change)
-
-- No `src` changes. Confirms — with a real-V4 fork test — that an out-of-band pre-initialization ("squat") of a project's deterministic Uniswap V4 pool is a transient, gas-only griefing, **not** a durable DoS and not a theft, so `JBUniswapV4LPSplitHook` needs no fix for it. The existing `ExistingPoolPriceOutOfBounds` revert is intentionally kept.
-- Mechanism: the routing oracle (`JBUniswapV4Hook`) quotes the V4 side on price rather than liquidity (`estimateUniswapOutput = amountIn × pool_price`), so for the toward-band direction the V4 quote at the squatted price beats the issuance-mint / floor-cashout-capped Juicebox quote; the router runs the real V4 curve swap, and on a zero-liquidity pool a price-limited swap walks the spot to the limit for ~0 tokens (`_afterSwap` skips its slippage check on a zero delta). Anyone can therefore reprice a squatted pool back into the `[cashOut, issuance]` band permissionlessly and then `deployPool` succeeds; recovery should bundle the reprice swap and `deployPool` in one transaction so a squatter cannot re-squat in between.
-- Added `test/fork/SquatRepriceFork.t.sol`: proves the recovery on the real Uniswap V4 PoolManager for both an above-issuance and a below-floor squat (the spot moves into the band for zero tokens and `deployPool` then mints liquidity).
-- `package.json`: version 0.0.57 -> 0.0.58.
-
-## 0.0.57 — Raise dependency floors and document conventions
-
-- Raised the caret floors of the Bananapus dependencies to the latest published versions (`@bananapus/core-v6` 0.0.78, `@bananapus/buyback-hook-v6` 0.0.66, `@bananapus/suckers-v6` 0.0.67, `@bananapus/permission-ids-v6` 0.0.28, `@bananapus/address-registry-v6` 0.0.32) and refreshed `package-lock.json`.
-- Documented the NatSpec, comment, and lint conventions in `STYLE_GUIDE.md` to make the existing house style explicit.
-- `package.json`: version 0.0.56 -> 0.0.57.
-
-## 0.0.56 — Normalize hook-held credits before LP cash-outs
-
-- `JBUniswapV4LPSplitHook` now claims any hook-held project credits into the project's ERC-20 before sizing and funding deploy/add liquidity. This keeps credit-first cash-out burns from leaving ERC-20 project tokens outside `accumulatedProjectTokens`.
-- Ordered `JBUniswapV4LPSplitHookMath` private view helpers to match the style guide.
-- `package.json`: version 0.0.55 -> 0.0.56.
-- Added regression coverage for externally credited hook balances during `addLiquidity`.
-
-## 0.0.55 — Scale cash-out probes for scarce-supply projects
-
-- `JBUniswapV4LPSplitHookMath.getCashOutRate` now probes the bonding curve with `min(1e18, totalSupply)` and scales the result back to a per-`1e18` rate. Normal-supply projects keep the existing `1e18` probe, while scarce-supply projects no longer look like they have zero reclaim value.
-- Added scoped and unscoped regression coverage for total supply below `1e18`.
-
-## 0.0.54 — Per-clone buyback hook, audit hardening, size refactor
-
-- **The buyback hook is now per-clone, not an implementation immutable.** Moved from a constructor immutable (`BUYBACK_HOOK`) to per-clone storage (`buybackHook`) set in `initialize`, and added as a per-deploy parameter on `JBUniswapV4LPSplitHookDeployer.deployHookFor`. Different projects' clones can now target different buyback hooks (or none). Removed the `buybackHook` argument from the hook's constructor; `initialize` gains `newBuybackHook` and `deployHookFor` gains `buybackHook`.
-- **Funding cash-out is always forced direct.** The deploy path now attaches the buyback `cashOut` skip metadata too (previously only `addLiquidity` did), so the initial funding cash-out can never route through a pre-existing AMM pool the hook is about to feed. The `forceDirectCashOut` toggle was removed — the direct path is unconditional.
-- **`rebalanceLiquidity` now validates spot vs the oracle TWAP** before the burn/re-mint, reverting on deviation or an unavailable TWAP — the same guard `addLiquidity` uses, since the re-mint prices against the live spot.
-- **Pre-held terminal tokens are folded into the cash-out ratio correctly.** `computeOptimalCashOutAmount` now reduces the cash-out by `H/(cashOutRate + R)` (the combined rate) instead of `H/cashOutRate`, so re-ranges that recover terminal-token principal no longer under-deploy capital and strand project tokens.
-- **Pricing/tick math extracted into a linked `JBUniswapV4LPSplitHookMath` library** so the hook stays under the EIP-170 24,576-byte runtime limit.
-- `package.json`: version 0.0.53 -> 0.0.54; `@bananapus/buyback-hook-v6` dependency ^0.0.63 -> ^0.0.64.
-- **Tests:** stripped audit-tool jargon from the suite (renamed the audit regression test); added regression coverage for the deploy-path force-direct cash-out, the rebalance TWAP guard, and the pre-held cash-out ratio.
-
-## 0.0.53 — Continuous LP growth: replace post-deploy burn with `addLiquidity`
-
-- **The hook no longer burns.** Post-deployment, `processSplitWith` now ACCUMULATES reserved-token inflows into `accumulatedProjectTokens` (the same ledger used pre-deployment) instead of burning them. Supply-reducing burns are now a protocol-layer split-routing decision (route a reserved split to `{projectId:0, hook:0, beneficiary:0xdead}`), not this hook's job. Removed `_burnReceivedTokens` / `_burnProjectTokens` and the `TokensBurned` event.
-- **New `addLiquidity(projectId, terminalToken, minCashOutReturn)`** converts post-deploy accumulation into more protocol-owned liquidity. Same authorization model as `deployPool` (permissionless once the ruleset weight has decayed 10x, else `SET_BUYBACK_POOL`). It:
-  - rejects the add if the pool spot price deviates from the oracle TWAP by more than `_MAX_TWAP_DEVIATION_TICKS` (~200, ≈2%) or the TWAP is unavailable (30-minute window) — guarding against JIT/sandwich manipulation;
-  - cashes out the optimal fraction DIRECTLY through the bonding curve via the buyback hook's `cashOut` skip metadata, keyed to a new immutable `BUYBACK_HOOK` registry reference (a chain-same strong reference passed to the constructor, decoupled from revnets), never routing the funding cash-out through the AMM it feeds;
-  - tops up the active position (`INCREASE_LIQUIDITY`) while the live cash-out/issuance corridor is within `_RERANGE_THRESHOLD_TICKS` (~400, ≈4%) of the active ticks; once drift exceeds the threshold it collects fees, BURNS the stale position to recover its principal, and re-mints a single fresh position at the live corridor (folding in the recovered principal + new accumulation) — so all funds consolidate into one maximally-efficient position rather than fragmenting across stale bands.
-- **Fee collection** routes the terminal-token side and carries the project-token side back into the accumulation ledger; there is always exactly one position per `(projectId, terminalToken)` pair.
-- **Dust is carried forward, never burned** — leftover project tokens (from deploy, add, rebalance, and collected project-token fees) return to `accumulatedProjectTokens`; leftover terminal tokens are deposited to the project's terminal.
-- New constructor immutable `BUYBACK_HOOK` (`IJBBuybackHookRegistry`, sixth constructor arg). New state: `activeTickLowerOf`, `activeTickUpperOf`. New errors: `JBUniswapV4LPSplitHook_PriceDeviationTooHigh`, `JBUniswapV4LPSplitHook_TwapUnavailable`. New event: `LiquidityAdded`. The TWAP `observe` interface is now imported from `@bananapus/suckers-v6` (`IGeomeanOracle`); the `AddLiquidityParams` struct moved to `src/structs/`.
-- `package.json`: version 0.0.52 -> 0.0.53; added dependency `@bananapus/buyback-hook-v6@^0.0.63` (provides `IJBBuybackHookRegistry` and the deploy-script registry address).
-- The force-direct funding cash-out keys its metadata to the buyback hook's `"cashOut"` purpose (the lifecycle-phase name introduced in buyback-hook-v6 0.0.63, renamed from `"cashOutMinReclaimed"`).
-
-## 0.0.40 — Bump nana-core-v6 to 0.0.52
-
-- `package.json`: version 0.0.39 -> 0.0.40, core dep ^0.0.49 -> ^0.0.52, univ4-router-v6 dep ^0.0.30 -> ^0.0.31 (the matching downstream bump for core 0.0.52).
-- No src changes — `JBUniswapV4LPSplitHook` never referenced `IJBFeeTerminal.FEE()`, so the only impact is the new `pauseCrossProjectFeeFreeInflows` field added to `JBRulesetMetadata`. Patched all `JBRulesetMetadata` literals across `test/` to include `pauseCrossProjectFeeFreeInflows: false`.
+- `JBUniswapV4LPSplitHookMath`
+- `AddLiquidityParams`
 
 ## Summary
 
-- This repo is a v6-era Uniswap v4 liquidity hook package, not a deployed-v5 migration target.
-- The current repo includes dedicated deployment, fork, invariant, and regression coverage around concentrated-liquidity behavior, fee routing, rebalance logic, and lifecycle staging.
-- The implementation baseline matches the rest of the v6 tree around Solidity `0.8.28`.
-- Pool deployment validates outsider pre-initialization against the project's economic tick bounds and reverts if the price is out of range.
-- An out-of-band pre-initialization ("squat") of a project's deterministic Uniswap V4 pool is a transient, gas-only griefing — **not** a durable denial of service, and not a theft. Because the routing oracle (`JBUniswapV4Hook`) quotes the V4 side on price rather than liquidity, anyone can move a squatted (zero-liquidity) pool's price back inside the `[cashOut, issuance]` band with a permissionless, price-limited swap for ~0 tokens, after which `deployPool` succeeds normally. Recovery should bundle the reprice swap and `deployPool` in a single transaction so a squatter cannot re-squat in between. No contract change is required; `test/fork/SquatRepriceFork.t.sol` proves the recovery on the real Uniswap V4 PoolManager for both an above-issuance and a below-floor squat (price moves into the band for zero tokens; `deployPool` then mints liquidity).
+- The V5 comparison package was a Uniswap V3 deployment split hook. V6 is a Uniswap V4 pool-manager and position-manager design.
+- V6 deploys hook clones through a deployer and initializes per-clone state, rather than treating one hook as a static V3 deployment helper.
+- Post-deployment reserved-token inflows are accumulated and can be converted into more protocol-owned liquidity through `addLiquidity(...)`.
+- V6 removes the V5 post-deploy burn event/path from this hook; burning is a split-routing decision outside this hook.
+- LP fee routing, fee-token claims, pool deployment, and liquidity growth have V6-specific events and errors.
 
+## ABI, Event, and Error Changes
 
-## Migration notes
+- Replaced interface:
+  - `IUniV3DeploymentSplitHook` -> `IJBUniswapV4LPSplitHook`
+- Removed V5 functions/events:
+  - V5 `deployPool(projectId, terminalToken, amount0Min, amount1Min)` shape
+  - `isAccumulationStage(...)`
+  - `TokensBurned`
+- Added or changed functions:
+  - `initialize(...)`
+  - `deployPool(uint256,uint256)`
+  - `addLiquidity(uint256,address,uint256)`
+  - `poolKeyOf(uint256,address)`
+  - `isPoolDeployed(uint256,address)`
+  - deployer `deployHookFor(...)`
+  - deployer `setChainSpecificConstants(...)`
+- Added or changed events:
+  - `HookDeployed`
+  - `ProjectDeployed` carries a V4 pool ID.
+  - `LiquidityAdded`
+  - `LPFeesRouted`
+  - `FeeTokensClaimed`
+- Added or migration-sensitive errors include:
+  - V4 price-deviation / TWAP availability errors
+  - deployer one-shot configuration errors
+  - pool-deployment and liquidity-range validation errors
 
-- Do not count this repo in the deployed v5-to-v6 ecosystem summary.
-- If you need this package, treat it as a current v6 surface and rebuild from the current contracts and tests.
+## Machine-Checked ABI Coverage
+
+Generated from Foundry `out/**/*.json` artifacts, filtered to this repo's own runtime source roots and excluding tests, scripts, and dependencies.
+
+- V5 comparison package: `nana-lp-split-hook-v5`.
+- Own-source ABI artifacts compared: V6 `8`, V5 `2`.
+- Contract/interface coverage: `8` added, `2` removed, `0` shared names with ABI changes, `0` shared names ABI-identical.
+- Shared-name ABI item deltas: `0` added, `0` removed, `0` modified.
+
+Added V6 ABI artifacts:
+- `IGeomeanOracle` from `src/JBUniswapV4LPSplitHook.sol`: `1` functions, `0` events, `0` errors.
+- `IJBUniswapV4LPSplitHook` from `src/interfaces/IJBUniswapV4LPSplitHook.sol`: `8` functions, `4` events, `0` errors.
+- `IJBUniswapV4LPSplitHookDeployer` from `src/interfaces/IJBUniswapV4LPSplitHookDeployer.sol`: `7` functions, `1` events, `0` errors.
+- `IREVOwner` from `src/JBUniswapV4LPSplitHook.sol`: `1` functions, `0` events, `0` errors.
+- `JBLPSplitHookHelpers` from `src/libraries/JBLPSplitHookHelpers.sol`: `0` functions, `0` events, `0` errors.
+- `JBUniswapV4LPSplitHook` from `src/JBUniswapV4LPSplitHook.sol`: `35` functions, `4` events, `28` errors.
+- `JBUniswapV4LPSplitHookDeployer` from `src/JBUniswapV4LPSplitHookDeployer.sol`: `7` functions, `1` events, `3` errors.
+- `JBUniswapV4LPSplitHookMath` from `src/libraries/JBUniswapV4LPSplitHookMath.sol`: `10` functions, `0` events, `3` errors.
+
+Removed V5 ABI artifacts:
+- `IUniV3DeploymentSplitHook` from `src/interfaces/IUniV3DeploymentSplitHook.sol`: `4` functions, `4` events, `0` errors.
+- `UniV3DeploymentSplitHook` from `src/UniV3DeploymentSplitHook.sol`: `26` functions, `5` events, `16` errors.
+
+Generated event/error name deltas:
+- Event names added:
+  - `FeeTokensClaimed`, `HookDeployed`, `LPFeesRouted`, `LiquidityAdded`, `ProjectDeployed`.
+- Event names removed or replaced:
+  - `FeeTokensClaimed`, `LPFeesRouted`, `OwnershipTransferred`, `ProjectDeployed`, `TokensBurned`.
+- Error names added:
+  - `JBMetadataResolver_DataNotPadded`, `JBMetadataResolver_MetadataTooLong`, `JBMetadataResolver_MetadataTooShort`, `JBPermissioned_Unauthorized`, `JBUniswapV4LPSplitHookDeployer_AlreadyConfigured`, `JBUniswapV4LPSplitHookDeployer_NotConfigured`, `JBUniswapV4LPSplitHookDeployer_Unauthorized`, `JBUniswapV4LPSplitHookMath_InvalidTickBounds`.
+  - `JBUniswapV4LPSplitHookMath_NoTerminalTokenFound`, `JBUniswapV4LPSplitHook_AlreadyInitialized`, `JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds`, `JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject`, `JBUniswapV4LPSplitHook_InsufficientBalance`, `JBUniswapV4LPSplitHook_InsufficientLiquidity`, `JBUniswapV4LPSplitHook_InvalidFeePercent`, `JBUniswapV4LPSplitHook_InvalidProjectId`.
+  - `JBUniswapV4LPSplitHook_InvalidStageForAction`, `JBUniswapV4LPSplitHook_InvalidTerminalToken`, `JBUniswapV4LPSplitHook_NoTokensAccumulated`, `JBUniswapV4LPSplitHook_NotHookSpecifiedInContext`, `JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported`, `JBUniswapV4LPSplitHook_Permit2AmountOverflow`, `JBUniswapV4LPSplitHook_PoolAlreadyDeployed`, `JBUniswapV4LPSplitHook_PriceDeviationTooHigh`.
+  - `JBUniswapV4LPSplitHook_SplitSenderNotValidControllerOrTerminal`, `JBUniswapV4LPSplitHook_TemporaryAllowanceNotConsumed`, `JBUniswapV4LPSplitHook_TerminalNotFound`, `JBUniswapV4LPSplitHook_TerminalTokensNotAllowed`, `JBUniswapV4LPSplitHook_TwapUnavailable`, `JBUniswapV4LPSplitHook_UnclaimedFeeTokenChanged`, `JBUniswapV4LPSplitHook_ZeroLiquidity`, `PRBMath_MulDiv_Overflow`.
+  - `SafeERC20FailedOperation`.
+- Error names removed or replaced:
+  - `JBPermissioned_Unauthorized`, `OwnableInvalidOwner`, `OwnableUnauthorizedAccount`, `PRBMath_MulDiv_Overflow`, `SafeERC20FailedOperation`, `UniV3DeploymentSplitHook_InvalidFeePercent`, `UniV3DeploymentSplitHook_InvalidProjectId`, `UniV3DeploymentSplitHook_InvalidStageForAction`.
+  - `UniV3DeploymentSplitHook_InvalidTerminalToken`, `UniV3DeploymentSplitHook_NoTokensAccumulated`, `UniV3DeploymentSplitHook_NotHookSpecifiedInContext`, `UniV3DeploymentSplitHook_PoolAlreadyDeployed`, `UniV3DeploymentSplitHook_SplitSenderNotValidControllerOrTerminal`, `UniV3DeploymentSplitHook_TerminalTokensNotAllowed`, `UniV3DeploymentSplitHook_UnauthorizedBeneficiary`, `UniV3DeploymentSplitHook_ZeroAddressNotAllowed`.
+
+## Migration Notes
+
+- Treat this as a V3-to-V4 architecture migration. V5 pool addresses and V3 min-amount assumptions do not map directly.
+- Regenerate ABIs from V6 and update indexers for `LiquidityAdded` instead of V5 `TokensBurned`.
+- If you operated the V5 hook, re-evaluate permissions around `SET_BUYBACK_POOL` and V6 post-deploy liquidity growth.
