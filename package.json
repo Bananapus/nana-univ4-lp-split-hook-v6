@@ -23,7 +23,7 @@
   },
   "dependencies": {
     "@bananapus/address-registry-v6": "^0.0.34",
-    "@bananapus/buyback-hook-v6": "^0.0.69",
+    "@bananapus/buyback-hook-v6": "^0.0.70",
     "@bananapus/core-v6": "^0.0.82",
     "@bananapus/permission-ids-v6": "^0.0.30",
     "@bananapus/suckers-v6": "^0.0.72",
