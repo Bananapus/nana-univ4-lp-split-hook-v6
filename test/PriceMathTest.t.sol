@@ -599,8 +599,8 @@ contract PriceMathTest is LPSplitHookV4TestBase {
         // The decisive check: the post-cash-out terminal:project ratio is the SAME with and without pre-held — i.e.
         // the
         // pre-held path lands on the position's required ratio R, instead of skewing toward an over-large project side.
-        uint256 ratioNoPreHeld = ((c0 * r / 1e18) * 1e18) / (totalTokens - c0);
-        uint256 ratioWithPreHeld = ((cH * r / 1e18 + preHeld) * 1e18) / (totalTokens - cH);
+        uint256 ratioNoPreHeld = (c0 * r) / (totalTokens - c0);
+        uint256 ratioWithPreHeld = ((cH * r) + (preHeld * 1e18)) / (totalTokens - cH);
         assertApproxEqRel(
             ratioWithPreHeld, ratioNoPreHeld, 1e15, "pre-held add must preserve the position's terminal:project ratio"
         );

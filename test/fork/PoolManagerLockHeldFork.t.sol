@@ -56,7 +56,15 @@ contract _LockHoldingAttacker is IUnlockCallback {
         } catch (bytes memory reason) {
             // The revert is propagated up from V4's AlreadyUnlocked() through positionManager and back through
             // the hook. The hook must not catch or repackage it.
-            capturedSelector = bytes4(reason);
+            if (reason.length >= 4) {
+                bytes4 selector;
+                assembly ("memory-safe") {
+                    selector := mload(add(reason, 0x20))
+                }
+                capturedSelector = selector;
+            } else {
+                capturedSelector = bytes4(0);
+            }
             sawAlreadyUnlocked = capturedSelector == IPoolManager.AlreadyUnlocked.selector;
         }
         return bytes("");

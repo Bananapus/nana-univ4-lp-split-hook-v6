@@ -41,7 +41,8 @@ contract Permit2SemanticsFork is Test {
 
         (, uint48 expiration,) = PERMIT2.allowance(owner, USDC, spender);
         // The transfer guard inside Permit2 is `block.timestamp > expiration` — equal is NOT expired.
-        assertFalse(block.timestamp > expiration, "expiration:0 leaves the allowance usable for the rest of the block");
+        uint256 currentTimestamp = block.timestamp;
+        assertFalse(currentTimestamp > expiration, "expiration:0 leaves the allowance usable for the rest of the block");
     }
 
     /// @notice The hook's actual revocation pattern: `expiration: 1` is a past timestamp, so Permit2's guard fires.
@@ -54,7 +55,8 @@ contract Permit2SemanticsFork is Test {
         (uint160 amount, uint48 expiration,) = PERMIT2.allowance(owner, USDC, spender);
         assertEq(amount, 0, "amount cleared");
         assertEq(expiration, 1, "expiration stored verbatim - past timestamp = immediately expired");
-        assertTrue(block.timestamp > expiration, "Permit2's transfer guard treats this as expired");
+        uint256 currentTimestamp = block.timestamp;
+        assertTrue(currentTimestamp > expiration, "Permit2's transfer guard treats this as expired");
     }
 
     /// @notice The boundary case: Permit2's `_transfer` guard is `block.timestamp > expiration` (strict). At
@@ -69,7 +71,8 @@ contract Permit2SemanticsFork is Test {
 
         (, uint48 expiration,) = PERMIT2.allowance(owner, USDC, spender);
         assertEq(expiration, uint48(block.timestamp), "expiration stored as current timestamp");
-        assertFalse(block.timestamp > expiration, "strict > means equal-timestamp is NOT expired");
+        uint256 currentTimestamp = block.timestamp;
+        assertFalse(currentTimestamp > expiration, "strict > means equal-timestamp is NOT expired");
     }
 
     /// @notice An allowance approved with a future expiration is honored across blocks; warp past it expires.
@@ -82,12 +85,14 @@ contract Permit2SemanticsFork is Test {
 
         (, uint48 expirationBefore,) = PERMIT2.allowance(owner, USDC, spender);
         assertEq(expirationBefore, future, "stored verbatim");
-        assertFalse(block.timestamp > expirationBefore, "live before warp");
+        uint256 currentTimestamp = block.timestamp;
+        assertFalse(currentTimestamp > expirationBefore, "live before warp");
 
         vm.warp(future + 1);
 
         (, uint48 expirationAfter,) = PERMIT2.allowance(owner, USDC, spender);
         assertEq(expirationAfter, future, "stored value unchanged by warp");
-        assertTrue(block.timestamp > expirationAfter, "expired after warp");
+        currentTimestamp = block.timestamp;
+        assertTrue(currentTimestamp > expirationAfter, "expired after warp");
     }
 }
