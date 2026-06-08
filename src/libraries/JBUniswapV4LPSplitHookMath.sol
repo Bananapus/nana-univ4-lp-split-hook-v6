@@ -694,7 +694,14 @@ library JBUniswapV4LPSplitHookMath {
         }
 
         // Encode as sqrtPriceX96: sqrt(token1/token0) × 2^96.
-        return uint160(mulDiv({x: sqrt(token1Amount), y: _Q96, denominator: sqrt(token0Amount)}));
+        uint256 result = mulDiv({x: sqrt(token1Amount), y: _Q96, denominator: sqrt(token0Amount)});
+
+        // Clamp to valid Uniswap V4 sqrt price range.
+        if (result < uint256(TickMath.MIN_SQRT_PRICE)) return TickMath.MIN_SQRT_PRICE;
+        if (result > uint256(TickMath.MAX_SQRT_PRICE - 1)) return TickMath.MAX_SQRT_PRICE - 1;
+        // The value was clamped into the uint160 Uniswap sqrt-price range above.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return uint160(result);
     }
 
     /// @notice Calculate the issuance rate (price ceiling).
