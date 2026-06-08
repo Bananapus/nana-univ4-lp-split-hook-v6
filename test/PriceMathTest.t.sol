@@ -15,6 +15,7 @@ import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
 /// @notice Wrapper that exposes internal price math functions for testing.
 contract TestableJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
@@ -331,6 +332,19 @@ contract PriceMathTest is LPSplitHookV4TestBase {
             testableHook.exposed_getCashOutRateSqrtPriceX96(PROJECT_ID, address(terminalToken), address(projectToken));
 
         assertGt(sqrtPrice, 0, "Cash out rate sqrtPriceX96 should be nonzero");
+    }
+
+    /// @notice _getCashOutRateSqrtPriceX96 clamps high rates into Uniswap's valid sqrt-price range.
+    function test_CashOutRateSqrtPriceX96_ClampsHighRate() public {
+        address lowerProjectToken = address(1);
+        assertLt(uint160(lowerProjectToken), uint160(address(terminalToken)), "precondition: terminal token is token1");
+
+        store.setSurplus(PROJECT_ID, 1e58);
+
+        uint160 sqrtPrice =
+            testableHook.exposed_getCashOutRateSqrtPriceX96(PROJECT_ID, address(terminalToken), lowerProjectToken);
+
+        assertEq(sqrtPrice, TickMath.MAX_SQRT_PRICE - 1);
     }
 
     // ─────────────────────────────────────────────────────────────────────
