@@ -304,6 +304,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @custom:param token The token whose in-flight fee route count is being tracked.
     mapping(address token => uint256 count) internal _inflightFeeRoutingCount;
 
+    /// @notice Fee project ID => total outstanding fee-credit claims across all projects.
+    /// @dev Tracks credit-only fee proceeds held on behalf of projects that routed LP fees before the fee project had
+    /// an ERC-20. Those reserved credits must stay out of principal if the fee project later deploys LP on the same
+    /// clone.
+    /// @custom:param feeProjectId The fee project whose internal credits are reserved for beneficiary claims.
+    mapping(uint256 feeProjectId => uint256 totalClaims) internal _totalOutstandingFeeCreditClaims;
+
     /// @notice Token address => total outstanding fee token claims across all projects.
     /// @dev Tracks fee tokens (e.g. JBX from project ID 1) held on behalf of projects that routed LP fees.
     ///      When multiple projects share a single hook clone, fee tokens accumulate in one contract.
@@ -311,13 +318,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     ///      spend fee tokens reserved for other projects' unclaimed fee balances.
     /// @custom:param token The fee project's ERC-20 token address.
     mapping(address token => uint256 totalClaims) internal _totalOutstandingFeeTokenClaims;
-
-    /// @notice Fee project ID => total outstanding fee-credit claims across all projects.
-    /// @dev Tracks credit-only fee proceeds held on behalf of projects that routed LP fees before the fee project had
-    /// an ERC-20. Those reserved credits must stay out of principal if the fee project later deploys LP on the same
-    /// clone.
-    /// @custom:param feeProjectId The fee project whose internal credits are reserved for beneficiary claims.
-    mapping(uint256 feeProjectId => uint256 totalClaims) internal _totalOutstandingFeeCreditClaims;
 
     //*********************************************************************//
     // ---------------------------- constructor -------------------------- //
