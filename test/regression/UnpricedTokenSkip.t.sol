@@ -41,9 +41,11 @@ contract FindHighestValueHarness is JBUniswapV4LPSplitHook {
 ///         comparison just because it has a large raw balance.
 contract UnpricedTokenSkipTest is LPSplitHookV4TestBase {
     MockERC20 internal tokenB;
+    MockERC20 internal sixDecimalToken;
     FindHighestValueHarness internal harness;
 
     uint32 internal tokenBCurrency;
+    uint32 internal sixDecimalTokenCurrency;
 
     function setUp() public override {
         super.setUp();
@@ -52,18 +54,28 @@ contract UnpricedTokenSkipTest is LPSplitHookV4TestBase {
         tokenB = new MockERC20("Token B", "TOKB", 18);
         tokenBCurrency = uint32(uint160(address(tokenB)));
 
+        sixDecimalToken = new MockERC20("Six Decimal Token", "SIX", 6);
+        sixDecimalTokenCurrency = uint32(uint160(address(sixDecimalToken)));
+
         // Register tokenB as an accounting context on the existing terminal.
         terminal.setAccountingContext(PROJECT_ID, address(tokenB), tokenBCurrency, 18);
         terminal.addAccountingContext(
             PROJECT_ID, JBAccountingContext({token: address(tokenB), decimals: 18, currency: tokenBCurrency})
         );
+        terminal.setAccountingContext(PROJECT_ID, address(sixDecimalToken), sixDecimalTokenCurrency, 6);
+        terminal.addAccountingContext(
+            PROJECT_ID,
+            JBAccountingContext({token: address(sixDecimalToken), decimals: 6, currency: sixDecimalTokenCurrency})
+        );
+        _setDirectoryTerminal(PROJECT_ID, address(tokenB), address(terminal));
+        _setDirectoryTerminal(PROJECT_ID, address(sixDecimalToken), address(terminal));
 
         // --- Set balances ------------------------------------------------
         // tokenA (terminalToken): small balance = 1 ETH worth.
         store.setBalance(address(terminal), PROJECT_ID, address(terminalToken), 1e18);
 
         // tokenB: very large raw balance = 1000 units (no price feed, so
-        // under the old code this raw balance is used directly and wins).
+        // it must still lose to any token with a real price feed).
         store.setBalance(address(terminal), PROJECT_ID, address(tokenB), 1000e18);
 
         // --- Configure price feeds ---------------------------------------
@@ -101,8 +113,7 @@ contract UnpricedTokenSkipTest is LPSplitHookV4TestBase {
         });
     }
 
-    /// @notice Before the fix: tokenB (1000e18 raw) wins over tokenA (1e18 priced).
-    ///         After the fix:  tokenB is skipped; tokenA wins.
+    /// @notice Priced tokens win over unpriced tokens even when the unpriced token has a larger raw balance.
     function test_unpricedTokenIsSkipped() public view {
         address winner = harness.findHighestValueTerminalTokenOf(PROJECT_ID, address(controller));
 
@@ -110,6 +121,51 @@ contract UnpricedTokenSkipTest is LPSplitHookV4TestBase {
             winner,
             address(terminalToken),
             "priced token (terminalToken) must win over unpriced token with large raw balance"
+        );
+    }
+
+    /// @notice If every candidate is unpriced, the fallback compares token balances after decimal normalization.
+    function test_unpricedFallbackNormalizesTokenDecimals() public {
+        uint32 ethCurrency = uint32(uint160(JBConstants.NATIVE_TOKEN));
+        uint32 terminalTokenCurrency = uint32(uint160(address(terminalToken)));
+
+        bytes memory terminalTokenCall = abi.encodeWithSignature(
+            "pricePerUnitOf(uint256,uint256,uint256,uint256)",
+            PROJECT_ID,
+            uint256(terminalTokenCurrency),
+            uint256(ethCurrency),
+            uint256(18)
+        );
+        vm.mockCallRevert(address(prices), terminalTokenCall, "NO_FEED");
+
+        bytes memory tokenBCall = abi.encodeWithSignature(
+            "pricePerUnitOf(uint256,uint256,uint256,uint256)",
+            PROJECT_ID,
+            uint256(tokenBCurrency),
+            uint256(ethCurrency),
+            uint256(18)
+        );
+        vm.mockCallRevert(address(prices), tokenBCall, "NO_FEED");
+
+        bytes memory sixDecimalTokenCall = abi.encodeWithSignature(
+            "pricePerUnitOf(uint256,uint256,uint256,uint256)",
+            PROJECT_ID,
+            uint256(sixDecimalTokenCurrency),
+            uint256(ethCurrency),
+            uint256(6)
+        );
+        vm.mockCallRevert(address(prices), sixDecimalTokenCall, "NO_FEED");
+
+        store.setBalance(address(terminal), PROJECT_ID, address(terminalToken), 1e18);
+        store.setBalance(address(terminal), PROJECT_ID, address(tokenB), 2e18);
+        store.setBalance(address(terminal), PROJECT_ID, address(sixDecimalToken), 1000e6);
+
+        address winner = harness.findHighestValueTerminalTokenOf(PROJECT_ID, address(controller));
+
+        assertEq(
+            winner,
+            address(sixDecimalToken),
+            "six-decimal token should win by normalized units, not lose by raw balance"
         );
     }
 }

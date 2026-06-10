@@ -312,6 +312,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @custom:param token The fee project's ERC-20 token address.
     mapping(address token => uint256 totalClaims) internal _totalOutstandingFeeTokenClaims;
 
+    /// @notice Fee project ID => total outstanding fee-credit claims across all projects.
+    /// @dev Tracks credit-only fee proceeds held on behalf of projects that routed LP fees before the fee project had
+    /// an ERC-20. Those reserved credits must stay out of principal if the fee project later deploys LP on the same
+    /// clone.
+    /// @custom:param feeProjectId The fee project whose internal credits are reserved for beneficiary claims.
+    mapping(uint256 feeProjectId => uint256 totalClaims) internal _totalOutstandingFeeCreditClaims;
+
     //*********************************************************************//
     // ---------------------------- constructor -------------------------- //
     //*********************************************************************//
@@ -763,6 +770,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             .transferCreditsFrom({
             holder: address(this), projectId: feeProjectId, recipient: beneficiary, creditCount: creditAmount
         }) {
+            // Keep the reserve through the external call so reentrant deploy/add cannot spend the pending credits.
+            _totalOutstandingFeeCreditClaims[feeProjectId] -= creditAmount;
+
             emit FeeTokensClaimed({
                 projectId: projectId, beneficiary: beneficiary, amount: creditAmount, caller: msg.sender
             });
@@ -1205,13 +1215,21 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param controller The project's controller.
     /// @return creditCount The number of credits claimed into ERC-20 project tokens.
     function _claimHookCreditsFor(uint256 projectId, address controller) internal returns (uint256 creditCount) {
-        creditCount = IJBTokens(TOKENS).creditBalanceOf({holder: address(this), projectId: projectId});
-        if (creditCount == 0) return 0;
+        uint256 creditBalance = IJBTokens(TOKENS).creditBalanceOf({holder: address(this), projectId: projectId});
+        uint256 unavailableCredits = _totalOutstandingFeeCreditClaims[projectId];
+
+        // Fee-credit claims are denominated in the fee project's credits. If that same project later deploys LP through
+        // this clone, only credits not already owed to fee claimants can be normalized into ERC-20 LP principal.
+        if (creditBalance <= unavailableCredits) return 0;
+
+        creditCount = creditBalance - unavailableCredits;
 
         IJBController(controller)
             .claimTokensFor({
             holder: address(this), projectId: projectId, tokenCount: creditCount, beneficiary: address(this)
         });
+
+        return creditCount;
     }
 
     /// @notice Clear both Permit2's internal spender allowance and the ERC-20 allowance granted to Permit2.
@@ -2064,8 +2082,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                         claimableFeeTokenOf[projectId] = feeProjectToken;
                         claimableFeeTokens[projectId] += beneficiaryTokenCount;
                     } else {
-                        // No ERC-20: track as claimable credits.
+                        // No ERC-20: track as claimable credits and reserve those fee-project credits from any later LP
+                        // principal normalization on this clone.
                         claimableFeeCredits[projectId] += beneficiaryTokenCount;
+                        _totalOutstandingFeeCreditClaims[feeProjectId] += beneficiaryTokenCount;
                     }
                 }
             }
