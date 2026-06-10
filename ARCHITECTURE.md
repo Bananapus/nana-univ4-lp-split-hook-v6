@@ -50,7 +50,7 @@ post-deployment
 
 The hook owns local staging and LP-management state. It does not own reserved-token issuance or terminal accounting.
 
-It also owns claim segregation for routed LP fees. Outstanding fee-token claims are tracked separately so the hook's accumulation and LP-funding paths do not consume fee assets being held for beneficiaries.
+It also owns claim segregation for routed LP fees. Outstanding ERC-20 fee-token claims and credit-only fee claims are tracked separately so the hook's accumulation and LP-funding paths do not consume fee assets being held for beneficiaries.
 
 ## Security model
 
@@ -63,7 +63,7 @@ It also owns claim segregation for routed LP fees. Outstanding fee-token claims 
 
 - Review pre-deployment and post-deployment behavior together whenever state layout changes.
 - Keep price-bound math, optimal cash-out math, and rebalance logic synchronized.
-- If you change fee routing or accumulation/leftover-carry behavior, re-check outstanding fee-token claim segregation and in-flight fee routing assumptions.
+- If you change fee routing or accumulation/leftover-carry behavior, re-check outstanding fee-token and fee-credit claim segregation and in-flight fee routing assumptions.
 - If fee routing changes, inspect downstream fee-project behavior and claim paths.
 - Keep deployer assumptions aligned with the address registry, deployment scripts, immutable implementation address, and one-shot V4 constants used to preserve the deployer address across chains.
 

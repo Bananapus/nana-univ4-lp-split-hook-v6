@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
 import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 import {IJBUniswapV4LPSplitHook} from "../src/interfaces/IJBUniswapV4LPSplitHook.sol";
+import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBPermissionIds} from "@bananapus/permission-ids-v6/src/JBPermissionIds.sol";
 
 /// @notice Tests for JBUniswapV4LPSplitHook fee routing logic.
@@ -62,6 +63,32 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
         }
         terminalToken.mint(address(positionManager), terminalAmount);
         projectToken.mint(address(positionManager), projectAmount);
+    }
+
+    /// @notice Accumulate fee-project tokens through the split hook.
+    function _accumulateFeeProjectTokens(uint256 amount) internal {
+        feeProjectToken.mint(address(controller), amount);
+
+        vm.startPrank(address(controller));
+        feeProjectToken.approve(address(hook), amount);
+        hook.processSplitWith(_buildContext(FEE_PROJECT_ID, address(feeProjectToken), amount, 1));
+        vm.stopPrank();
+    }
+
+    /// @notice Make the fee project deployable through the default terminal-token path.
+    function _configureFeeProjectDeployTerminal() internal {
+        terminal.setAccountingContext(
+            FEE_PROJECT_ID, address(terminalToken), uint32(uint160(address(terminalToken))), 18
+        );
+        terminal.addAccountingContext(
+            FEE_PROJECT_ID,
+            JBAccountingContext({
+                token: address(terminalToken), decimals: 18, currency: uint32(uint160(address(terminalToken)))
+            })
+        );
+        store.setSurplus(FEE_PROJECT_ID, 0.5e18);
+        store.setBalance(address(terminal), FEE_PROJECT_ID, address(terminalToken), 10e18);
+        _addDirectoryTerminal(FEE_PROJECT_ID, address(terminal));
     }
 
     // -----------------------------------------------------------------------
@@ -408,12 +435,56 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
     }
 
     // -----------------------------------------------------------------------
-    // 16. Credits do NOT increment _totalOutstandingFeeTokenClaims
+    // 16. Credit claims are not consumed by fee-project LP deployment
     // -----------------------------------------------------------------------
 
-    /// @notice When fee tokens are credits (no ERC-20), _totalOutstandingFeeTokenClaims should NOT increase.
-    /// Credits live in JBTokens storage, not in balanceOf(this), so they don't need balance segregation.
-    function test_ClaimFeeTokens_CreditsNotInTotalOutstandingClaims() public {
+    /// @notice Fee-project credits owed to another project must stay unavailable to fee-project LP principal.
+    function test_ClaimFeeTokens_FeeProjectDeployDoesNotConsumeOutstandingCreditClaims() public {
+        // Route fees while the fee project is credit-only.
+        jbTokens.setToken(FEE_PROJECT_ID, address(0));
+        terminal.setProjectToken(FEE_PROJECT_ID, address(0));
+
+        uint256 feeAmount = 1000e18;
+        _setTerminalTokenFees(feeAmount);
+        hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
+
+        uint256 creditClaim = hook.claimableFeeCredits(PROJECT_ID);
+        assertGt(creditClaim, 0, "precondition: credits should be tracked");
+
+        // The mock terminal returns the credit count but does not write JBTokens credit storage, so mirror the core
+        // credit balance that backs the hook's claimableFeeCredits accounting.
+        jbTokens.setCreditBalance(address(hook), FEE_PROJECT_ID, creditClaim);
+
+        // The fee project later has an ERC-20 and starts using the same hook clone for its own LP.
+        jbTokens.setToken(FEE_PROJECT_ID, address(feeProjectToken));
+        terminal.setProjectToken(FEE_PROJECT_ID, address(feeProjectToken));
+        _configureFeeProjectDeployTerminal();
+        _accumulateFeeProjectTokens(100e18);
+
+        vm.prank(owner);
+        hook.deployPool(FEE_PROJECT_ID, 0);
+
+        assertEq(
+            jbTokens.creditBalanceOf(address(hook), FEE_PROJECT_ID),
+            creditClaim,
+            "fee-project deployment must not normalize claim-reserved credits"
+        );
+        assertEq(hook.claimableFeeCredits(PROJECT_ID), creditClaim, "project credit claim should remain tracked");
+
+        vm.prank(owner);
+        hook.claimFeeTokensFor(PROJECT_ID, user);
+
+        assertEq(controller.transferCreditsCallCount(), 1, "credit claim should still be transferable");
+        assertEq(controller.lastTransferCreditsProjectId(), FEE_PROJECT_ID, "claim uses the fee-project credit bucket");
+        assertEq(controller.lastTransferCreditsCreditCount(), creditClaim, "full reserved credit claim transfers");
+    }
+
+    // -----------------------------------------------------------------------
+    // 17. Credits do NOT increment _totalOutstandingFeeTokenClaims
+    // -----------------------------------------------------------------------
+
+    /// @notice When fee tokens are credits, ERC-20 fee-token claim reserves should not change.
+    function test_ClaimFeeTokens_CreditsDoNotAffectERC20ClaimReserve() public {
         // Remove the fee project's ERC-20.
         jbTokens.setToken(FEE_PROJECT_ID, address(0));
         terminal.setProjectToken(FEE_PROJECT_ID, address(0));
@@ -436,7 +507,7 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
     }
 
     // -----------------------------------------------------------------------
-    // 17. Transition: credits accumulated before ERC-20, then ERC-20 after
+    // 18. Transition: credits accumulated before ERC-20, then ERC-20 after
     // -----------------------------------------------------------------------
 
     /// @notice Accumulate credits while no ERC-20, then set tokenOf to an ERC-20 and accumulate more.

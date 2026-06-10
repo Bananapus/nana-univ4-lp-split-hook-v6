@@ -427,8 +427,8 @@ library JBUniswapV4LPSplitHookMath {
     }
 
     /// @notice Find the primary terminal token with the highest ETH-denominated value across the project's terminals.
-    /// @dev Converts each token's balance to 18-decimal ETH using price feeds. Falls back to raw balance comparison
-    /// when no price feed exists.
+    /// @dev Converts each token's balance to 18-decimal ETH using price feeds. Falls back to token-decimal-normalized
+    /// balance comparison when no price feed exists.
     /// @param directory The JBDirectory used to resolve the project's terminals and primary terminals.
     /// @param projectId The ID of the project.
     /// @param controller The project's controller address.
@@ -513,11 +513,12 @@ library JBUniswapV4LPSplitHookMath {
                         // Normalize the balance to 18-decimal ETH using the price feed result.
                         ethValue = mulDiv({x: balance, y: 10 ** 18, denominator: pricePerUnit});
                     } catch {
-                        // No price feed available — skip this token so its raw balance
-                        // cannot incorrectly win. If NO token has a price feed,
-                        // the fallback below selects the highest raw balance instead.
-                        if (balance > highestUnpricedBalance) {
-                            highestUnpricedBalance = balance;
+                        // No price feed available — skip this token while priced candidates exist. If every candidate
+                        // is unpriced, compare 18-decimal token-unit balances so low-decimal tokens are not penalized.
+                        uint256 normalizedBalance =
+                            mulDiv({x: balance, y: 10 ** 18, denominator: 10 ** context.decimals});
+                        if (normalizedBalance > highestUnpricedBalance) {
+                            highestUnpricedBalance = normalizedBalance;
                             highestUnpricedToken = context.token;
                         }
                         continue;

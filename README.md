@@ -56,6 +56,7 @@ It does not own the project's issuance logic itself.
 - LP management depends on both live market state and live Juicebox economics
 - newly received reserved tokens keep accumulating after deployment and are converted into additional liquidity via `addLiquidity` (the hook never burns; supply-reducing burns are a protocol-layer split-routing decision)
 - the normal reserved-token path requires a deployed project ERC-20; if the hook also holds internal project credits, deploy/add liquidity claims them into that ERC-20 before the funding cash-out so accounting remains tied to transferable tokens
+- fee-project credits owed to claimants are reserved from that credit normalization, so a fee project cannot consume other projects' claimable fee credits as its own LP principal
 
 ## Where state lives
 
