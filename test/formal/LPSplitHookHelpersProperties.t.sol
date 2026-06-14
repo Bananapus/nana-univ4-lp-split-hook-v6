@@ -216,6 +216,7 @@ contract LPSplitHookHelpersProperties is Test {
         int256 r = int256(tick) % int256(spacing);
         // Solidity truncates toward zero; for a negative remainder, step one boundary down.
         if (r < 0) q -= 1;
+        // forge-lint: disable-next-line(unsafe-typecast)
         return int24(q * int256(spacing));
     }
 
@@ -228,6 +229,7 @@ contract LPSplitHookHelpersProperties is Test {
         int256 r = int256(tick) % int256(spacing);
         // Solidity truncates toward zero; for a positive remainder, step one boundary up.
         if (r > 0) q += 1;
+        // forge-lint: disable-next-line(unsafe-typecast)
         return int24(q * int256(spacing));
     }
 }
