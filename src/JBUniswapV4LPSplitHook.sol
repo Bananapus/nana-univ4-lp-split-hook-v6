@@ -24,7 +24,9 @@ import {IJBProjects} from "@bananapus/core-v6/src/interfaces/IJBProjects.sol";
 import {IJBSplitHook} from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
 import {IJBTokens} from "@bananapus/core-v6/src/interfaces/IJBTokens.sol";
 import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
+import {JBFees} from "@bananapus/core-v6/src/libraries/JBFees.sol";
 import {JBMetadataResolver} from "@bananapus/core-v6/src/libraries/JBMetadataResolver.sol";
+import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRulesetMetadataResolver.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
 import {JBPermissionIds} from "@bananapus/permission-ids-v6/src/JBPermissionIds.sol";
@@ -67,6 +69,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     using SafeERC20 for IERC20;
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
+    using JBRulesetMetadataResolver for JBRuleset;
     using StateLibrary for IPoolManager;
 
     //*********************************************************************//
@@ -1588,6 +1591,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             uint256 derivedMinReturn = mulDiv({
                 x: expectedReturn, y: _CASH_OUT_SLIPPAGE_NUMERATOR, denominator: _CASH_OUT_SLIPPAGE_DENOMINATOR
             });
+
+            // `getCashOutRate` is a gross bonding-curve quote, while nonzero-tax cash-outs return the post-fee amount
+            // sent to this hook. Mirror the terminal's standard fee withholding so the derived floor protects against
+            // price drift without requiring a gross amount the terminal intentionally will not return.
+            if (ruleset.cashOutTaxRate() != 0) derivedMinReturn -= JBFees.standardFeeAmountFrom(derivedMinReturn);
+
             if (derivedMinReturn > effectiveMinReturn) effectiveMinReturn = derivedMinReturn;
         }
 

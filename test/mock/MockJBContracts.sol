@@ -153,6 +153,7 @@ contract MockJBController {
     mapping(uint256 projectId => uint256 weight) public weights;
     mapping(uint256 projectId => uint16 reservedPercent) public reservedPercents;
     mapping(uint256 projectId => uint32 baseCurrency) public baseCurrencies;
+    mapping(uint256 projectId => uint16 cashOutTaxRate) public cashOutTaxRates;
     mapping(uint256 projectId => uint256 firstWeight) public firstWeights;
     mapping(uint256 projectId => uint256 totalSupply) public totalTokenSupplies;
 
@@ -189,6 +190,10 @@ contract MockJBController {
         baseCurrencies[projectId] = currency;
     }
 
+    function setCashOutTaxRate(uint256 projectId, uint16 cashOutTaxRate) external {
+        cashOutTaxRates[projectId] = cashOutTaxRate;
+    }
+
     function setFirstWeight(uint256 projectId, uint256 weight) external {
         firstWeights[projectId] = weight;
     }
@@ -211,7 +216,7 @@ contract MockJBController {
 
         metadata = JBRulesetMetadata({
             reservedPercent: reservedPercents[projectId],
-            cashOutTaxRate: 0,
+            cashOutTaxRate: cashOutTaxRates[projectId],
             baseCurrency: baseCurr,
             pausePay: false,
             pauseCreditTransfers: false,
@@ -261,7 +266,7 @@ contract MockJBController {
 
         JBRulesetMetadata memory metadata = JBRulesetMetadata({
             reservedPercent: reservedPercents[projectId],
-            cashOutTaxRate: 0,
+            cashOutTaxRate: cashOutTaxRates[projectId],
             baseCurrency: baseCurrencies[projectId] == 0 ? uint32(1) : baseCurrencies[projectId],
             pausePay: false,
             pauseCreditTransfers: false,

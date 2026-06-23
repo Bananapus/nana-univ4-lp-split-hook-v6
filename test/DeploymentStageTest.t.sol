@@ -52,6 +52,23 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         assertGt(terminal.lastCashOutAmount(), 0, "cashOut amount should be > 0 with positive cash-out rate");
     }
 
+    /// @notice Nonzero-tax cash-outs are fee-bearing in the terminal, so the hook's derived min return must be net of
+    /// the standard fee. Otherwise `deployPool` can ask the terminal to return a gross amount the terminal will
+    /// intentionally withhold from.
+    function test_DeployPool_NonzeroCashOutTax_NetsDerivedMinReturn() public {
+        controller.setCashOutTaxRate(PROJECT_ID, 5000);
+        _accumulateTokens(PROJECT_ID, 100e18);
+
+        vm.prank(owner);
+        hook.deployPool(PROJECT_ID, 0);
+
+        uint256 expectedReturn = terminal.lastCashOutAmount() / 2;
+        uint256 grossMinReturn = (expectedReturn * 97) / 100;
+        uint256 netMinReturn = grossMinReturn - (grossMinReturn / 40);
+
+        assertEq(terminal.lastCashOutMinTokensReclaimed(), netMinReturn, "cash-out min should be net of fees");
+    }
+
     /// @notice Regression: the deploy-path funding cash-out must also be forced DIRECTLY
     ///         through the bonding curve. `deployPool` can join a pre-existing in-band pool, so the old "fresh pool has
     ///         no AMM" assumption was unsafe — the initial cash-out could otherwise route through the buyback AMM the

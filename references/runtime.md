@@ -16,6 +16,8 @@
 - Pool deployment math: issuance and cash-out rates define the initial liquidity shape.
 - Stage transition: pre-deploy uses `deployPool` to consume accumulation; post-deploy uses `addLiquidity` (top-up/re-range, TWAP-guarded). Accumulation is the single inflow sink in both phases.
 - `addLiquidity` add path: TWAP-deviation guard, force-direct bonding-curve cash-out, and top-up-vs-re-range selection define how new liquidity is added safely.
+- Funding cash-outs: derived `minCashOutReturn` values are netted for the standard terminal fee when the active ruleset
+  has a nonzero cash-out tax, matching what the terminal can actually send to the hook.
 - Fee routing: the terminal-token side of collected fees is split across fee project and project balance; fee-token and fee-credit claims stay reserved from LP principal; the project-token side is carried back into the accumulation ledger (never burned).
 - Rebalancing: position teardown and re-minting can change treasury exposure materially.
 
