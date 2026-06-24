@@ -58,6 +58,8 @@ It does not own the project's issuance logic itself.
   governs new ranges before treating the hook as hands-off infrastructure
 - newly received reserved tokens keep accumulating after deployment and are converted into additional liquidity via `addLiquidity` (the hook never burns; supply-reducing burns are a protocol-layer split-routing decision)
 - the normal reserved-token path requires a deployed project ERC-20; if the hook also holds internal project credits, deploy/add liquidity claims them into that ERC-20 before the funding cash-out so accounting remains tied to transferable tokens
+- deploy/add liquidity compares any derived bonding-curve `minCashOutReturn` against the net terminal output for
+  nonzero-tax projects, since the terminal withholds the standard fee before sending funds to the hook
 - fee-project credits owed to claimants are reserved from that credit normalization, so a fee project cannot consume other projects' claimable fee credits as its own LP principal
 
 ## Where state lives

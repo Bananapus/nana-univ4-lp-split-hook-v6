@@ -53,12 +53,11 @@ This is a V5-to-V6 migration changelog, not a package release log or commit hist
 Generated from Foundry `out/**/*.json` artifacts, filtered to this repo's own runtime source roots and excluding tests, scripts, and dependencies.
 
 - V5 comparison package: `nana-lp-split-hook-v5`.
-- Own-source ABI artifacts compared: V6 `8`, V5 `2`.
-- Contract/interface coverage: `8` added, `2` removed, `0` shared names with ABI changes, `0` shared names ABI-identical.
+- Own-source ABI artifacts compared: V6 `7`, V5 `2`.
+- Contract/interface coverage: `7` added, `2` removed, `0` shared names with ABI changes, `0` shared names ABI-identical.
 - Shared-name ABI item deltas: `0` added, `0` removed, `0` modified.
 
 Added V6 ABI artifacts:
-- `IGeomeanOracle` from `src/JBUniswapV4LPSplitHook.sol`: `1` functions, `0` events, `0` errors.
 - `IJBUniswapV4LPSplitHook` from `src/interfaces/IJBUniswapV4LPSplitHook.sol`: `8` functions, `4` events, `0` errors.
 - `IJBUniswapV4LPSplitHookDeployer` from `src/interfaces/IJBUniswapV4LPSplitHookDeployer.sol`: `7` functions, `1` events, `0` errors.
 - `IREVOwner` from `src/JBUniswapV4LPSplitHook.sol`: `1` functions, `0` events, `0` errors.
