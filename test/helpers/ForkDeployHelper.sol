@@ -44,7 +44,7 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {HookMiner} from "@uniswap/v4-periphery/src/utils/HookMiner.sol";
-import {IGeomeanOracle} from "@bananapus/suckers-v6/src/interfaces/IGeomeanOracle.sol";
+import {IGeomeanOracle} from "@bananapus/univ4-router-v6/src/interfaces/IGeomeanOracle.sol";
 import {MockGeomeanOracle} from "../mock/MockGeomeanOracle.sol";
 
 /// @notice Shared base contract for fork tests that deploy JB core from source.
