@@ -463,11 +463,26 @@ library JBUniswapV4LPSplitHookMath {
             // Cast to IJBMultiTerminal to access store and accounting context methods.
             IJBMultiTerminal term = IJBMultiTerminal(address(terminals[i]));
 
-            // Get the terminal's store for balance lookups.
-            IJBTerminalStore termStore = term.STORE();
+            // A project's terminal set can include non-`IJBMultiTerminal` terminals that hold no balances of their
+            // own (e.g. the router terminal registry, which forwards to per-token terminals and has no `STORE()`).
+            // Probe `STORE()` in a try/catch and skip any terminal that doesn't expose one, rather than reverting the
+            // whole selection — otherwise a single such terminal permanently DoSes `deployPool`/`addLiquidity` for
+            // the project.
+            IJBTerminalStore termStore;
+            try term.STORE() returns (IJBTerminalStore store_) {
+                termStore = store_;
+            } catch {
+                continue;
+            }
 
-            // Get all accounting contexts (one per accepted token) for this project on this terminal.
-            JBAccountingContext[] memory contexts = term.accountingContextsOf(projectId);
+            // Get all accounting contexts (one per accepted token) for this project on this terminal. Guard the same
+            // way so a terminal that reverts here is skipped rather than aborting the loop.
+            JBAccountingContext[] memory contexts;
+            try term.accountingContextsOf(projectId) returns (JBAccountingContext[] memory contexts_) {
+                contexts = contexts_;
+            } catch {
+                continue;
+            }
 
             // Cache context count for gas-efficient iteration.
             uint256 contextCount = contexts.length;
