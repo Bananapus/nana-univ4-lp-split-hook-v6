@@ -150,6 +150,6 @@ contract RegressionPreinitializedRangeRegression is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
     }
 }

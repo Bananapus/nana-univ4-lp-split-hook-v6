@@ -108,7 +108,7 @@ contract AdversarialPoolInitTest is LPSplitHookV4TestBase {
         // The fix rejects out-of-band prices.
         vm.prank(owner);
         vm.expectRevert(); // JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
     }
 
     /// @notice Adversary pre-initializes pool at extreme high price (above economic range) → deployment reverts.
@@ -128,7 +128,7 @@ contract AdversarialPoolInitTest is LPSplitHookV4TestBase {
         // The fix rejects out-of-band prices.
         vm.prank(owner);
         vm.expectRevert(); // JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
     }
 
     /// @notice Pre-initialized pool within economic range → accepted, uses existing price.
@@ -147,7 +147,7 @@ contract AdversarialPoolInitTest is LPSplitHookV4TestBase {
 
         // In-band price is accepted — deployment succeeds.
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "deployment should succeed with in-band price");
         assertGt(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "LP position should exist");
@@ -160,7 +160,7 @@ contract AdversarialPoolInitTest is LPSplitHookV4TestBase {
 
         // No adversary pre-init — clean deployment.
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "normal deployment should succeed");
         assertGt(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "LP position should exist");

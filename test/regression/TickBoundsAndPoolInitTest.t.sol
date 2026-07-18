@@ -119,7 +119,7 @@ contract RegressionFixM4Test is LPSplitHookV4TestBase {
 
         // deployPool should succeed — the pre-initialized price is within bounds.
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         // Verify deployment succeeded.
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "project should have a deployed pool");
@@ -175,7 +175,7 @@ contract RegressionFixM4Test is LPSplitHookV4TestBase {
 
         // deployPool should still succeed.
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "project should have a deployed pool");
         assertGt(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "LP position should be created");
@@ -215,7 +215,7 @@ contract RegressionFixM4Test is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
     }
 }
 

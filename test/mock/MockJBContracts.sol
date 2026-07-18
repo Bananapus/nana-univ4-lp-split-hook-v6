@@ -491,7 +491,8 @@ contract MockJBMultiTerminal {
         } else if (storeAddress != address(0) && MockJBTerminalStore(storeAddress).taxedCurveEnabled(projectId)) {
             // Model the ACTUAL cash-out with the exact same convex bonding curve the rate/expected-return previews
             // read, so a nonzero-tax curve is consistent between what the floor is derived from and what is returned.
-            reclaimAmount = MockJBTerminalStore(storeAddress).currentTotalReclaimableSurplusOf(projectId, cashOutCount, 0, 0);
+            reclaimAmount =
+                MockJBTerminalStore(storeAddress).currentTotalReclaimableSurplusOf(projectId, cashOutCount, 0, 0);
         } else {
             reclaimAmount = cashOutCount / 2; // Default: 50% reclaim
         }

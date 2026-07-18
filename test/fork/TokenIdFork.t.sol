@@ -167,7 +167,7 @@ contract TokenIdFork is ForkDeployHelper {
         uint256 nextTokenIdBefore = V4_POSITION_MANAGER.nextTokenId();
         emit log_named_uint("  nextTokenId before deploy", nextTokenIdBefore);
         vm.prank(multisig);
-        hook.deployPool(projectId, 0);
+        hook.deployPool(projectId);
         uint256 storedTokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         uint256 nextTokenIdAfter = V4_POSITION_MANAGER.nextTokenId();
         assertEq(storedTokenId, nextTokenIdBefore, "tokenIdOf should equal pre-mint nextTokenId");
@@ -183,7 +183,7 @@ contract TokenIdFork is ForkDeployHelper {
     function test_fork_h31_tokenId_updatesAfterRebalance() public {
         _accumulateTokens(projectId, address(projectToken), 100_000e18);
         vm.prank(multisig);
-        hook.deployPool(projectId, 0);
+        hook.deployPool(projectId);
         uint256 oldTokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         PoolKey memory key = hook.poolKeyOf(projectId, JBConstants.NATIVE_TOKEN);
         TokenIdSwapHelper swapHelper = new TokenIdSwapHelper(V4_POOL_MANAGER);

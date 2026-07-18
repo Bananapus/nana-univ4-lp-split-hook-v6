@@ -154,7 +154,7 @@ contract RegressionPreinitializedPoolPriceRegression is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
     }
 
     function test_preinitializedPoolWithinBandAcceptedByDeployment() public {
@@ -191,7 +191,7 @@ contract RegressionPreinitializedPoolPriceRegression is LPSplitHookV4TestBase {
 
         // In-band pre-initialization should be accepted — the bounded price check tolerates it.
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "the project should deploy successfully with an in-band price");
         assertGt(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "an LP position should be created");

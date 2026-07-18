@@ -45,8 +45,9 @@ import {AddLiquidityParams} from "./structs/AddLiquidityParams.sol";
 /// project's reserved-token distributions as the seed capital. The lifecycle has two stages:
 ///
 /// 1. Accumulation — Each time the project distributes reserved tokens, the hook's share is held in escrow. Once the
-/// project owner (or anyone, after sufficient weight decay) triggers `deployPool`, the accumulated tokens are paired
-/// with terminal tokens obtained via a proportional cash-out, and the resulting Uniswap V4 LP position is minted.
+/// project owner (or anyone, after sufficient weight decay) triggers `deployPool`, the accumulated tokens are minted as
+/// a single-sided ask position (no funding cash-out) spanning from the pool's live price out to the project's
+/// issuance/cash-out corridor.
 ///
 /// 2. Grow-and-route — After the pool exists, further reserved tokens sent to the hook keep accumulating in escrow.
 /// Anyone can later call `addLiquidity` (permissionless once the weight has decayed 10x, otherwise owner-gated) to
@@ -811,14 +812,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         });
     }
 
-    /// @notice Create the Uniswap V4 pool and mint the initial LP position using the project's accumulated reserved
-    /// tokens. A portion of those tokens is cashed out for terminal tokens so the position is two-sided. Permissionless
-    /// once the ruleset weight has decayed to 10% of what it was when accumulation began; otherwise requires
-    /// `SET_BUYBACK_POOL` permission from the project owner.
+    /// @notice Create the Uniswap V4 pool and mint the initial LP position as a single-sided ask of the project's
+    /// accumulated reserved tokens — no funding cash-out. Permissionless once the ruleset weight has decayed to 10%
+    /// of
+    /// what it was when accumulation began; otherwise requires `SET_BUYBACK_POOL` permission from the project owner.
     /// @param projectId The ID of the project whose accumulated tokens should be deployed as LP.
-    /// @param minCashOutReturn Minimum terminal tokens to accept from the cash-out (slippage protection). Pass 0 to use
-    /// the hook's default 3% tolerance derived from the current cash-out rate.
-    function deployPool(uint256 projectId, uint256 minCashOutReturn) external {
+    function deployPool(uint256 projectId) external {
         // Allow anyone to deploy if the current ruleset's weight has decayed 10x from the initial weight.
         // Otherwise, require SET_BUYBACK_POOL permission from the project owner.
         address controller = _controllerOf(projectId);
@@ -859,7 +858,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             projectId: projectId,
             projectToken: projectToken,
             terminalToken: terminalToken,
-            minCashOutReturn: minCashOutReturn,
             controller: controller,
             ruleset: ruleset
         });
@@ -1395,14 +1393,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param projectId The ID of the project.
     /// @param projectToken The project token address.
     /// @param terminalToken The terminal token address.
-    /// @param minCashOutReturn Minimum cash out return (slippage protection).
     /// @param controller The project's controller address (pre-fetched to avoid redundant lookups).
     /// @param ruleset The project's current ruleset (pre-fetched to avoid redundant lookups).
     function _deployPoolAndAddLiquidity(
         uint256 projectId,
         address projectToken,
         address terminalToken,
-        uint256 minCashOutReturn,
         address controller,
         JBRuleset memory ruleset
     )
@@ -1419,14 +1415,127 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             });
         }
 
-        // Add liquidity using the accumulated project tokens.
-        _addUniswapLiquidity({
+        // Mint a single-sided ask position from the accumulated project tokens — no funding cash-out.
+        _addSingleSidedLiquidity({
             projectId: projectId,
             projectToken: projectToken,
             terminalToken: terminalToken,
-            minCashOutReturn: minCashOutReturn,
             controller: controller,
             ruleset: ruleset
+        });
+    }
+
+    /// @notice Mint the initial LP position as a single-sided ask of the project's accumulated reserved tokens: no
+    /// funding cash-out, no terminal-token pairing. The position spans from the pool's live spot price out to the
+    /// project's issuance/cash-out corridor, so it only starts trading once buyers push the pool price into it.
+    /// @dev Assumes the pool is already initialized (the revnet norm) — `_deployPoolAndAddLiquidity` calls
+    /// `_createAndInitializePool` immediately before this, which best-effort initializes an uninitialized pool or
+    /// accepts an already-initialized one's live price.
+    /// @param projectId The ID of the project.
+    /// @param projectToken The project token address.
+    /// @param terminalToken The terminal token address.
+    /// @param controller The project's controller address (pre-fetched to avoid redundant lookups).
+    /// @param ruleset The project's current ruleset (pre-fetched to avoid redundant lookups).
+    function _addSingleSidedLiquidity(
+        uint256 projectId,
+        address projectToken,
+        address terminalToken,
+        address controller,
+        JBRuleset memory ruleset
+    )
+        internal
+    {
+        // Nothing to add if the accumulation ledger is empty.
+        uint256 projectTokenBalance = accumulatedProjectTokens[projectId];
+        if (projectTokenBalance == 0) return;
+
+        PoolKey memory key = poolKeysOf[projectId][terminalToken];
+
+        // The project's economic corridor (cash-out floor and issuance ceiling), as a sorted ascending raw tick
+        // range — the same helper the two-sided `addLiquidity` path uses.
+        (int24 corridorLower, int24 corridorUpper) = JBUniswapV4LPSplitHookMath.calculateTickBounds({
+            directory: IJBDirectory(DIRECTORY),
+            suckerRegistry: SUCKER_REGISTRY,
+            projectId: projectId,
+            terminalToken: terminalToken,
+            projectToken: projectToken,
+            controller: controller,
+            ruleset: ruleset
+        });
+
+        // Read the pool's live price directly.
+        uint160 sqrtPriceInit = _getSqrtPriceX96(key);
+        int24 spotTick = TickMath.getTickAtSqrtPrice(sqrtPriceInit);
+
+        // Which side of the pool the project token occupies determines which direction "toward the ceiling" moves
+        // in raw tick space — Uniswap's below-range/above-range single-sided rule flips with token ordering.
+        (address token0,) = _sortTokens({tokenA: projectToken, tokenB: Currency.unwrap(_toCurrency(terminalToken))});
+        bool projectIsToken0 = projectToken == token0;
+
+        int24 tickLower;
+        int24 tickUpper;
+        uint256 amount0;
+        uint256 amount1;
+
+        if (projectIsToken0) {
+            // A position entirely below the pool's spot price is 100% token0. Anchor the lower bound at (at least)
+            // the live spot so the ask never dips below the current price, and let it reach up to the corridor
+            // ceiling.
+            int24 rawLower = spotTick > corridorLower ? spotTick : corridorLower;
+            tickLower = JBLPSplitHookHelpers.alignTickToSpacingCeil({tick: rawLower, spacing: TICK_SPACING});
+            tickUpper = corridorUpper;
+            amount0 = projectTokenBalance;
+        } else {
+            // Mirror image: a position entirely above the pool's spot price is 100% token1. Anchor the upper bound
+            // at (at most) the live spot, floored at the corridor.
+            int24 rawUpper = spotTick < corridorUpper ? spotTick : corridorUpper;
+            tickUpper = JBLPSplitHookHelpers.alignTickToSpacing({tick: rawUpper, spacing: TICK_SPACING});
+            tickLower = corridorLower;
+            amount1 = projectTokenBalance;
+        }
+
+        // A spot price already at or past the corridor edge leaves no room for a single-sided ask.
+        if (tickLower >= tickUpper) revert JBUniswapV4LPSplitHook_ZeroLiquidity({amount0: amount0, amount1: amount1});
+
+        uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts({
+            sqrtPriceX96: sqrtPriceInit,
+            sqrtPriceAX96: TickMath.getSqrtPriceAtTick(tickLower),
+            sqrtPriceBX96: TickMath.getSqrtPriceAtTick(tickUpper),
+            amount0: amount0,
+            amount1: amount1
+        });
+
+        if (liquidity == 0) revert JBUniswapV4LPSplitHook_ZeroLiquidity({amount0: amount0, amount1: amount1});
+
+        // CEI: clear the ledger before the external mint call; any leftover the PositionManager doesn't consume is
+        // carried back below (never burned).
+        accumulatedProjectTokens[projectId] = 0;
+
+        uint256 projBalBefore = IERC20(projectToken).balanceOf(address(this));
+        uint256 termBalBefore = _getTerminalTokenBalance(terminalToken);
+
+        _mintPosition({
+            key: key,
+            tickLower: tickLower,
+            tickUpper: tickUpper,
+            liquidity: liquidity,
+            amount0: amount0,
+            amount1: amount1
+        });
+
+        // nextTokenId was incremented by MINT_POSITION, so (nextTokenId - 1) is the freshly minted ID.
+        tokenIdOf[projectId][terminalToken] = _nextTokenId() - 1;
+        activeTickLowerOf[projectId][terminalToken] = tickLower;
+        activeTickUpperOf[projectId][terminalToken] = tickUpper;
+
+        _carryLeftovers({
+            projectId: projectId,
+            projectToken: projectToken,
+            terminalToken: terminalToken,
+            intendedProjectAmount: projectTokenBalance,
+            intendedTerminalAmount: 0,
+            projBalBefore: projBalBefore,
+            termBalBefore: termBalBefore
         });
     }
 

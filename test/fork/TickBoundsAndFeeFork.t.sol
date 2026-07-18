@@ -186,7 +186,7 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
         );
         _accumulateTokens(projectId, address(projectToken), 100_000e18);
         vm.prank(multisig);
-        hook.deployPool(projectId, 0);
+        hook.deployPool(projectId);
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "Pool should be deployed");
         uint256 tokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         assertTrue(tokenId != 0, "Position NFT should exist");
@@ -216,7 +216,7 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
             _payProject(pid, 20 ether);
             _accumulateTokens(pid, address(pToken), 100_000e18);
             vm.prank(multisig);
-            hook.deployPool(pid, 0);
+            hook.deployPool(pid);
             assertTrue(
                 hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN),
                 string.concat("Pool not deployed for taxRate ", vm.toString(uint256(taxRates[i])))
@@ -237,7 +237,7 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
     function test_fork_feeRouting_collectAndClaim() public {
         _accumulateTokens(projectId, address(projectToken), 100_000e18);
         vm.prank(multisig);
-        hook.deployPool(projectId, 0);
+        hook.deployPool(projectId);
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "Pool should be deployed");
         PoolKey memory key = hook.poolKeyOf(projectId, JBConstants.NATIVE_TOKEN);
         SwapHelper swapHelper = new SwapHelper(V4_POOL_MANAGER);
@@ -286,7 +286,7 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
     function test_fork_feeRouting_multipleCollectionsThenClaim() public {
         _accumulateTokens(projectId, address(projectToken), 100_000e18);
         vm.prank(multisig);
-        hook.deployPool(projectId, 0);
+        hook.deployPool(projectId);
         PoolKey memory key = hook.poolKeyOf(projectId, JBConstants.NATIVE_TOKEN);
         SwapHelper swapHelper = new SwapHelper(V4_POOL_MANAGER);
         vm.prank(multisig);
@@ -325,7 +325,7 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
     function test_fork_ethPool_swapBothDirections() public {
         _accumulateTokens(projectId, address(projectToken), 100_000e18);
         vm.prank(multisig);
-        hook.deployPool(projectId, 0);
+        hook.deployPool(projectId);
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "Pool should be deployed");
         PoolKey memory key = hook.poolKeyOf(projectId, JBConstants.NATIVE_TOKEN);
         SwapHelper swapHelper = new SwapHelper(V4_POOL_MANAGER);
@@ -363,7 +363,7 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
     function test_fork_ethPool_rebalanceAfterPriceMovement() public {
         _accumulateTokens(projectId, address(projectToken), 100_000e18);
         vm.prank(multisig);
-        hook.deployPool(projectId, 0);
+        hook.deployPool(projectId);
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "Pool should be deployed");
         PoolKey memory key = hook.poolKeyOf(projectId, JBConstants.NATIVE_TOKEN);
         PoolId poolId = key.toId();
@@ -413,7 +413,7 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
         _payProject(extremeProjectId, 30 ether);
         _accumulateTokens(extremeProjectId, address(extremeToken), 100_000e18);
         vm.prank(multisig);
-        hook.deployPool(extremeProjectId, 0);
+        hook.deployPool(extremeProjectId);
         assertTrue(
             hook.isPoolDeployed(extremeProjectId, JBConstants.NATIVE_TOKEN),
             "Pool should be deployed with 95% cashOutTaxRate"

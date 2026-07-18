@@ -78,7 +78,7 @@ contract ZeroRateFork is ForkDeployHelper {
         _accumulateTokens(pid, address(pToken), 100_000e18);
         assertTrue(uint160(JBConstants.NATIVE_TOKEN) < uint160(address(pToken)), "ETH must be token0 (lower address)");
         vm.prank(multisig);
-        hook.deployPool(pid, 0);
+        hook.deployPool(pid);
         assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "Pool should deploy with 100% reserved");
         uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
         assertTrue(tokenId != 0, "Position NFT should exist");
@@ -102,7 +102,7 @@ contract ZeroRateFork is ForkDeployHelper {
         _payProject(pid, 50 ether);
         _accumulateTokens(pid, address(pToken), 100_000e18);
         vm.prank(multisig);
-        hook.deployPool(pid, 0);
+        hook.deployPool(pid);
         assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "Pool should deploy with weight=0");
         uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
         uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
@@ -123,7 +123,7 @@ contract ZeroRateFork is ForkDeployHelper {
         _accumulateTokens(pid, address(pToken), 100_000e18);
         assertTrue(uint160(JBConstants.NATIVE_TOKEN) < uint160(address(pToken)), "ETH must be token0 (lower address)");
         vm.prank(multisig);
-        try hook.deployPool(pid, 0) {
+        try hook.deployPool(pid) {
             revert("Expected NoTerminalTokenFound revert");
         } catch (bytes memory reason) {
             // Expected errors are custom selectors encoded as the first 4 bytes.

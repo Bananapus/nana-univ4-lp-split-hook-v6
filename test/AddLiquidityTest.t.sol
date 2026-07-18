@@ -281,7 +281,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         controller.setWeight(PROJECT_ID, DEFAULT_WEIGHT); // weight*10 == initialWeight → permissionless, corridor
         // stable
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         oracle.setTwapTick(_spotTick());
         _accumulateTokens(PROJECT_ID, 40e18);

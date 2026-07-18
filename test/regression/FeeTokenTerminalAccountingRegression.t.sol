@@ -147,7 +147,7 @@ contract FeeTokenTerminalAccountingRegression is LPSplitHookV4TestBase {
         vm.stopPrank();
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(feeProjectToken));
         bool terminalIsToken0 = address(feeProjectToken) < address(projectToken);

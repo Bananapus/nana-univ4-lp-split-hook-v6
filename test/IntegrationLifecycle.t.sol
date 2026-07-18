@@ -36,7 +36,7 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
 
         // Deploy pool manually (owner required)
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         // Verify pool was created (tokenId is nonzero)
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
@@ -266,9 +266,9 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
 
         // --- Deploy both pools (owner required) ---
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
         vm.prank(owner);
-        hook.deployPool(PROJECT_3, 0);
+        hook.deployPool(PROJECT_3);
 
         // --- Verify independent token IDs ---
         uint256 tokenId1 = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
@@ -339,7 +339,7 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
 
         // Deploy pool (owner required)
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         // Verify pool was created
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));

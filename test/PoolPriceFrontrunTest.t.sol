@@ -52,7 +52,7 @@ contract PoolPriceFrontrunTest is LPSplitHookV4TestBase {
         // deployPool should revert because the price is outside the tick bounds.
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -69,7 +69,7 @@ contract PoolPriceFrontrunTest is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -88,7 +88,7 @@ contract PoolPriceFrontrunTest is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -105,7 +105,7 @@ contract PoolPriceFrontrunTest is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -192,7 +192,7 @@ contract PoolPriceFrontrunTest is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -210,7 +210,7 @@ contract PoolPriceFrontrunTest is LPSplitHookV4TestBase {
         // deployPool reverts.
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         // Verify the pool is NOT marked as deployed — project can retry.
         assertFalse(

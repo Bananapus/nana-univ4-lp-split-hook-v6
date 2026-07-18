@@ -310,7 +310,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
         address randomUser = makeAddr("randomUser");
         vm.prank(randomUser);
         vm.expectRevert();
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
     }
 
     /// @notice deployPool succeeds when called by the project owner.
@@ -328,7 +328,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
 
         // Call deployPool as the project owner -- should succeed
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         // Verify pool was deployed
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));

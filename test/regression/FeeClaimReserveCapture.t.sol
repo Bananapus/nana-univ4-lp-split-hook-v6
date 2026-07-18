@@ -230,7 +230,7 @@ contract FeeClaimReserveCaptureRegression is LPSplitHookV4TestBase {
         vm.stopPrank();
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(feeProjectToken));
         bool feeTokenIsToken0 = address(feeProjectToken) < address(projectToken);
@@ -263,7 +263,7 @@ contract FeeClaimReserveCaptureRegression is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientBalance.selector);
-        hook.deployPool(PROJECT_B, 0);
+        hook.deployPool(PROJECT_B);
 
         assertEq(
             feeProjectToken.balanceOf(address(hook)),

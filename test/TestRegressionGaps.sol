@@ -252,7 +252,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         _accumulateTokensForProject(highWeightProject, 1000e18);
 
         vm.prank(owner);
-        hook.deployPool(highWeightProject, 0);
+        hook.deployPool(highWeightProject);
         assertTrue(hook.hasDeployedPool(highWeightProject), "high weight project should deploy successfully");
     }
 
@@ -275,7 +275,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
-        hook.deployPool(lowWeightProject, 0);
+        hook.deployPool(lowWeightProject);
     }
 
     // -----------------------------------------------------------------------
@@ -297,7 +297,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
-        hook.deployPool(lowWeightProject, 0);
+        hook.deployPool(lowWeightProject);
     }
 
     // -----------------------------------------------------------------------
@@ -318,7 +318,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectRevert();
-        hook.deployPool(zeroSurplusProject, 0);
+        hook.deployPool(zeroSurplusProject);
         assertEq(hook.tokenIdOf(zeroSurplusProject, address(terminalToken)), 0, "no position should be minted");
     }
 
@@ -328,6 +328,9 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
 
     /// @notice When both cashout and issuance are zero, the preexisting pool-price
     ///         guard should still fire before any zero-liquidity path is reached.
+    /// @notice With no cash-out rate and no issuance rate, `calculateTickBounds` falls back to a full [MIN, MAX]
+    /// corridor. The single-sided deploy path no longer needs a funding cash-out to size a terminal-token side, so
+    /// unlike the old two-sided model it can still mint a (fully single-sided) ask spanning that corridor.
     function test_ExtremePrice_ZeroCashOutAndZeroIssuance_FullRange() public {
         uint256 fullRangeProject = 50;
         _setupProject(fullRangeProject);
@@ -341,31 +344,33 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         _accumulateTokensForProject(fullRangeProject, 500e18);
 
         vm.prank(owner);
-        vm.expectRevert();
-        hook.deployPool(fullRangeProject, 0);
-        assertEq(hook.tokenIdOf(fullRangeProject, address(terminalToken)), 0, "no position should be minted");
+        hook.deployPool(fullRangeProject);
+
+        assertNotEq(hook.tokenIdOf(fullRangeProject, address(terminalToken)), 0, "a single-sided position should mint");
+        assertEq(terminal.cashOutCallCount(), 0, "deployPool must never call cashOutTokensOf");
     }
 
     // -----------------------------------------------------------------------
     // 11. Deploy with very high surplus (extreme cash out rate)
     // -----------------------------------------------------------------------
 
-    /// @notice With a very high quoted surplus, deployment should reject if the terminal under-delivers.
+    /// @notice A very high quoted surplus no longer affects `deployPool`: the deploy path carries no funding
+    /// cash-out (single-sided asks-only), so there is no cash-out-derived slippage floor for the terminal to
+    /// under-deliver against.
     function test_ExtremePrice_HighSurplus() public {
         uint256 highSurplusProject = 6;
         _setupProject(highSurplusProject);
 
-        // Set a very high surplus: 1e18 terminal tokens per project token cashed out
+        // Set a very high surplus: 1e18 terminal tokens per project token cashed out.
         store.setSurplus(highSurplusProject, 1e18);
 
         _accumulateTokensForProject(highSurplusProject, 500e18);
 
-        // High surplus produces an aggressive derived minimum. The mock terminal's default
-        // 50% reclaim under-delivers relative to that quote, so the slippage guard should fire.
         vm.prank(owner);
-        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientBalance.selector);
-        hook.deployPool(highSurplusProject, 0);
-        assertFalse(hook.hasDeployedPool(highSurplusProject), "high surplus project should not deploy");
+        hook.deployPool(highSurplusProject);
+
+        assertTrue(hook.hasDeployedPool(highSurplusProject), "high surplus project should still deploy");
+        assertEq(terminal.cashOutCallCount(), 0, "deployPool must never call cashOutTokensOf");
     }
 
     // -----------------------------------------------------------------------
@@ -385,7 +390,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
-        hook.deployPool(minWeightProject, 0);
+        hook.deployPool(minWeightProject);
     }
 
     // -----------------------------------------------------------------------
@@ -405,7 +410,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
-        hook.deployPool(maxReservedProject, 0);
+        hook.deployPool(maxReservedProject);
     }
 
     // -----------------------------------------------------------------------
@@ -425,7 +430,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
-        hook.deployPool(highReservedProject, 0);
+        hook.deployPool(highReservedProject);
     }
 
     // -----------------------------------------------------------------------
@@ -466,7 +471,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         _accumulateTokensForProject(dustProject, 1);
 
         // This might revert due to zero liquidity, but should not panic
-        try hook.deployPool(dustProject, 0) {
+        try hook.deployPool(dustProject) {
             // If it succeeds, verify state is consistent
             uint256 tokenId = hook.tokenIdOf(dustProject, address(terminalToken));
             assertNotEq(tokenId, 0, "Token ID should be nonzero if deploy succeeded");
@@ -491,7 +496,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         _accumulateTokensForProject(largeProject, largeAmount);
 
         vm.prank(owner);
-        hook.deployPool(largeProject, 0);
+        hook.deployPool(largeProject);
 
         uint256 tokenId = hook.tokenIdOf(largeProject, address(terminalToken));
         assertNotEq(tokenId, 0, "Pool should deploy with large token amount");

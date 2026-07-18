@@ -462,7 +462,7 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
         _accumulateFeeProjectTokens(100e18);
 
         vm.prank(owner);
-        hook.deployPool(FEE_PROJECT_ID, 0);
+        hook.deployPool(FEE_PROJECT_ID);
 
         assertEq(
             jbTokens.creditBalanceOf(address(hook), FEE_PROJECT_ID),

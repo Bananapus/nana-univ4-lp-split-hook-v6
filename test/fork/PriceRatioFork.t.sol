@@ -163,7 +163,7 @@ contract PriceRatioFork is ForkDeployHelper {
         _payProject(pid, 50 ether);
         _accumulateTokens(pid, address(pToken), 100_000e18);
         vm.prank(multisig);
-        hook.deployPool(pid, 0);
+        hook.deployPool(pid);
         uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
         uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         assertTrue(posLiq > 0, "Position should have liquidity");
@@ -196,7 +196,7 @@ contract PriceRatioFork is ForkDeployHelper {
         _payProject(pid, 50 ether);
         _accumulateTokens(pid, address(pToken), 100_000e18);
         vm.prank(multisig);
-        hook.deployPool(pid, 0);
+        hook.deployPool(pid);
         uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
         uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         assertTrue(posLiq > 0, "Position should have liquidity with 90% tax rate");
@@ -227,7 +227,7 @@ contract PriceRatioFork is ForkDeployHelper {
         _payProject(pid, 50 ether);
         _accumulateTokens(pid, address(pToken), 100_000e18);
         vm.prank(multisig);
-        hook.deployPool(pid, 0);
+        hook.deployPool(pid);
         uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
         uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         assertTrue(posLiq > 0, "Position should have liquidity with 10% tax rate");

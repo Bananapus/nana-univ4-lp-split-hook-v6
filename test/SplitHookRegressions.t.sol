@@ -300,6 +300,6 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         projectToken.mint(address(hook), 10e18);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PoolAlreadyDeployed.selector);
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
     }
 }

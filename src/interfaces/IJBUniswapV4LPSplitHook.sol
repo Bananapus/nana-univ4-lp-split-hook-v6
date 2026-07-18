@@ -96,10 +96,10 @@ interface IJBUniswapV4LPSplitHook {
     function collectAndRouteLPFees(uint256 projectId, address terminalToken) external;
 
     /// @notice Deploy a Uniswap V4 pool using accumulated project tokens.
-    /// @dev Auto-selects the terminal token with the highest ETH-denominated value across all terminals.
+    /// @dev Auto-selects the terminal token with the highest ETH-denominated value across all terminals. Mints a
+    /// single-sided ask position from the accumulated project tokens — no funding cash-out.
     /// @param projectId The Juicebox project ID.
-    /// @param minCashOutReturn Minimum terminal tokens from cash-out (slippage protection, 0 = auto 3% tolerance).
-    function deployPool(uint256 projectId, uint256 minCashOutReturn) external;
+    function deployPool(uint256 projectId) external;
 
     /// @notice Initialize per-instance config + chain-specific Uniswap V4 addresses on a clone. Callable once.
     /// @param initialFeeProjectId Project ID to receive LP fees.

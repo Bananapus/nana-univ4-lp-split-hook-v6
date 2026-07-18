@@ -33,7 +33,7 @@ contract RegressionRegressionsTest is LPSplitHookV4TestBase {
         positionManager.initializePool(key, attackerSqrtPrice);
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         bytes32 poolId = keccak256(abi.encode(key));
         assertEq(positionManager.poolSqrtPrice(poolId), attackerSqrtPrice, "hook should not accept attacker price");
@@ -68,7 +68,7 @@ contract RegressionRegressionsTest is LPSplitHookV4TestBase {
         // Outsider tries to deploy with the low-value secondTerminalToken, but the fix
         // auto-selects terminalToken (highest value) instead.
         vm.prank(user);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "deployment should succeed");
         assertGt(

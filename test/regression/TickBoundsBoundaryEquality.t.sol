@@ -106,7 +106,7 @@ contract TickBoundsBoundaryEqualityTest is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectRevert();
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
     }
 
     function test_boundaryEquality_upper_rejected() public {
@@ -122,7 +122,7 @@ contract TickBoundsBoundaryEqualityTest is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectRevert();
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
     }
 
     function test_strictlyInBand_stillAccepted() public {
@@ -139,7 +139,7 @@ contract TickBoundsBoundaryEqualityTest is LPSplitHookV4TestBase {
         positionManager.initializePool(key, inBandPrice);
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "in-band preinit still accepted post-fix");
     }
 }

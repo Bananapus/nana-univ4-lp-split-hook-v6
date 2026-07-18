@@ -273,7 +273,7 @@ contract SquatRepriceFork is ForkDeployHelper {
                 sqrtPriceUpper
             )
         );
-        hook.deployPool(pid, 0);
+        hook.deployPool(pid);
 
         // --- REPRICE: a fresh keeper/attacker performs the toward-band swap with amountOutMin=0 and a sqrtPriceLimit
         // set to a mid-band target. We choose direction so the swap moves price toward the band:
@@ -366,7 +366,7 @@ contract SquatRepriceFork is ForkDeployHelper {
 
         // --- deployPool must now SUCCEED.
         vm.prank(multisig);
-        hook.deployPool(pid, 0);
+        hook.deployPool(pid);
         assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "pool should deploy after reprice");
         uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
         assertTrue(tokenId != 0, "no LP position NFT after reprice + deploy");

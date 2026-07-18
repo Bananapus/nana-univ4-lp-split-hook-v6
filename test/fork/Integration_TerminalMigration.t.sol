@@ -90,7 +90,7 @@ contract Integration_TerminalMigration is ForkDeployHelper {
         _payProject(pid, 50 ether);
         _accumulateTokens(pid, address(pToken), 100_000e18);
         vm.prank(multisig);
-        hook.deployPool(pid, 0);
+        hook.deployPool(pid);
         assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "Pool deployed");
         uint256 initialTokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
         uint128 initialLiq = V4_POSITION_MANAGER.getPositionLiquidity(initialTokenId);

@@ -7,7 +7,6 @@ import {JBUniswapV4LPSplitHookMath} from "../src/libraries/JBUniswapV4LPSplitHoo
 import {IJBUniswapV4LPSplitHook} from "../src/interfaces/IJBUniswapV4LPSplitHook.sol";
 import {JBPermissioned} from "@bananapus/core-v6/src/abstract/JBPermissioned.sol";
 import {JBPermissionIds} from "@bananapus/permission-ids-v6/src/JBPermissionIds.sol";
-import {JBMetadataResolver} from "@bananapus/core-v6/src/libraries/JBMetadataResolver.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
 
 /// @notice Tests for JBUniswapV4LPSplitHook deployment stage behavior.
@@ -27,66 +26,39 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 100e18);
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(tokenId, 0, "tokenIdOf should be nonzero after deployPool");
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 2. deployPool — cashes out optimal fraction of accumulated tokens
+    // 2. deployPool — mints a single-sided ask from the full accumulated balance, no cash-out
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice deployPool should cash out an optimal fraction of accumulated project tokens.
-    ///         The amount is computed based on LP position geometry (typically < 50%).
-    function test_DeployPool_CashesOutOptimalFraction() public {
+    /// @notice deployPool mints a single-sided ask position from the accumulated project tokens. It never funds the
+    ///         position with a cash-out — the entire accumulated balance is offered as project-token liquidity.
+    function test_DeployPool_MintsSingleSidedAsk_NeverCashesOut() public {
         _accumulateTokens(PROJECT_ID, 100e18);
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
-        assertEq(terminal.cashOutCallCount(), 1, "cashOutTokensOf should be called once");
-        // Optimal fraction is less than or equal to 50% of accumulated
-        assertLe(terminal.lastCashOutAmount(), 50e18, "cashOut amount should be <= 50% of accumulated");
-        // Should cash out some nonzero amount (we have a positive cash-out rate)
-        assertGt(terminal.lastCashOutAmount(), 0, "cashOut amount should be > 0 with positive cash-out rate");
+        assertEq(terminal.cashOutCallCount(), 0, "deployPool must never call cashOutTokensOf");
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "the full accumulated balance should fund the ask");
     }
 
-    /// @notice Nonzero-tax cash-outs are fee-bearing in the terminal, so the hook's derived min return must be net of
-    /// the standard fee. Otherwise `deployPool` can ask the terminal to return a gross amount the terminal will
-    /// intentionally withhold from.
+    /// @notice A nonzero cash-out tax rate no longer affects `deployPool`: the deploy path carries no funding
+    /// cash-out at all (single-sided asks-only), so there is no cash-out-derived floor to net fees from.
     function test_DeployPool_NonzeroCashOutTax_NetsDerivedMinReturn() public {
         controller.setCashOutTaxRate(PROJECT_ID, 5000);
         _accumulateTokens(PROJECT_ID, 100e18);
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
-        uint256 expectedReturn = terminal.lastCashOutAmount() / 2;
-        uint256 grossMinReturn = (expectedReturn * 97) / 100;
-        uint256 netMinReturn = grossMinReturn - (grossMinReturn / 40);
-
-        assertEq(terminal.lastCashOutMinTokensReclaimed(), netMinReturn, "cash-out min should be net of fees");
-    }
-
-    /// @notice Regression: the deploy-path funding cash-out must also be forced DIRECTLY
-    ///         through the bonding curve. `deployPool` can join a pre-existing in-band pool, so the old "fresh pool has
-    ///         no AMM" assumption was unsafe — the initial cash-out could otherwise route through the buyback AMM the
-    ///         hook is about to feed. The fix removed the `forceDirectCashOut` toggle and always attaches the skip
-    ///         metadata, so deploy must now carry the same buyback "skip" key that `addLiquidity` does.
-    function test_DeployPool_ForcesDirectCashOut_ViaBuybackRegistryMetadata() public {
-        _accumulateAndDeploy(PROJECT_ID, 100e18);
-
-        // The deploy-time funding cash-out carried the buyback "skip" metadata keyed to the hook's `buybackHook`
-        // reference, forcing a direct bonding-curve cash-out (never the AMM).
-        bytes memory metadata = terminal.lastCashOutMetadata();
-        (bool exists, bytes memory data) = JBMetadataResolver.getDataFor({
-            id: JBMetadataResolver.getId({purpose: "cashOut", target: address(hook.buybackHook())}), metadata: metadata
-        });
-        assertTrue(exists, "deploy cash-out must carry force-direct metadata keyed to the buyback registry");
-        (uint256 minSwapOut, bool skip) = abi.decode(data, (uint256, bool));
-        assertEq(minSwapOut, 0, "no hook-level minimum; terminal min enforces the floor");
-        assertTrue(skip, "skip flag must be set to force the direct cash-out on deploy");
+        assertEq(terminal.cashOutCallCount(), 0, "a nonzero cash-out tax rate must not trigger a deploy cash-out");
+        assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "the single-sided position should mint");
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -98,7 +70,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 100e18);
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         assertEq(positionManager.mintCallCount(), 1, "PositionManager mint should be called once");
     }
@@ -112,7 +84,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 100e18);
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(tokenId, 0, "tokenIdOf should be nonzero after deployPool");
@@ -127,7 +99,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 100e18);
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "accumulatedProjectTokens should be 0 after deployment");
     }
@@ -146,7 +118,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         emit IJBUniswapV4LPSplitHook.ProjectDeployed(PROJECT_ID, address(terminalToken), bytes32(0), owner);
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -157,7 +129,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
     function test_DeployPool_RevertsIf_NoTokens() public {
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoTokensAccumulated.selector);
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -175,7 +147,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
 
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PoolAlreadyDeployed.selector);
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
     }
 
     /// @notice Once any pool is deployed for a project, a second deploy attempt is rejected.
@@ -190,7 +162,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
 
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PoolAlreadyDeployed.selector);
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -207,7 +179,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
 
         vm.expectPartialRevert(JBUniswapV4LPSplitHookMath.JBUniswapV4LPSplitHookMath_NoTerminalTokenFound.selector);
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -308,7 +280,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 100e18);
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         // The leftover project tokens are carried forward, not burned.
         assertEq(controller.burnCallCount(), 0, "no burn should occur on deploy");
@@ -325,7 +297,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         address permit2 = address(hook.PERMIT2());
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         assertEq(projectToken.allowance(address(hook), permit2), 0, "project token ERC20 allowance cleared");
         assertEq(terminalToken.allowance(address(hook), permit2), 0, "terminal token ERC20 allowance cleared");
@@ -416,7 +388,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
             )
         );
         vm.prank(randomUser);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -434,7 +406,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         permissions.setPermission(operator, owner, PROJECT_ID, JBPermissionIds.SET_BUYBACK_POOL, true);
 
         vm.prank(operator);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(tokenId, 0, "tokenIdOf should be nonzero after deployPool by permitted operator");

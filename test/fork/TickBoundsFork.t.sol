@@ -74,7 +74,7 @@ contract TickBoundsFork is ForkDeployHelper {
         IJBToken pToken = jbController.deployERC20For(pid, "Extreme Tick Token", "ETT", bytes32(0));
         _accumulateTokens(pid, address(pToken), 100_000e18);
         vm.prank(multisig);
-        try hook.deployPool(pid, 0) {
+        try hook.deployPool(pid) {
             assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "Pool should deploy");
             PoolKey memory key = hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN);
             (uint160 sqrtPriceX96,,,) = V4_POOL_MANAGER.getSlot0(key.toId());
@@ -100,7 +100,7 @@ contract TickBoundsFork is ForkDeployHelper {
         _payProject(pid, 50 ether);
         _accumulateTokens(pid, address(pToken), 100_000e18);
         vm.prank(multisig);
-        hook.deployPool(pid, 0);
+        hook.deployPool(pid);
         assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "Pool should deploy with low weight");
         uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
         uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
