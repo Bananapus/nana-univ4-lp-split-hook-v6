@@ -6,10 +6,10 @@
 
 ## Summary
 
-A sibling to the existing `JBUniswapV4LPSplitHook` that seeds a Uniswap V4 buyback pool from a
-project's reserved tokens **without ever cashing out**, and lets **anyone** re-range the position as
-the corridor moves. It reuses the existing corridor math, accumulation, and fee routing. Two things
-change versus the current hook:
+Changes `JBUniswapV4LPSplitHook` **in place** so it seeds a Uniswap V4 buyback pool from a project's
+reserved tokens **without ever cashing out**, and lets **anyone** re-range the position as the corridor
+moves. This REPLACES the contract's cash-out-funded two-sided design (and removes the code it depended
+on). It keeps the existing corridor math, accumulation, and fee routing. Two things change:
 
 1. **No cash-out, ever.** `deployPool` mints a single-sided position from accumulated **project tokens
    only**. The bid side is not bought with a cash-out; it accrues organically from trading.
@@ -38,10 +38,11 @@ re-range. A permissionless, guarded rebalance lets a keeper keep the position pr
 
 ## Non-goals
 
-- Not a replacement for the two-sided hook. Both ship; a project picks one when routing its reserved
-  split. The audited two-sided contract is left untouched.
 - No keeper bounty / active incentive economics (rejected during design — added extraction surface).
 - No change to the fee-routing model or the accumulation model.
+- Not preserving the cash-out-funded two-sided path — it is removed. (Consequence: PR #171's cash-out
+  floor fix becomes moot for this contract; see the plan's supersession note. This is an in-place
+  redesign requiring a redeploy.)
 
 ## Corridor (unchanged)
 
@@ -160,16 +161,15 @@ next rebalance/add. Never burned.
 
 ## Contract structure
 
-- New contract `JBUniswapV4LPSplitHookSingleSided`, a sibling of `JBUniswapV4LPSplitHook`. The existing
-  audited contract is not modified.
-- Reuse `JBUniswapV4LPSplitHookMath` (corridor/tick math) and the same interfaces
-  (`IJBSplitHook`, `IJBUniswapV4LPSplitHook`, permissions, terminal store).
-- Shared internals to lift or factor: accumulation (`processSplitWith` / `_accumulateTokens`), fee
-  routing (`collectAndRouteLPFees`, `claimFeeTokensFor`), spot-vs-TWAP guard, Permit2 helpers for the
-  **project** token side, tick-bounds derivation. The deleted surface is the funding cash-out
-  (`_fundTerminalTokenSide` and its slippage-floor logic) — this variant never calls it.
-- A new deployer `JBUniswapV4LPSplitHookSingleSidedDeployer` mirroring the existing deployer, if the
-  fixed-instance / clone pattern is retained.
+- **Edit `JBUniswapV4LPSplitHook` in place** (no sibling). The existing deployer, interface, and
+  `JBUniswapV4LPSplitHookMath` library are reused (the interface gains a couple of errors/an event).
+- Kept: accumulation (`processSplitWith` / `_accumulateTokens`), fee routing (`collectAndRouteLPFees`,
+  `claimFeeTokensFor`), spot-vs-TWAP guard, Permit2 helpers for the **project** token side, tick-bounds
+  derivation.
+- Deleted: the funding cash-out (`_fundTerminalTokenSide` and its slippage-floor logic) and every
+  dependency that becomes unused once it is gone (cash-out slippage constants, `JBFees`/`JBCashOuts`
+  usage, force-direct cash-out metadata, and — if no longer referenced — the sucker-registry wiring).
+  Verify each with grep before removing.
 
 ## Testing plan
 
