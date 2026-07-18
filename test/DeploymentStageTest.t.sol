@@ -368,27 +368,25 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 15. deployPool — reverts if caller is unauthorized
+    // 15. deployPool — fully permissionless (no owner gate)
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice deployPool reverts with JBPermissioned_Unauthorized when called by a random
-    ///         user who is not the project owner and has no SET_BUYBACK_POOL permission.
-    function test_DeployPool_RevertsIf_Unauthorized() public {
+    /// @notice deployPool is permissionless: a random caller who is neither the project owner nor a SET_BUYBACK_POOL
+    ///         delegate can seed the pool. The old weight-decay owner gate has been removed; the only gate is the
+    ///         economic spot-below-ceiling check applied inside the mint executor (a fresh seed at the corridor
+    ///         midpoint trivially passes it).
+    function test_DeployPool_Permissionless_AnyCallerCanSeed() public {
         _accumulateTokens(PROJECT_ID, 100e18);
 
         address randomUser = makeAddr("randomUser");
-
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                JBPermissioned.JBPermissioned_Unauthorized.selector,
-                owner, // account (the project owner whose permission is required)
-                randomUser, // sender (the unauthorized caller)
-                PROJECT_ID, // projectId
-                JBPermissionIds.SET_BUYBACK_POOL // permissionId
-            )
-        );
         vm.prank(randomUser);
         hook.deployPool(PROJECT_ID);
+
+        assertNotEq(
+            hook.tokenIdOf(PROJECT_ID, address(terminalToken)),
+            0,
+            "a permissionless caller must be able to seed the pool"
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────────

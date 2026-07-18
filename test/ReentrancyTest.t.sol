@@ -384,6 +384,10 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
         // 1. Deploy pool normally.
         _accumulateAndDeploy(PROJECT_ID, 1000e18);
 
+        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard and reaches
+        // the pre-burn fee-routing `pay()` that triggers the re-entry under test.
+        controller.setWeight(PROJECT_ID, 900e18);
+
         // 2. Create malicious fee terminal.
         ReentrantFeeTerminal malFeeTerminal =
             new ReentrantFeeTerminal(hook, feeProjectToken, PROJECT_ID, address(terminalToken));
