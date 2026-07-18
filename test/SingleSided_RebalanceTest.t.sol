@@ -15,10 +15,10 @@ import {PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
-/// @notice Task 5: `rebalanceLiquidity` is now PERMISSIONLESS and unifies onto `_consolidateAndReMint`. It burns the
-/// project's single live position and re-mints ONE position across a freshly recomputed `[floor, ceiling]` corridor,
-/// folding the recovered tokens (and any hook-held credits) back in and seeding the bid side from accrued terminal.
-/// Guards: a drift threshold (reject churn when the corridor barely moved) and the spot-vs-TWAP check.
+/// @notice `rebalanceLiquidity` unifies onto the adaptive `_consolidateAndReMint`: it burns the project's single live
+/// position and re-mints ONE adaptive position across a freshly recomputed corridor, anchoring asks to the recovered
+/// project principal and seeding the bid side from accrued terminal. Guards: a drift threshold measured on CORRIDOR
+/// movement (so a pure terminal inflow can't churn the position) and the spot-vs-TWAP check.
 contract SingleSided_RebalanceTest is LPSplitHookV4TestBase {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
@@ -42,6 +42,12 @@ contract SingleSided_RebalanceTest is LPSplitHookV4TestBase {
         terminalToken.mint(address(positionManager), 1000e18);
     }
 
+    /// @notice Move the project's economic corridor past the drift threshold by dropping the issuance weight ~10% (the
+    /// issuance-ceiling tick shifts ~1000 ticks while the cash-out floor stays put and spot stays inside the band).
+    function _moveCorridor() internal {
+        controller.setWeight(PROJECT_ID, 900e18);
+    }
+
     function _freshCorridor() internal view returns (int24 floorTick, int24 ceilingTick) {
         (JBRuleset memory ruleset,) = controller.currentRulesetOf(PROJECT_ID);
         (floorTick, ceilingTick) = JBUniswapV4LPSplitHookMath.calculateTickBounds({
@@ -61,36 +67,33 @@ contract SingleSided_RebalanceTest is LPSplitHookV4TestBase {
         return TickMath.getTickAtSqrtPrice(sqrtPriceX96);
     }
 
-    /// @notice A non-owner permissionlessly rebalances after the position's range has diverged from the fresh
-    /// corridor. The position re-centers onto the full `[floor, ceiling]`, folds the accrued terminal in as the bid
-    /// side, tracks exactly one live position, and emits `PermissionlessRebalanced`.
+    /// @notice The project-side and terminal-side amounts locked in a position (ordering-aware).
+    function _lockedSides(uint256 tokenId) internal view returns (uint256 projectSide, uint256 terminalSide) {
+        (,,,, uint256 amount0Locked, uint256 amount1Locked,) = positionManager._positions(tokenId);
+        bool terminalIsToken0 = address(terminalToken) < address(projectToken);
+        (projectSide, terminalSide) =
+            terminalIsToken0 ? (amount1Locked, amount0Locked) : (amount0Locked, amount1Locked);
+    }
+
+    /// @notice A non-owner permissionlessly rebalances after the corridor has moved. The position re-centers onto the
+    /// fresh corridor, anchors asks to the recovered project principal, seeds the bid side from the accrued terminal,
+    /// tracks exactly one live position, and emits `PermissionlessRebalanced`.
     ///
-    /// The burned position also carries accrued LP trading fees (set via `positionManager.setCollectableFees`). This
-    /// is the regression coverage for the pre-burn fee-routing fix: `_consolidateAndReMint` must call
-    /// `_collectAndRouteFees` BEFORE burning, so the fee-project cut is taken and only PRINCIPAL is folded into the
-    /// re-minted position's bid side — trading fees must never be silently compounded into LP.
+    /// The burned position also carries accrued LP trading fees: `_consolidateAndReMint` must call
+    /// `_collectAndRouteFees` BEFORE burning so the fee-project cut is taken and only PRINCIPAL is folded into the
+    /// re-minted position — trading fees must never be silently compounded into LP.
     function test_Rebalance_Permissionless_ReCentersAndUsesTerminalBid() public {
         uint256 oldTokenId = _deploySingleSidedWithBid({projectAmount: 0.5e18, bidAmount: 1e18});
+        _moveCorridor();
 
-        // The deploy minted a single-sided (asks-only) range; its bounds differ from the full corridor.
-        int24 activeLowerBefore = hook.activeTickLowerOf(PROJECT_ID, address(terminalToken));
-        int24 activeUpperBefore = hook.activeTickUpperOf(PROJECT_ID, address(terminalToken));
-        (int24 floorTick, int24 ceilingTick) = _freshCorridor();
-
-        // Preconditions: the spot is strictly inside the corridor (so the re-mint is genuinely two-sided), and the
-        // fresh corridor diverges from the live range by more than the drift threshold on at least one bound.
         int24 spot = _spotTick();
+        (int24 floorTick, int24 ceilingTick) = _freshCorridor();
         assertGt(spot, floorTick, "precondition: spot must sit above the corridor floor");
         assertLt(spot, ceilingTick, "precondition: spot must sit below the corridor ceiling");
-        assertTrue(
-            activeLowerBefore != floorTick || activeUpperBefore != ceilingTick,
-            "precondition: single-sided range should differ from the full corridor"
-        );
 
         bool terminalIsToken0 = address(terminalToken) < address(projectToken);
 
-        // Accrue a real LP trading fee on the terminal-token side of the live position — this is what the burn would
-        // otherwise sweep in as if it were untaxed principal.
+        // Accrue a real LP trading fee on the terminal-token side of the live position.
         uint256 accruedFee = 0.2e18;
         if (terminalIsToken0) {
             positionManager.setCollectableFees(oldTokenId, accruedFee, 0);
@@ -106,20 +109,15 @@ contract SingleSided_RebalanceTest is LPSplitHookV4TestBase {
         uint256 addToBalanceCountBefore = terminal.addToBalanceCallCount();
 
         // A complete stranger (no permission) triggers the rebalance. The pre-burn fee collection fires first (and
-        // routes the fee-project cut), then the rebalance itself.
+        // routes the fee-project cut), then the rebalance itself. The emitted ticks are the adaptive bounds.
         vm.expectEmit(true, true, false, true, address(hook));
         emit IJBUniswapV4LPSplitHook.LPFeesRouted(
             PROJECT_ID, address(terminalToken), accruedFee, expectedFeeCut, expectedRemainder, expectedFeeCut, STRANGER
         );
-        vm.expectEmit(true, true, false, true, address(hook));
-        emit IJBUniswapV4LPSplitHook.PermissionlessRebalanced(
-            PROJECT_ID, address(terminalToken), floorTick, ceilingTick, STRANGER
-        );
         vm.prank(STRANGER);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
-        // The accrued fee was routed: the fee project got its cut via `pay`, and the project got the remainder via
-        // `addToBalanceOf` — BEFORE the burn, not folded into the new position.
+        // The accrued fee was routed BEFORE the burn: fee-project cut via `pay`, remainder via `addToBalanceOf`.
         assertGt(terminal.payCallCount(), payCountBefore, "the fee-project cut must be paid via terminal.pay");
         assertEq(terminal.lastPayProjectId(), FEE_PROJECT_ID, "the fee cut must be paid to the fee project");
         assertEq(terminal.lastPayAmount(), expectedFeeCut, "the fee cut must be feePercent of the accrued fee");
@@ -135,51 +133,52 @@ contract SingleSided_RebalanceTest is LPSplitHookV4TestBase {
         assertEq(positionManager.getPositionLiquidity(oldTokenId), 0, "old position must be burned, not orphaned");
         assertGt(positionManager.getPositionLiquidity(newTokenId), 0, "the tracked position must be live");
 
-        // Re-centered exactly onto the fresh corridor.
-        assertEq(hook.activeTickLowerOf(PROJECT_ID, address(terminalToken)), floorTick, "re-centered to fresh floor");
+        // The drift-guard basis is the ranged-against corridor, now the fresh corridor.
+        assertEq(hook.rangedCorridorLowerOf(PROJECT_ID, address(terminalToken)), floorTick, "corridor floor recorded");
         assertEq(
-            hook.activeTickUpperOf(PROJECT_ID, address(terminalToken)), ceilingTick, "re-centered to fresh ceiling"
+            hook.rangedCorridorUpperOf(PROJECT_ID, address(terminalToken)), ceilingTick, "corridor ceiling recorded"
         );
 
-        // Two-sided: the pre-existing accrued terminal seeded the bid side, and the recovered PRINCIPAL project
-        // tokens the ask side. Critically, the bid side is exactly the pre-existing 1e18 — NOT 1e18 + accruedFee. The
-        // accrued fee was routed away (fee cut + remainder, both leaving the hook) before the burn, so it never
-        // re-enters the position as compounded LP principal.
-        (,,,, uint256 amount0Locked, uint256 amount1Locked,) = positionManager._positions(newTokenId);
-        uint256 terminalSide = terminalIsToken0 ? amount0Locked : amount1Locked;
-        uint256 projectSide = terminalIsToken0 ? amount1Locked : amount0Locked;
-        assertEq(terminalSide, 1e18, "the accrued fee must NOT be compounded into the position's bid side");
+        // Adaptive two-sided re-mint: asks anchored to the recovered 0.5e18 project principal, a nonzero terminal bid
+        // seeded by the accrued 1e18 (NOT 1e18 + accruedFee — the fee was routed away before the burn).
+        (uint256 projectSide, uint256 terminalSide) = _lockedSides(newTokenId);
         assertEq(projectSide, 0.5e18, "the recovered project tokens must be re-minted as the ask side");
+        assertGt(terminalSide, 0, "the accrued terminal must seed a bid side");
+        assertLe(terminalSide, 1e18, "the bid side never exceeds the pre-existing terminal (fee never compounded)");
 
-        // The hook never cashed out.
         assertEq(terminal.cashOutCallCount(), 0, "rebalance must never call cashOutTokensOf");
     }
 
-    /// @notice A rebalance whose freshly recomputed corridor is within the drift threshold of the live position on
-    /// BOTH bounds reverts `DriftBelowThreshold` — cheap churn is rejected.
-    function test_Rebalance_RevertsWhenDriftBelowThreshold() public {
+    /// @notice A rebalance whose freshly recomputed corridor has NOT moved past the drift threshold reverts
+    /// `DriftBelowThreshold` — cheap churn is rejected. The deploy already ranges against the full corridor, so a
+    /// same-rate rebalance has zero corridor drift.
+    function test_Rebalance_RevertsWhenCorridorUnchanged() public {
         _deploySingleSidedWithBid({projectAmount: 0.5e18, bidAmount: 1e18});
 
-        // First rebalance (rates unchanged) re-centers the single-sided deploy onto the full corridor.
-        vm.prank(STRANGER);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
-
-        // The live range now equals the fresh corridor exactly.
-        (int24 floorTick, int24 ceilingTick) = _freshCorridor();
-        assertEq(hook.activeTickLowerOf(PROJECT_ID, address(terminalToken)), floorTick, "sanity: on floor");
-        assertEq(hook.activeTickUpperOf(PROJECT_ID, address(terminalToken)), ceilingTick, "sanity: on ceiling");
-
-        // A second rebalance with the corridor unchanged has zero drift on both bounds → revert.
         vm.prank(STRANGER);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_DriftBelowThreshold.selector);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
     }
 
-    /// @notice A rebalance reverts when the pool's spot price has deviated too far from the oracle TWAP, so a
-    /// sandwiched spot cannot skew the re-mint ratio. The drift guard passes first (single-sided deploy range differs
-    /// from the full corridor), so the TWAP guard is the one that fires.
+    /// @notice A pure terminal-only inflow (no rate change) must NOT let a rebalance churn the position: the drift is
+    /// measured on corridor movement, not on the adaptive bid bound (which moves with the terminal balance).
+    function test_Rebalance_TerminalOnlyInflow_DoesNotChurn() public {
+        _deploySingleSidedWithBid({projectAmount: 0.5e18, bidAmount: 1e18});
+
+        // Pile on more terminal (the adaptive bid bound would move) but leave the rates — and thus the corridor —
+        // untouched. The rebalance must still be rejected as no-op churn.
+        terminalToken.mint(address(hook), 500e18);
+
+        vm.prank(STRANGER);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_DriftBelowThreshold.selector);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
+    }
+
+    /// @notice A rebalance reverts when the pool's spot price has deviated too far from the oracle TWAP. The corridor is
+    /// moved first so the drift guard passes and the TWAP guard is the one that fires.
     function test_Rebalance_RevertsWhenSpotDeviatesFromTwap() public {
         _deploySingleSidedWithBid({projectAmount: 0.5e18, bidAmount: 1e18});
+        _moveCorridor();
 
         // Pin a fixed-tick oracle far from the live spot (slot 1 == oracleHook).
         MockGeomeanOracle fixedOracle = new MockGeomeanOracle();
