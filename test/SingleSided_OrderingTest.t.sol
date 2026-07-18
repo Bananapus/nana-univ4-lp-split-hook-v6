@@ -33,7 +33,9 @@ contract SingleSided_OrderingTest is LPSplitHookV4TestBase {
             if (salt % 2 == 1) proj = new MockERC20("Proj0", "P0", 18);
             else term = new MockERC20("Term1", "T1", 18);
         }
-        assertLt(uint256(uint160(address(proj))), uint256(uint160(address(term))), "precondition: project sorts as token0");
+        assertLt(
+            uint256(uint160(address(proj))), uint256(uint160(address(term))), "precondition: project sorts as token0"
+        );
 
         controller.setWeight(PID, DEFAULT_WEIGHT);
         controller.setFirstWeight(PID, DEFAULT_FIRST_WEIGHT);
@@ -129,7 +131,8 @@ contract SingleSided_OrderingTest is LPSplitHookV4TestBase {
         });
         assertLt(corridorLower, corridorUpper, "precondition: corridor must be non-degenerate");
 
-        // Native ETH is token0, project is token1 → issuance ceiling is the LOWER tick, cash-out floor the UPPER tick.
+        // Native ETH is token0, project is token1 → issuance ceiling is the LOWER tick, cash-out floor the UPPER
+        // tick.
         int24 spotTick = corridorLower + (corridorUpper - corridorLower) / 2;
         PoolKey memory key = PoolKey({
             currency0: Currency.wrap(address(0)),

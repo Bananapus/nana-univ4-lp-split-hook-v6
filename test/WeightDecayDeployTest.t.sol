@@ -16,7 +16,8 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
         randomUser = makeAddr("randomUser");
     }
 
-    // ─── initialWeightOf snapshot (still recorded) ──────────────────────────────────────────────
+    // ─── initialWeightOf snapshot (still recorded)
+    // ──────────────────────────────────────────────
 
     /// @notice initialWeightOf is recorded on the first processSplitWith accumulation.
     function test_initialWeightOf_recordedOnFirstAccumulation() public {
@@ -35,7 +36,8 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
         assertEq(hook.initialWeightOf(PROJECT_ID), DEFAULT_WEIGHT, "should NOT overwrite initial weight");
     }
 
-    // ─── deployPool is permissionless regardless of weight ──────────────────────────────────────
+    // ─── deployPool is permissionless regardless of weight
+    // ──────────────────────────────────────
 
     /// @notice A random caller can deploy at the undecayed default weight (the old owner gate is gone).
     function test_deployPool_permissionless_atUndecayedWeight() public {
@@ -47,7 +49,8 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
         assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "random user seeds pool at any weight");
     }
 
-    /// @notice A random caller can also deploy after the weight has decayed — the behavior is identical (permissionless
+    /// @notice A random caller can also deploy after the weight has decayed — the behavior is identical
+    /// (permissionless
     /// in both cases), confirming the decay threshold no longer changes access.
     function test_deployPool_permissionless_afterDecay() public {
         _accumulateTokens(PROJECT_ID, 100e18);
@@ -76,9 +79,7 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
         terminal.addAccountingContext(
             projectB,
             JBAccountingContext({
-                token: address(terminalToken),
-                decimals: 18,
-                currency: uint32(uint160(address(terminalToken)))
+                token: address(terminalToken), decimals: 18, currency: uint32(uint160(address(terminalToken)))
             })
         );
         store.setSurplus(projectB, 0.5e18);

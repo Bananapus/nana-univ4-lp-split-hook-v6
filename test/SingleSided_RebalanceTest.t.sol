@@ -71,8 +71,7 @@ contract SingleSided_RebalanceTest is LPSplitHookV4TestBase {
     function _lockedSides(uint256 tokenId) internal view returns (uint256 projectSide, uint256 terminalSide) {
         (,,,, uint256 amount0Locked, uint256 amount1Locked,) = positionManager._positions(tokenId);
         bool terminalIsToken0 = address(terminalToken) < address(projectToken);
-        (projectSide, terminalSide) =
-            terminalIsToken0 ? (amount1Locked, amount0Locked) : (amount0Locked, amount1Locked);
+        (projectSide, terminalSide) = terminalIsToken0 ? (amount1Locked, amount0Locked) : (amount0Locked, amount1Locked);
     }
 
     /// @notice A non-owner permissionlessly rebalances after the corridor has moved. The position re-centers onto the
@@ -174,8 +173,8 @@ contract SingleSided_RebalanceTest is LPSplitHookV4TestBase {
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
     }
 
-    /// @notice A rebalance reverts when the pool's spot price has deviated too far from the oracle TWAP. The corridor is
-    /// moved first so the drift guard passes and the TWAP guard is the one that fires.
+    /// @notice A rebalance reverts when the pool's spot price has deviated too far from the oracle TWAP. The corridor
+    /// is moved first so the drift guard passes and the TWAP guard is the one that fires.
     function test_Rebalance_RevertsWhenSpotDeviatesFromTwap() public {
         _deploySingleSidedWithBid({projectAmount: 0.5e18, bidAmount: 1e18});
         _moveCorridor();

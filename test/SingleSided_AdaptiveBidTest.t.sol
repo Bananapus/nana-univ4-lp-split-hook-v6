@@ -95,8 +95,7 @@ contract SingleSided_AdaptiveBidTest is LPSplitHookV4TestBase {
     function _lockedSides(uint256 tokenId) internal view returns (uint256 projectSide, uint256 terminalSide) {
         (,,,, uint256 amount0Locked, uint256 amount1Locked,) = positionManager._positions(tokenId);
         bool terminalIsToken0 = address(terminalToken) < address(projectToken);
-        (projectSide, terminalSide) =
-            terminalIsToken0 ? (amount1Locked, amount0Locked) : (amount0Locked, amount1Locked);
+        (projectSide, terminalSide) = terminalIsToken0 ? (amount1Locked, amount0Locked) : (amount0Locked, amount1Locked);
     }
 
     function _absDiff(int24 a, int24 b) internal pure returns (int24) {
@@ -137,7 +136,8 @@ contract SingleSided_AdaptiveBidTest is LPSplitHookV4TestBase {
         }
     }
 
-    // ─── T = 0: asks-only, no bid ───────────────────────────────────────────────────────────────
+    // ─── T = 0: asks-only, no bid
+    // ───────────────────────────────────────────────────────────────
 
     function test_Deploy_ZeroTerminal_AsksOnly() public {
         _prepareCorridorAndPool();
@@ -159,7 +159,8 @@ contract SingleSided_AdaptiveBidTest is LPSplitHookV4TestBase {
         }
     }
 
-    // ─── Small T: shallow bid close to spot ─────────────────────────────────────────────────────
+    // ─── Small T: shallow bid close to spot
+    // ─────────────────────────────────────────────────────
 
     function test_Deploy_SmallTerminal_ShallowBidCloseToSpot() public {
         _prepareCorridorAndPool();
@@ -182,7 +183,8 @@ contract SingleSided_AdaptiveBidTest is LPSplitHookV4TestBase {
         assertTrue(bidBoundTick != _floorEcon, "a small terminal must NOT pin the bid at the floor");
     }
 
-    // ─── Larger T: deeper bid toward the floor ──────────────────────────────────────────────────
+    // ─── Larger T: deeper bid toward the floor
+    // ──────────────────────────────────────────────────
 
     function test_Deploy_LargerTerminal_DeeperBid() public {
         _prepareCorridorAndPool();
@@ -203,7 +205,8 @@ contract SingleSided_AdaptiveBidTest is LPSplitHookV4TestBase {
         assertTrue(bidLarge != _floorEcon, "the larger (but not abundant) terminal must NOT pin at the floor");
     }
 
-    // ─── Abundant T: pinned at the floor, excess routed to the project balance ───────────────────
+    // ─── Abundant T: pinned at the floor, excess routed to the project balance
+    // ───────────────────
 
     function test_Deploy_AbundantTerminal_PinnedAtFloor_ExcessRouted() public {
         _prepareCorridorAndPool();
@@ -228,7 +231,8 @@ contract SingleSided_AdaptiveBidTest is LPSplitHookV4TestBase {
         assertGt(terminalHeld - terminalSide, 0, "a non-zero excess must have been routed");
     }
 
-    // ─── Asks are NEVER starved, across the whole terminal-size spectrum ─────────────────────────
+    // ─── Asks are NEVER starved, across the whole terminal-size spectrum
+    // ─────────────────────────
 
     function test_Deploy_AsksAlwaysFullyDeployed_AcrossTerminalSizes() public {
         _prepareCorridorAndPool();

@@ -116,10 +116,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     error JBUniswapV4LPSplitHook_DriftBelowThreshold(
         int24 currentTickLower, int24 currentTickUpper, int24 newTickLower, int24 newTickUpper
     );
-    /// @notice Thrown when a seed/extend (deploy or add) — or a rebalance — is attempted while the pool's live spot has
+    /// @notice Thrown when a seed/extend (deploy or add) — or a rebalance — is attempted while the pool's live spot
+    /// has
     /// already reached or passed the project's issuance-price (ceiling) tick, so there is no live corridor below the
-    /// ceiling for asks to fill and the adaptive ask range would be empty/inverted. Only seed/extend when asks below the
-    /// ceiling are fillable.
+    /// ceiling for asks to fill and the adaptive ask range would be empty/inverted. Only seed/extend when asks below
+    /// the ceiling are fillable.
     error JBUniswapV4LPSplitHook_SpotAboveCeilingAtSeed(int24 spotTick, int24 ceilingTick);
     /// @notice Thrown when pool deployment is attempted for a project that already has a deployed pool.
     error JBUniswapV4LPSplitHook_PoolAlreadyDeployed(uint256 projectId, address terminalToken, uint256 tokenId);
@@ -312,7 +313,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @dev Distinct from `activeTickLowerOf`: the active position's bounds include the ADAPTIVE bid bound (which moves
     /// with the hook's terminal balance, not real economic drift), whereas this records the economic corridor floor at
     /// mint time. `rebalanceLiquidity`'s drift guard compares the freshly recomputed corridor against these stored
-    /// corridor bounds — not against the adaptive bounds — so a terminal-only inflow can never trigger churn while a
+    /// corridor bounds — not against the adaptive bounds — so a terminal-only inflow can never trigger churn while
+    /// a
     /// genuine issuance-decay/surplus move can.
     /// @custom:param projectId The ID of the project.
     /// @custom:param terminalToken The terminal token paired with the project's token in the deployed pool.
@@ -1368,7 +1370,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// which the terminal balance exactly fills the leg at that same liquidity; if the terminal is so abundant that the
     /// solved bound would fall past the floor, the bound is pinned at the floor and `bidAmountForMint < terminalAmount`
     /// (the excess is routed to the project balance by the caller as a leftover, never stranded).
-    /// @dev Branches on token ordering — Uniswap's below-range/above-range single-sided rule flips with which currency
+    /// @dev Branches on token ordering — Uniswap's below-range/above-range single-sided rule flips with which
+    /// currency
     /// the project token is, so the ask leg is ABOVE spot when the project is token0 and BELOW spot when it is token1.
     /// The caller MUST have already rejected a spot at/past the issuance ceiling (`_requireSpotBelowCeiling`), which
     /// guarantees a non-empty ask leg here.
@@ -1418,7 +1421,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 });
 
             if (terminalAmount >= maxBid) {
-                // Terminal is abundant: pin the bid bound at the floor; only `maxBid` is paired, the rest is a leftover.
+                // Terminal is abundant: pin the bid bound at the floor; only `maxBid` is paired, the rest is a
+                // leftover.
                 tickLower = floorTick;
                 bidAmountForMint = maxBid;
             } else {
@@ -1457,7 +1461,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 });
 
             if (terminalAmount >= maxBid) {
-                // Terminal is abundant: pin the bid bound at the floor; only `maxBid` is paired, the rest is a leftover.
+                // Terminal is abundant: pin the bid bound at the floor; only `maxBid` is paired, the rest is a
+                // leftover.
                 tickUpper = floorTick;
                 bidAmountForMint = maxBid;
             } else {
@@ -1580,7 +1585,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint160 sqrtPriceX96 = _getSqrtPriceX96(key);
         int24 spotTick = TickMath.getTickAtSqrtPrice(sqrtPriceX96);
         _requireSpotBelowCeiling({
-            projectIsToken0: projectIsToken0, corridorLower: corridorLower, corridorUpper: corridorUpper, spotTick: spotTick
+            projectIsToken0: projectIsToken0,
+            corridorLower: corridorLower,
+            corridorUpper: corridorUpper,
+            spotTick: spotTick
         });
 
         // Compute the adaptive position: asks anchored to the full project balance up to the ceiling, bid bound solved
