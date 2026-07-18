@@ -27,6 +27,11 @@ contract RebalanceTest is LPSplitHookV4TestBase {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
         poolTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
 
+        // Move the economic corridor (drop issuance ~10%) so every rebalance below clears its corridor-drift guard.
+        // The deploy above ranges the position against the weight-1000 corridor; dropping the weight to 900 shifts the
+        // issuance-ceiling tick well past the drift threshold while the cash-out floor and live spot stay put.
+        controller.setWeight(PROJECT_ID, 900e18);
+
         // Ensure PositionManager has tokens so that collect can transfer them to the hook
         // after decreaseLiquidity makes them collectable
         projectToken.mint(address(positionManager), 50e18);
@@ -161,17 +166,21 @@ contract RebalanceTest is LPSplitHookV4TestBase {
     }
 
     // -----------------------------------------------------------------------
-    // 8. rebalanceLiquidity -- requires authorization
+    // 8. rebalanceLiquidity -- permissionless
     // -----------------------------------------------------------------------
 
-    /// @notice rebalanceLiquidity requires SET_BUYBACK_POOL permission. A random user
-    ///         without permission should be rejected.
-    function test_Rebalance_RequiresAuthorization() public {
-        address randomUser = makeAddr("randomRebalancer");
+    /// @notice rebalanceLiquidity is permissionless: with the corridor moved past the drift threshold (see setUp) and
+    ///         the spot near the TWAP, a random user with no permission can re-center the position.
+    function test_Rebalance_Permissionless_AnyCallerCanRebalance() public {
+        uint256 oldTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
 
+        address randomUser = makeAddr("randomRebalancer");
         vm.prank(randomUser);
-        vm.expectRevert();
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
+
+        assertNotEq(
+            hook.tokenIdOf(PROJECT_ID, address(terminalToken)), oldTokenId, "a permissionless caller can rebalance"
+        );
     }
 
     // -----------------------------------------------------------------------
