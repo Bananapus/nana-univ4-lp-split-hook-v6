@@ -28,6 +28,7 @@ import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionMa
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
@@ -156,6 +157,12 @@ contract PriceRatioFork is ForkDeployHelper {
         });
     }
 
+    /// @notice `deployPool` mints a single-sided (asks-only) position: it holds zero terminal token until a real
+    /// buy pushes spot into the ask band and leaves terminal token behind as principal. So the organic order is
+    /// BUY-then-SELL, not sell-then-buy — a sell attempted first would find zero terminal token in range. Size the
+    /// buy off the seed position's own tick bounds (90% of the cost to fully cross the thin ask band), mirroring
+    /// `Integration_SingleSidedRevnet`, so it lands spot just inside the band instead of rocketing to the
+    /// tick-space extreme (there is no interposing liquidity beyond this single position).
     function test_fork_m45_balancedLP_swapsBothDirections() public {
         uint256 pid = _launchProject({cashOutTaxRate: 5000, weight: 1_000_000e18});
         vm.prank(multisig);
@@ -171,22 +178,19 @@ contract PriceRatioFork is ForkDeployHelper {
         PoolKey memory key = hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN);
         PriceRatioSwapHelper swapHelper = new PriceRatioSwapHelper(V4_POOL_MANAGER);
         bool projIsToken0 = Currency.unwrap(key.currency0) == address(pToken);
-        vm.prank(multisig);
-        jbController.mintTokensOf({
-            projectId: pid, tokenCount: 10_000e18, beneficiary: address(this), memo: "", useReservedPercent: false
-        });
-        IERC20(address(pToken)).approve(address(swapHelper), type(uint256).max);
-        uint256 ethBefore = address(this).balance;
-        swapHelper.swap(key, projIsToken0, -int256(5000e18));
-        uint256 ethReceived = address(this).balance - ethBefore;
-        assertTrue(ethReceived > 0, "Should receive ETH when selling project tokens");
-        emit log_named_uint("  ETH received from selling 5k project tokens", ethReceived);
+        uint256 buyAmountIn = _crossingBuyAmount(hook, pid, posLiq);
+        vm.deal(address(this), buyAmountIn + 1000 ether);
         uint256 projBefore = IERC20(address(pToken)).balanceOf(address(this));
-        vm.deal(address(this), 1000 ether);
-        swapHelper.swap{value: projIsToken0 ? 0 : 1 ether}(key, !projIsToken0, -int256(1 ether));
+        swapHelper.swap{value: projIsToken0 ? 0 : buyAmountIn}(key, !projIsToken0, -int256(buyAmountIn));
         uint256 projReceived = IERC20(address(pToken)).balanceOf(address(this)) - projBefore;
         assertTrue(projReceived > 0, "Should receive project tokens when buying with ETH");
-        emit log_named_uint("  Project tokens received from 1 ETH", projReceived);
+        emit log_named_uint("  Project tokens received from buy", projReceived);
+        IERC20(address(pToken)).approve(address(swapHelper), type(uint256).max);
+        uint256 ethBefore = address(this).balance;
+        swapHelper.swap(key, projIsToken0, -int256(projReceived / 2));
+        uint256 ethReceived = address(this).balance - ethBefore;
+        assertTrue(ethReceived > 0, "Should receive ETH when selling project tokens");
+        emit log_named_uint("  ETH received from selling project tokens", ethReceived);
     }
 
     function test_fork_m45_highTaxRate_swapsBothDirections() public {
@@ -204,20 +208,16 @@ contract PriceRatioFork is ForkDeployHelper {
         PoolKey memory key = hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN);
         PriceRatioSwapHelper swapHelper = new PriceRatioSwapHelper(V4_POOL_MANAGER);
         bool projIsToken0 = Currency.unwrap(key.currency0) == address(pToken);
-        vm.prank(multisig);
-        jbController.mintTokensOf({
-            projectId: pid, tokenCount: 10_000e18, beneficiary: address(this), memo: "", useReservedPercent: false
-        });
+        uint256 buyAmountIn = _crossingBuyAmount(hook, pid, posLiq);
+        vm.deal(address(this), buyAmountIn + 1000 ether);
+        uint256 projBefore = IERC20(address(pToken)).balanceOf(address(this));
+        swapHelper.swap{value: projIsToken0 ? 0 : buyAmountIn}(key, !projIsToken0, -int256(buyAmountIn));
+        uint256 projReceived = IERC20(address(pToken)).balanceOf(address(this)) - projBefore;
+        assertTrue(projReceived > 0, "Should receive tokens (90% tax rate)");
         IERC20(address(pToken)).approve(address(swapHelper), type(uint256).max);
         uint256 ethBefore = address(this).balance;
-        swapHelper.swap(key, projIsToken0, -int256(5000e18));
+        swapHelper.swap(key, projIsToken0, -int256(projReceived / 2));
         assertTrue(address(this).balance > ethBefore, "Should receive ETH (90% tax rate)");
-        uint256 projBefore = IERC20(address(pToken)).balanceOf(address(this));
-        vm.deal(address(this), 1000 ether);
-        swapHelper.swap{value: projIsToken0 ? 0 : 1 ether}(key, !projIsToken0, -int256(1 ether));
-        assertTrue(
-            IERC20(address(pToken)).balanceOf(address(this)) > projBefore, "Should receive tokens (90% tax rate)"
-        );
     }
 
     function test_fork_m45_lowTaxRate_swapsBothDirections() public {
@@ -235,20 +235,40 @@ contract PriceRatioFork is ForkDeployHelper {
         PoolKey memory key = hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN);
         PriceRatioSwapHelper swapHelper = new PriceRatioSwapHelper(V4_POOL_MANAGER);
         bool projIsToken0 = Currency.unwrap(key.currency0) == address(pToken);
-        vm.prank(multisig);
-        jbController.mintTokensOf({
-            projectId: pid, tokenCount: 10_000e18, beneficiary: address(this), memo: "", useReservedPercent: false
-        });
+        uint256 buyAmountIn = _crossingBuyAmount(hook, pid, posLiq);
+        vm.deal(address(this), buyAmountIn + 1000 ether);
+        uint256 projBefore = IERC20(address(pToken)).balanceOf(address(this));
+        swapHelper.swap{value: projIsToken0 ? 0 : buyAmountIn}(key, !projIsToken0, -int256(buyAmountIn));
+        uint256 projReceived = IERC20(address(pToken)).balanceOf(address(this)) - projBefore;
+        assertTrue(projReceived > 0, "Should receive tokens (10% tax rate)");
         IERC20(address(pToken)).approve(address(swapHelper), type(uint256).max);
         uint256 ethBefore = address(this).balance;
-        swapHelper.swap(key, projIsToken0, -int256(5000e18));
+        swapHelper.swap(key, projIsToken0, -int256(projReceived / 2));
         assertTrue(address(this).balance > ethBefore, "Should receive ETH (10% tax rate)");
-        uint256 projBefore = IERC20(address(pToken)).balanceOf(address(this));
-        vm.deal(address(this), 1000 ether);
-        swapHelper.swap{value: projIsToken0 ? 0 : 1 ether}(key, !projIsToken0, -int256(1 ether));
-        assertTrue(
-            IERC20(address(pToken)).balanceOf(address(this)) > projBefore, "Should receive tokens (10% tax rate)"
-        );
+    }
+
+    /// @notice 90% of the ETH cost to fully cross the project's single-sided ask band, computed off its own seed
+    /// tick bounds/liquidity — big enough to leave real terminal-token principal behind, small enough not to send
+    /// spot to the tick-space extreme (there's no interposing liquidity beyond this one position to absorb an
+    /// oversized swap).
+    function _crossingBuyAmount(
+        JBUniswapV4LPSplitHook hook_,
+        uint256 pid,
+        uint128 liquidity
+    )
+        internal
+        view
+        returns (uint256 buyAmountIn)
+    {
+        int24 tickLower = hook_.activeTickLowerOf(pid, JBConstants.NATIVE_TOKEN);
+        int24 tickUpper = hook_.activeTickUpperOf(pid, JBConstants.NATIVE_TOKEN);
+        uint256 costToFullyCross = SqrtPriceMath.getAmount0Delta({
+            sqrtPriceAX96: TickMath.getSqrtPriceAtTick(tickLower),
+            sqrtPriceBX96: TickMath.getSqrtPriceAtTick(tickUpper),
+            liquidity: liquidity,
+            roundUp: true
+        });
+        buyAmountIn = (costToFullyCross * 90) / 100;
     }
 
     function _launchProject(uint16 cashOutTaxRate, uint112 weight) internal returns (uint256 id) {
