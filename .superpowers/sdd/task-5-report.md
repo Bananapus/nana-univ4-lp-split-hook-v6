@@ -119,3 +119,114 @@ call did not revert as expected").
    terminal for another project between txs is the only edge, and the hook holds no terminal between operations.
 3. The 29 churn failures need the dedicated test-rework pass (semantics: permissionless + drift guard + consolidation);
    several old rebalance assertions (auth-required, immediate-rebalance-succeeds, per-add fresh-NFT) no longer hold.
+
+## Fix: pre-burn fee routing
+
+Follow-up to Concern #1 above, confirmed by review as Critical: `_consolidateAndReMint` burned the existing position
+and refolded ALL recovered terminal tokens (principal + accrued trading fees) into the new position, without ever
+calling `_collectAndRouteFees`. Since this hook IS the JBP6Fee fee hook (`feeProjectId`/`feePercent`), every
+add/rebalance (the default, permissionless path) silently forgave the protocol's fee cut forever — recovered fees
+became LP principal and could never be collected as fees again.
+
+### What changed
+
+In `_consolidateAndReMint` (`src/JBUniswapV4LPSplitHook.sol`), inside the `if (existingTokenId != 0)` branch, inserted
+a call to the existing `_collectAndRouteFees({projectId, projectToken, terminalToken, tokenId: existingTokenId, key})`
+BEFORE `_burnSlippageFloor`/`_burnExistingPosition`. This is the exact same internal function `collectAndRouteLPFees`
+(the public entry point) calls, and the exact sequencing the OLD pre-redesign `rebalanceLiquidity` used (confirmed via
+`git show 5e23f74:src/JBUniswapV4LPSplitHook.sol`, lines ~861-865: it called `_collectAndRouteFees` immediately after
+the TWAP guard and before snapshotting balances / calling `_burnExistingPosition`).
+
+`_collectAndRouteFees` does `DECREASE_LIQUIDITY(tokenId, 0)` + `TAKE_PAIR` (collects fees without touching principal),
+then `_routeCollectedFees` splits the two currencies: the terminal-token side goes to `_routeFeesToProject` (fee-project
+cut via `pay()`, remainder via `addToBalanceOf`); the project-token side is carried into `accumulatedProjectTokens`
+(unchanged behavior — project-token fees always ended up back in the next mint either way, pre- or post-fix, so the
+defect was specifically the terminal-token side). Only AFTER this collection does the burn fire, so `BURN_POSITION`
+now recovers PRINCIPAL only. The `projBalBeforeBurn` snapshot was moved inside the `if` block (it's only used there,
+and skipping it when there's no existing position avoids a redundant `balanceOf` call).
+
+Updated the natspec on `_consolidateAndReMint` (both the summary and `@dev`) to state fees are collected/routed before
+the burn, not folded into the recovered principal.
+
+### Test update
+
+`test/SingleSided_RebalanceTest.t.sol::test_Rebalance_Permissionless_ReCentersAndUsesTerminalBid` previously asserted
+the re-minted position's bid side equalled the full pre-funded terminal balance with no fees involved — it never
+exercised the defect at all. Updated it to:
+- Set a real accrued LP trading fee (`accruedFee = 0.2e18`) on the OLD position via
+  `positionManager.setCollectableFees(oldTokenId, ...)` (ordering-aware) + mint the fee amount to the mock
+  PositionManager so `TAKE_PAIR` can pay it out — same pattern as `test/FeeRoutingTest.t.sol`.
+- Assert BOTH `LPFeesRouted` (with `totalAmount=accruedFee`, `feeAmount=expectedFeeCut=accruedFee*FEE_PERCENT/BPS`,
+  `remainingAmount`, `feeTokensMinted=expectedFeeCut`, `caller=STRANGER`) and `PermissionlessRebalanced` are emitted,
+  in that order (the fee-collect now fires before the rebalance's own event).
+- Assert `terminal.payCallCount()` increased with `lastPayProjectId() == FEE_PROJECT_ID` and
+  `lastPayAmount() == expectedFeeCut` (the fee-project cut was actually paid), and `terminal.addToBalanceCallCount()`
+  increased (the remainder was routed to the project's own terminal balance).
+- Critically, changed the final bid-side assertion: the new position's terminal side must equal exactly the
+  pre-existing `1e18` (the pre-funded balance, unrelated to the fee) — **NOT** `1e18 + accruedFee`. This is the
+  regression check: pre-fix, the accrued fee would have been swept into the burn and compounded into the bid side
+  (`1.2e18`); post-fix it is routed away first and the bid side is untouched principal.
+
+### Test results
+
+```
+forge test --no-match-path 'test/fork/*' --match-path 'test/SingleSided_*'
+  → 3 suites, 7/7 PASS (SingleSided_DeployTest 1/1, SingleSided_AddLiquidityTest 3/3,
+    SingleSided_RebalanceTest 3/3 including the updated fee-routing assertions)
+
+forge test --no-match-path 'test/fork/*' --match-path 'test/DeploymentStageTest.t.sol'
+  → 19/19 PASS
+```
+
+`forge build --sizes`: `JBUniswapV4LPSplitHook` runtime = **20,246 bytes** (was 20,187 before this fix; +59 bytes).
+Margin under the 24,576 EIP-170 limit = **4,330 bytes**. `JBUniswapV4LPSplitHookMath` and the deployer untouched.
+
+`forge fmt --check`: clean. `forge lint` (project-wide): clean, no findings.
+
+### Collateral in out-of-scope legacy test files (expected, not a regression)
+
+Ran the full non-fork suite before/after (name-only diff, ignoring gas/error-message noise since baseline already had
+churn): baseline (HEAD, pre-fix) = 308 passed / 29 failed; post-fix = 304 passed / 33 failed. Exactly 4 tests flip
+PASS→FAIL, 0 flip FAIL→PASS:
+- `test_Rebalance_HandlesFees` (`test/RebalanceTest.t.sol`)
+- `test_M1_rebalance_routesFeesDuringBurn` (`test/SplitHookRegressions.t.sol`)
+- `test_Rebalance_FeesRoutedBeforeNewPosition` (`test/TestRegressionGaps.sol`)
+- `test_Rebalance_FullCycleWithFees` (`test/PositionManagerIntegrationTest.t.sol`)
+
+All 4 files are already named in this report's Concern #3 list of "29 churn failures [that] need the dedicated
+test-rework pass" (pre-existing, pre-redesign fixtures not yet migrated to the permissionless single-sided model).
+Root cause of the flip: each of these 4 tests calls `rebalanceLiquidity` on a single-sided (asks-only, zero
+terminal-principal) position after seeding `positionManager.setCollectableFees(...)` with a terminal-token fee, then
+asserts the mint/burn succeeds. Pre-fix, the buggy fee-compounding accidentally supplied the terminal-side liquidity
+these degenerate legacy fixtures need to avoid `JBUniswapV4LPSplitHook_ZeroLiquidity` — i.e. they only passed
+*because* of the bug this task fixes. Post-fix, the fee is correctly routed away before the mint, and these 4 tests
+now fail for the same `ZeroLiquidity` reason every sibling test in the same suites already fails for at baseline (a
+pre-existing, already-scoped-out fixture gap, not new fragility). No test flips FAIL→PASS or PASS→FAIL outside this
+set; the two explicitly protected tests
+(`ReentrancyTest::test_reentrancy_deployPool_reentryAccumulatesSafely`,
+`FeeClaimReserveCapture::test_overreportedCashOutCannotConsumeOtherProjectsFeeClaims`) still fail for their identical
+baseline reasons, bodies untouched.
+
+### Concern: reentrancy window newly exercised (bounded severity)
+
+`ReentrancyTest::test_reentrancy_rebalance_cannotReenter` was already failing at baseline (assertion failure:
+`reentrancyAttempted()` was false, because rebalance never called `pay()` at all pre-fix — direct evidence of the same
+defect). Post-fix it still fails, but via a different mechanism: `MockERC20.transferFrom` panics with an arithmetic
+underflow (0x11). Traced the cause: the malicious `ReentrantFeeTerminal`'s `pay()` callback (invoked from
+`_routeFeesToProject`, now reachable during rebalance for the first time) reenters `hook.rebalanceLiquidity` on the
+SAME project/token pair BEFORE `tokenIdOf` is updated by the outer call. Because `rebalanceLiquidity` is fully
+permissionless (a prior, out-of-scope design decision from this same branch), the reentrant call is not blocked by any
+permission check; it runs the entire consolidate-and-re-mint cycle to completion (burns the original position, mints a
+new one), consuming the exact terminal-token remainder the OUTER call still intends to route via `addToBalanceOf`
+after `pay()` returns. The outer call's `transferFrom` then underflows against the now-empty balance and the whole
+transaction reverts atomically — no state persists, no funds move. Practical severity is bounded: (a) the reentrant
+actor must control the terminal registered for `(feeProjectId, terminalToken)` in `JBDirectory` — a protocol-owned
+resource already treated as trusted elsewhere in this file ("the fee project is protocol-controlled and expected to
+maintain a functioning terminal"); (b) EVM atomicity means the worst outcome demonstrated is a clean revert (DoS of
+that one rebalance call), not fund loss or corrupted state. Flagging for the dedicated test-rework pass: consider a
+`nonReentrant` guard on `rebalanceLiquidity`/`addLiquidity`, or clearing `tokenIdOf` before the pre-burn external fee
+call, as hardening — out of scope for this fee-routing fix per the task's minimal-impact constraint, and this specific
+test was never green to begin with.
+
+Commit: this fix (src + test + report) is committed as a single commit on `feat/single-sided-permissionless-lp-hook`
+following `6e87aa6`; see `git log -1` for the hash.

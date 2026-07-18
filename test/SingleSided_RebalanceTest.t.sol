@@ -64,6 +64,11 @@ contract SingleSided_RebalanceTest is LPSplitHookV4TestBase {
     /// @notice A non-owner permissionlessly rebalances after the position's range has diverged from the fresh
     /// corridor. The position re-centers onto the full `[floor, ceiling]`, folds the accrued terminal in as the bid
     /// side, tracks exactly one live position, and emits `PermissionlessRebalanced`.
+    ///
+    /// The burned position also carries accrued LP trading fees (set via `positionManager.setCollectableFees`). This
+    /// is the regression coverage for the pre-burn fee-routing fix: `_consolidateAndReMint` must call
+    /// `_collectAndRouteFees` BEFORE burning, so the fee-project cut is taken and only PRINCIPAL is folded into the
+    /// re-minted position's bid side — trading fees must never be silently compounded into LP.
     function test_Rebalance_Permissionless_ReCentersAndUsesTerminalBid() public {
         uint256 oldTokenId = _deploySingleSidedWithBid({projectAmount: 0.5e18, bidAmount: 1e18});
 
@@ -84,13 +89,45 @@ contract SingleSided_RebalanceTest is LPSplitHookV4TestBase {
 
         bool terminalIsToken0 = address(terminalToken) < address(projectToken);
 
-        // A complete stranger (no permission) triggers the rebalance.
+        // Accrue a real LP trading fee on the terminal-token side of the live position — this is what the burn would
+        // otherwise sweep in as if it were untaxed principal.
+        uint256 accruedFee = 0.2e18;
+        if (terminalIsToken0) {
+            positionManager.setCollectableFees(oldTokenId, accruedFee, 0);
+        } else {
+            positionManager.setCollectableFees(oldTokenId, 0, accruedFee);
+        }
+        terminalToken.mint(address(positionManager), accruedFee);
+
+        uint256 expectedFeeCut = (accruedFee * FEE_PERCENT) / 10_000;
+        uint256 expectedRemainder = accruedFee - expectedFeeCut;
+
+        uint256 payCountBefore = terminal.payCallCount();
+        uint256 addToBalanceCountBefore = terminal.addToBalanceCallCount();
+
+        // A complete stranger (no permission) triggers the rebalance. The pre-burn fee collection fires first (and
+        // routes the fee-project cut), then the rebalance itself.
+        vm.expectEmit(true, true, false, true, address(hook));
+        emit IJBUniswapV4LPSplitHook.LPFeesRouted(
+            PROJECT_ID, address(terminalToken), accruedFee, expectedFeeCut, expectedRemainder, expectedFeeCut, STRANGER
+        );
         vm.expectEmit(true, true, false, true, address(hook));
         emit IJBUniswapV4LPSplitHook.PermissionlessRebalanced(
             PROJECT_ID, address(terminalToken), floorTick, ceilingTick, STRANGER
         );
         vm.prank(STRANGER);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
+
+        // The accrued fee was routed: the fee project got its cut via `pay`, and the project got the remainder via
+        // `addToBalanceOf` — BEFORE the burn, not folded into the new position.
+        assertGt(terminal.payCallCount(), payCountBefore, "the fee-project cut must be paid via terminal.pay");
+        assertEq(terminal.lastPayProjectId(), FEE_PROJECT_ID, "the fee cut must be paid to the fee project");
+        assertEq(terminal.lastPayAmount(), expectedFeeCut, "the fee cut must be feePercent of the accrued fee");
+        assertGt(
+            terminal.addToBalanceCallCount(),
+            addToBalanceCountBefore,
+            "the fee remainder must be routed to the project's terminal balance"
+        );
 
         // Exactly one live position: the old id is burned, a fresh id is tracked.
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
@@ -104,11 +141,14 @@ contract SingleSided_RebalanceTest is LPSplitHookV4TestBase {
             hook.activeTickUpperOf(PROJECT_ID, address(terminalToken)), ceilingTick, "re-centered to fresh ceiling"
         );
 
-        // Two-sided: the accrued terminal seeded the bid side, and the recovered project tokens the ask side.
+        // Two-sided: the pre-existing accrued terminal seeded the bid side, and the recovered PRINCIPAL project
+        // tokens the ask side. Critically, the bid side is exactly the pre-existing 1e18 — NOT 1e18 + accruedFee. The
+        // accrued fee was routed away (fee cut + remainder, both leaving the hook) before the burn, so it never
+        // re-enters the position as compounded LP principal.
         (,,,, uint256 amount0Locked, uint256 amount1Locked,) = positionManager._positions(newTokenId);
         uint256 terminalSide = terminalIsToken0 ? amount0Locked : amount1Locked;
         uint256 projectSide = terminalIsToken0 ? amount1Locked : amount0Locked;
-        assertEq(terminalSide, 1e18, "the accrued terminal must be used as the position's bid side");
+        assertEq(terminalSide, 1e18, "the accrued fee must NOT be compounded into the position's bid side");
         assertEq(projectSide, 0.5e18, "the recovered project tokens must be re-minted as the ask side");
 
         // The hook never cashed out.

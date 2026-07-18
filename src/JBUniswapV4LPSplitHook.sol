@@ -1379,7 +1379,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
     }
 
-    /// @notice Burn the project's live position (if any), fold in its recovered tokens, the accumulation ledger, and
+    /// @notice Burn the project's live position (if any), fold in its recovered PRINCIPAL, the accumulation ledger, and
     /// any hook-held project-token credits, and re-mint them as EXACTLY ONE position across `[tickLower, tickUpper]` at
     /// the live spot. Leftovers are carried forward (project → the accumulation ledger; terminal → the project
     /// balance), never burned. This is the single lifecycle primitive behind deploy, add, and rebalance; setting
@@ -1387,7 +1387,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @dev The mint is single-sided (project-only) when the range sits on one side of the spot, and two-sided when the
     /// range spans it — determined purely by `[tickLower, tickUpper]` vs. spot, so the caller controls single vs. two
     /// sided by choosing the range. The burn slippage floor is always contract-derived (a fraction of a pre-burn
-    /// principal read at the live spot); callers never supply burn minimums.
+    /// principal read at the live spot); callers never supply burn minimums. Before burning an existing position, any
+    /// accrued LP trading fees are collected and routed via `_collectAndRouteFees` (terminal side net of the
+    /// fee-project cut, project side carried into the ledger) so the burn recovers only principal — fees are never
+    /// re-folded into LP as if they were untaxed principal.
     /// @param projectId The ID of the project.
     /// @param projectToken The project token address.
     /// @param terminalToken The terminal token address.
@@ -1409,12 +1412,24 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // Fold hook-held project-token credits into transferable ERC-20 so they are included in the mint, not stranded.
         uint256 claimedCredits = _claimHookCreditsFor({projectId: projectId, controller: controller});
 
-        // Burn the live position (if any), recovering both its tokens with a contract-derived slippage floor. Snapshot
-        // the project balance AFTER claiming credits so the recovered-delta excludes them (counted separately below).
+        // Burn the live position (if any), recovering only its PRINCIPAL with a contract-derived slippage floor.
+        // Snapshot the project balance AFTER claiming credits so the recovered-delta excludes them (counted
+        // separately below).
         uint256 existingTokenId = tokenIdOf[projectId][terminalToken];
-        uint256 projBalBeforeBurn = IERC20(projectToken).balanceOf(address(this));
         uint256 recoveredProject;
         if (existingTokenId != 0) {
+            // Route accrued LP trading fees to the project (net of the fee-project cut) BEFORE burning the position.
+            // Otherwise the burn's TAKE_PAIR would sweep the fees in alongside the principal, and this re-mint would
+            // silently compound them into LP — permanently forgoing the fee-project's cut on every add/rebalance.
+            _collectAndRouteFees({
+                projectId: projectId,
+                projectToken: projectToken,
+                terminalToken: terminalToken,
+                tokenId: existingTokenId,
+                key: key
+            });
+
+            uint256 projBalBeforeBurn = IERC20(projectToken).balanceOf(address(this));
             (uint128 min0, uint128 min1) = _burnSlippageFloor({
                 tokenId: existingTokenId,
                 tickLower: activeTickLowerOf[projectId][terminalToken],
