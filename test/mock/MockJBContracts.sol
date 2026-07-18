@@ -488,6 +488,10 @@ contract MockJBMultiTerminal {
 
         if (useCashOutReturnOverride) {
             reclaimAmount = cashOutReturnAmount;
+        } else if (storeAddress != address(0) && MockJBTerminalStore(storeAddress).taxedCurveEnabled(projectId)) {
+            // Model the ACTUAL cash-out with the exact same convex bonding curve the rate/expected-return previews
+            // read, so a nonzero-tax curve is consistent between what the floor is derived from and what is returned.
+            reclaimAmount = MockJBTerminalStore(storeAddress).currentTotalReclaimableSurplusOf(projectId, cashOutCount, 0, 0);
         } else {
             reclaimAmount = cashOutCount / 2; // Default: 50% reclaim
         }
@@ -605,12 +609,26 @@ contract MockJBTerminalStore {
 
     bool public useProvidedCashOutInputs;
 
+    // Optional convex (nonzero cash-out tax) bonding-curve model. When enabled for a project, reclaim previews use
+    // the real JBCashOuts curve instead of the default linear `surplus * cashOutCount / 1e18` approximation, so the
+    // per-1e18 marginal rate no longer linearly extrapolates to arbitrary cash-out amounts.
+    mapping(uint256 => bool) public taxedCurveEnabled;
+    mapping(uint256 => uint256) public taxedCurveSupply;
+    mapping(uint256 => uint256) public taxedCurveTaxRate;
+
     function setUseProvidedCashOutInputs(bool value) external {
         useProvidedCashOutInputs = value;
     }
 
     function setSurplus(uint256 projectId, uint256 surplus) external {
         surplusPerToken[projectId] = surplus;
+    }
+
+    function setTaxedCashOutCurve(uint256 projectId, uint256 surplus, uint256 supply, uint256 taxRate) external {
+        surplusPerToken[projectId] = surplus;
+        taxedCurveSupply[projectId] = supply;
+        taxedCurveTaxRate[projectId] = taxRate;
+        taxedCurveEnabled[projectId] = true;
     }
 
     function setBalance(address terminal, uint256 projectId, address token, uint256 balance) external {
@@ -632,6 +650,15 @@ contract MockJBTerminalStore {
         view
         returns (uint256)
     {
+        if (taxedCurveEnabled[projectId]) {
+            return JBCashOuts.cashOutFrom({
+                surplus: surplusPerToken[projectId],
+                cashOutCount: cashOutCount,
+                totalSupply: taxedCurveSupply[projectId],
+                cashOutTaxRate: taxedCurveTaxRate[projectId]
+            });
+        }
+
         if (useProvidedCashOutInputs) {
             return JBCashOuts.cashOutFrom({
                 surplus: surplus, cashOutCount: cashOutCount, totalSupply: totalSupply, cashOutTaxRate: 0
@@ -692,6 +719,15 @@ contract MockJBTerminalStore {
         view
         returns (uint256)
     {
+        if (taxedCurveEnabled[projectId]) {
+            return JBCashOuts.cashOutFrom({
+                surplus: surplusPerToken[projectId],
+                cashOutCount: cashOutCount,
+                totalSupply: taxedCurveSupply[projectId],
+                cashOutTaxRate: taxedCurveTaxRate[projectId]
+            });
+        }
+
         uint256 surplus = surplusPerToken[projectId];
         if (surplus == 0) return 0;
         return (surplus * cashOutCount) / 1e18;
