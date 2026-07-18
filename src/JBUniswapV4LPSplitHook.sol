@@ -1578,23 +1578,27 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // The LP size and ticks derive from the current cash-out rate, so this funding cash-out must not settle below
         // that same rate floor. A caller-supplied minimum can only raise this floor; it cannot lower it.
         uint256 effectiveMinReturn = minCashOutReturn;
-        uint256 cashOutRate = JBUniswapV4LPSplitHookMath.getCashOutRate({
+        // Floor against the bonding-curve return for the EXACT `cashOutAmount`, not a linear extrapolation of the
+        // per-1e18 marginal rate. Under a non-zero cash-out tax the curve is convex, so cashing out a small amount
+        // against a small supply returns proportionally less than the 1e18 rate implies; a linearly-derived floor
+        // would over-state the return and revert this cash-out.
+        uint256 expectedReturn = JBUniswapV4LPSplitHookMath.getExpectedCashOutReturn({
             directory: IJBDirectory(DIRECTORY),
             suckerRegistry: SUCKER_REGISTRY,
             projectId: projectId,
             terminalToken: terminalToken,
+            cashOutCount: cashOutAmount,
             controller: controller,
             ruleset: ruleset
         });
-        if (cashOutRate > 0) {
-            uint256 expectedReturn = mulDiv({x: cashOutAmount, y: cashOutRate, denominator: _WAD});
+        if (expectedReturn > 0) {
             uint256 derivedMinReturn = mulDiv({
                 x: expectedReturn, y: _CASH_OUT_SLIPPAGE_NUMERATOR, denominator: _CASH_OUT_SLIPPAGE_DENOMINATOR
             });
 
-            // `getCashOutRate` is a gross bonding-curve quote, while nonzero-tax cash-outs return the post-fee amount
-            // sent to this hook. Mirror the terminal's standard fee withholding so the derived floor protects against
-            // price drift without requiring a gross amount the terminal intentionally will not return.
+            // `getExpectedCashOutReturn` is a gross bonding-curve quote, while nonzero-tax cash-outs return the
+            // post-fee amount sent to this hook. Mirror the terminal's standard fee withholding so the derived floor
+            // protects against price drift without requiring a gross amount the terminal intentionally will not return.
             if (ruleset.cashOutTaxRate() != 0) derivedMinReturn -= JBFees.standardFeeAmountFrom(derivedMinReturn);
 
             if (derivedMinReturn > effectiveMinReturn) effectiveMinReturn = derivedMinReturn;

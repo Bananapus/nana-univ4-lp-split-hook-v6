@@ -653,6 +653,93 @@ library JBUniswapV4LPSplitHookMath {
         }
     }
 
+    /// @notice Calculate the ABSOLUTE bonding-curve cash-out return for an arbitrary `cashOutCount`.
+    /// @dev Unlike `getCashOutRate` (which quotes the per-1e18 marginal rate), this queries the reclaimable surplus
+    /// for the exact `cashOutCount`. The cash-out bonding curve is convex under a non-zero cash-out tax, so linearly
+    /// extrapolating the per-1e18 rate over-states the return for a small `cashOutCount` against a small supply. Callers
+    /// that derive a slippage floor from the return of a specific cash-out amount must use this amount-accurate value.
+    /// @param directory The JBDirectory used to resolve the project's primary terminal.
+    /// @param suckerRegistry The sucker registry for cross-chain surplus/supply queries.
+    /// @param projectId The ID of the project.
+    /// @param terminalToken The terminal token address.
+    /// @param cashOutCount The exact number of project tokens to be cashed out.
+    /// @param controller The project's controller address (pre-fetched to avoid redundant lookups).
+    /// @param ruleset The project's current ruleset (pre-fetched to avoid redundant lookups).
+    /// @return expectedReturn The terminal tokens the bonding curve returns for cashing out `cashOutCount` project
+    /// tokens (gross of any cash-out fee the terminal withholds).
+    function getExpectedCashOutReturn(
+        IJBDirectory directory,
+        IJBSuckerRegistry suckerRegistry,
+        uint256 projectId,
+        address terminalToken,
+        uint256 cashOutCount,
+        address controller,
+        JBRuleset memory ruleset
+    )
+        public
+        view
+        returns (uint256 expectedReturn)
+    {
+        if (cashOutCount == 0) return 0;
+
+        // Resolve the project's primary terminal for this token.
+        IJBMultiTerminal terminal =
+            IJBMultiTerminal(_primaryTerminalOf({directory: directory, projectId: projectId, token: terminalToken}));
+
+        // Get the store for surplus queries.
+        IJBTerminalStore store = terminal.STORE();
+
+        // Read the terminal's declared currency for this token (mirrors `getCashOutRate`).
+        JBAccountingContext memory accountingContext =
+            terminal.accountingContextForTokenOf({projectId: projectId, token: terminalToken});
+        uint256 decimals = accountingContext.decimals;
+        uint256 currency = uint256(accountingContext.currency);
+
+        // If the project doesn't scope cash outs to local balances, include remote cross-chain
+        // surplus and supply in the bonding curve calculation.
+        if (!ruleset.scopeCashOutsToLocalBalances()) {
+            // Get on-chain total surplus across all terminals.
+            try store.currentTotalSurplusOf({projectId: projectId, decimals: decimals, currency: currency}) returns (
+                uint256 surplus
+            ) {
+                // Get on-chain total supply including pending reserved tokens.
+                uint256 totalSupply = IJBController(controller).totalTokenSupplyWithReservedTokensOf(projectId);
+
+                // Add remote cross-chain surplus and supply.
+                surplus += suckerRegistry.totalRemoteSurplusOf({
+                    projectId: projectId, decimals: decimals, currency: currency
+                });
+                totalSupply += suckerRegistry.remoteTotalSupplyOf(projectId);
+
+                // Apply the bonding curve to the exact `cashOutCount` with the combined on-chain + remote values.
+                if (totalSupply != 0 && cashOutCount <= totalSupply) {
+                    try store.currentReclaimableSurplusOf({
+                        projectId: projectId, cashOutCount: cashOutCount, totalSupply: totalSupply, surplus: surplus
+                    }) returns (
+                        uint256 reclaimableAmount
+                    ) {
+                        expectedReturn = reclaimableAmount;
+                    } catch {
+                        expectedReturn = 0;
+                    }
+                }
+            } catch {
+                expectedReturn = 0;
+            }
+        } else {
+            // Scoped to local balances — query the terminal store's reclaimable surplus for the exact `cashOutCount`.
+            try store.currentTotalReclaimableSurplusOf({
+                projectId: projectId, cashOutCount: cashOutCount, decimals: decimals, currency: currency
+            }) returns (
+                uint256 reclaimableAmount
+            ) {
+                expectedReturn = reclaimableAmount;
+            } catch {
+                expectedReturn = 0;
+            }
+        }
+    }
+
     /// @notice Convert cash out rate to sqrtPriceX96 (price floor).
     /// @param directory The JBDirectory used to resolve the project's primary terminal.
     /// @param suckerRegistry The sucker registry for cross-chain surplus/supply queries.

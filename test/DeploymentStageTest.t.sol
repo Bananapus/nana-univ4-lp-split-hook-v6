@@ -420,6 +420,27 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────
+    // 15b. deployPool — convex tax curve on small supply must not spuriously revert
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// @notice Regression: deployPool's funding cash-out must floor against the bonding curve's return for the
+    /// ACTUAL cash-out amount, not a linear extrapolation of the per-1e18 marginal rate. Under a non-zero cash-out
+    /// tax the curve is convex, so a small accumulation cashed out against a small supply returns proportionally
+    /// less than the 1e18 rate implies; the old linear floor over-stated the expected return and reverted deployPool.
+    function test_DeployPool_ConvexTaxCurve_SmallSupply_DoesNotSpuriouslyRevert() public {
+        store.setTaxedCashOutCurve(PROJECT_ID, 100e18, 2e18, 9000); // surplus 100e18, supply 2e18, 90% tax
+        controller.setTotalTokenSupplyWithReservedTokensOf(PROJECT_ID, 2e18);
+        controller.setCashOutTaxRate(PROJECT_ID, 9000);
+
+        _accumulateTokens(PROJECT_ID, 0.5e18);
+
+        vm.prank(owner);
+        hook.deployPool(PROJECT_ID, 0); // must NOT revert on the rate-derived slippage floor
+
+        assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "pool should deploy despite the convex curve");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
     // 16. deployPool — succeeds for permitted operator
     // ─────────────────────────────────────────────────────────────────────
 
