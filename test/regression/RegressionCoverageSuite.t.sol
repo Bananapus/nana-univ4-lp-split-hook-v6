@@ -385,6 +385,9 @@ contract FeeTokensExcludedFromRebalanceTest is LPSplitHookV4TestBase {
         uint256 claimableBefore = hook.claimableFeeTokens(PROJECT_ID);
         assertGt(claimableBefore, 0, "precondition: should have claimable fee tokens");
 
+        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
+        burnController.setWeight(PROJECT_ID, 900e18);
+
         // Step 3: rebalance the LP position.
         vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));

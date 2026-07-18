@@ -412,10 +412,16 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         assertTrue(tokenId != 0, "should hold a position NFT");
     }
 
-    function test_fork_deployPool_requiresPermissionBeforeDecay() public {
+    function test_fork_deployPool_permissionlessBeforeDecay() public {
+        // deployPool is permissionless: a random caller can deploy even before any weight decay, using the tokens
+        // accumulated in setUp.
         address randomUser = makeAddr("randomDeployer");
         vm.prank(randomUser);
-        vm.expectRevert();
         hook.deployPool(projectId);
+        assertTrue(
+            hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should be deployed by a random caller"
+        );
+        uint256 tokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+        assertTrue(tokenId != 0, "should hold a position NFT");
     }
 }

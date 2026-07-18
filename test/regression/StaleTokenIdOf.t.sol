@@ -19,9 +19,12 @@ contract StaleTokenIdOfTest is LPSplitHookV4TestBase {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
         poolTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(poolTokenId, 0, "Initial tokenId should be nonzero");
+
+        // Move the economic corridor (drop issuance ~10%) so every rebalance below clears its corridor-drift guard.
+        controller.setWeight(PROJECT_ID, 900e18);
     }
 
-    /// @notice When rebalance would yield zero liquidity, it now reverts with InsufficientLiquidity.
+    /// @notice When rebalance would yield zero liquidity, it now reverts with ZeroLiquidity.
     ///         This prevents the state inconsistency that would brick the project.
     function test_rebalance_zeroLiquidity_reverts() public {
         // Drain all tokens from the mock PositionManager so burn's TAKE_PAIR sends 0
@@ -46,7 +49,7 @@ contract StaleTokenIdOfTest is LPSplitHookV4TestBase {
 
         // Rebalance now reverts instead of zeroing tokenIdOf
         vm.prank(owner);
-        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientLiquidity.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ZeroLiquidity.selector);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         // tokenIdOf should remain unchanged (revert rolled back state)

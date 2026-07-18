@@ -113,6 +113,9 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         uint256 originalTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(originalTokenId, 0, "original tokenId should be nonzero");
 
+        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
+        controller.setWeight(PROJECT_ID, 900e18);
+
         // Mint tokens to PositionManager so decreaseLiquidity -> collect has tokens to give back
         projectToken.mint(address(positionManager), 50e18);
         terminalToken.mint(address(positionManager), 50e18);

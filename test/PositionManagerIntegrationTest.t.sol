@@ -64,6 +64,9 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         projectToken.mint(address(positionManager), 50e18);
         terminalToken.mint(address(positionManager), 50e18);
 
+        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
+        controller.setWeight(PROJECT_ID, 900e18);
+
         vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
@@ -155,6 +158,9 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
 
         uint256 payBefore = terminal.payCallCount();
         uint256 addBefore = terminal.addToBalanceCallCount();
+
+        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
+        controller.setWeight(PROJECT_ID, 900e18);
 
         vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));

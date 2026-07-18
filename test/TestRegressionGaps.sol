@@ -46,6 +46,9 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         uint256 totalProjectBefore = hookProjectBefore + pmProjectBefore;
         uint256 totalTerminalBefore = hookTerminalBefore + pmTerminalBefore;
 
+        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
+        controller.setWeight(PROJECT_ID, 900e18);
+
         vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
@@ -81,6 +84,9 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         uint256 originalTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         uint256 burnCountBefore = positionManager.burnCallCount();
         uint256 mintCountBefore = positionManager.mintCallCount();
+
+        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
+        controller.setWeight(PROJECT_ID, 900e18);
 
         vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
@@ -123,6 +129,9 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         uint256 payCountBefore = terminal.payCallCount();
         uint256 addToBalanceBefore = terminal.addToBalanceCallCount();
 
+        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
+        controller.setWeight(PROJECT_ID, 900e18);
+
         vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
@@ -158,6 +167,9 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
     /// @notice Two consecutive rebalances should both succeed and produce valid
     ///         state, ensuring no residual state corruption from the first.
     function test_Rebalance_ConsecutiveRebalancesSucceed() public {
+        // Move the economic corridor (drop issuance ~10%) so the first rebalance clears its corridor-drift guard.
+        controller.setWeight(PROJECT_ID, 900e18);
+
         // First rebalance
         vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
@@ -168,6 +180,9 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         // Ensure PM has tokens for the second rebalance
         projectToken.mint(address(positionManager), 100e18);
         terminalToken.mint(address(positionManager), 100e18);
+
+        // Move the corridor again so the second rebalance also clears the drift guard.
+        controller.setWeight(PROJECT_ID, 800e18);
 
         // Second rebalance
         vm.prank(owner);
@@ -192,6 +207,9 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
 
         uint256 payCountBefore = terminal.payCallCount();
 
+        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
+        controller.setWeight(PROJECT_ID, 900e18);
+
         vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
@@ -209,20 +227,24 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
 
     /// @notice When the PositionManager uses less than 100% of provided tokens
     ///         (simulating a price-shifted rebalance), leftover tokens should be
-    ///         properly handled (burned or returned to project balance).
+    ///         properly handled: terminal-token leftovers are returned to the project balance and project-token
+    ///         leftovers are carried into the accumulation ledger (the hook never burns).
     function test_Rebalance_PartialUsage_LeftoversHandled() public {
         // Set PM to only use 50% of provided amounts
         positionManager.setUsagePercent(5000);
 
-        uint256 burnCountBefore = controller.burnCallCount();
         uint256 addToBalanceBefore = terminal.addToBalanceCallCount();
+        uint256 accumulatedBefore = hook.accumulatedProjectTokens(PROJECT_ID);
+
+        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
+        controller.setWeight(PROJECT_ID, 900e18);
 
         vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
-        // Either leftover project tokens were burned or terminal tokens returned to balance
-        bool leftoversHandled =
-            (controller.burnCallCount() > burnCountBefore) || (terminal.addToBalanceCallCount() > addToBalanceBefore);
+        // Either terminal-token leftovers were returned to balance or project-token leftovers were accumulated.
+        bool leftoversHandled = (terminal.addToBalanceCallCount() > addToBalanceBefore)
+            || (hook.accumulatedProjectTokens(PROJECT_ID) > accumulatedBefore);
         assertTrue(leftoversHandled, "Leftover tokens should be handled after partial usage rebalance");
 
         // Position should still be valid
