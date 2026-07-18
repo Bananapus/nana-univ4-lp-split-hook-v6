@@ -59,6 +59,17 @@ interface IJBUniswapV4LPSplitHook {
         uint256 indexed projectId, address indexed terminalToken, bytes32 indexed poolId, address caller
     );
 
+    /// @notice Emitted when a project's single LP position is permissionlessly re-centered onto a freshly computed
+    /// issuance/cash-out corridor.
+    /// @param projectId The Juicebox project ID.
+    /// @param terminalToken The terminal token address.
+    /// @param tickLower The lower tick of the re-centered position.
+    /// @param tickUpper The upper tick of the re-centered position.
+    /// @param caller The address that triggered the rebalance.
+    event PermissionlessRebalanced(
+        uint256 indexed projectId, address indexed terminalToken, int24 tickLower, int24 tickUpper, address caller
+    );
+
     /// @notice Check if a pool has been deployed for a project/terminal token pair.
     /// @param projectId The Juicebox project ID.
     /// @param terminalToken The terminal token address.
@@ -99,6 +110,14 @@ interface IJBUniswapV4LPSplitHook {
     /// single-sided ask position from the accumulated project tokens — no funding cash-out.
     /// @param projectId The Juicebox project ID.
     function deployPool(uint256 projectId) external;
+
+    /// @notice Burn the project's single LP position and re-mint it, re-centered on the project's freshly recomputed
+    /// issuance/cash-out corridor. Permissionless: anyone may call it, but the fresh corridor must have drifted at
+    /// least one tick spacing from the live position on at least one bound, and the pool's spot must be near the oracle
+    /// TWAP.
+    /// @param projectId The Juicebox project ID.
+    /// @param terminalToken The terminal token paired with the project token in the deployed pool.
+    function rebalanceLiquidity(uint256 projectId, address terminalToken) external;
 
     /// @notice Initialize per-instance config + chain-specific Uniswap V4 addresses on a clone. Callable once.
     /// @param initialFeeProjectId Project ID to receive LP fees.
