@@ -28,6 +28,7 @@ import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionMa
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
@@ -322,6 +323,11 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
         emit log_named_uint("  total claimed", received);
     }
 
+    /// @notice `deployPool` mints a single-sided (asks-only) position: it holds zero terminal token until a real
+    /// buy pushes spot into the ask band and leaves terminal token behind as principal. So the organic order is
+    /// BUY-then-SELL, not sell-then-buy — a sell attempted first would find zero terminal token in range and spend
+    /// nothing. Size the buy off the seed position's own tick bounds (90% of the cost to fully cross the thin ask
+    /// band), mirroring `Integration_SingleSidedRevnet`.
     function test_fork_ethPool_swapBothDirections() public {
         _accumulateTokens(projectId, address(projectToken), 100_000e18);
         vm.prank(multisig);
@@ -329,38 +335,43 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "Pool should be deployed");
         PoolKey memory key = hook.poolKeyOf(projectId, JBConstants.NATIVE_TOKEN);
         SwapHelper swapHelper = new SwapHelper(V4_POOL_MANAGER);
-        vm.prank(multisig);
-        jbController.mintTokensOf({
-            projectId: projectId, tokenCount: 50_000e18, beneficiary: address(this), memo: "", useReservedPercent: false
-        });
         IERC20(address(projectToken)).approve(address(swapHelper), type(uint256).max);
         bool projIsToken0 = Currency.unwrap(key.currency0) == address(projectToken);
+        uint256 tokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+        uint128 seedLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
+        uint256 buyAmountIn = _crossingBuyAmount(projectId, seedLiq);
+        vm.deal(address(this), buyAmountIn + 1000 ether);
+
         uint256 ethBefore = address(this).balance;
         uint256 projBefore = IERC20(address(projectToken)).balanceOf(address(this));
-        swapHelper.swap(key, projIsToken0, -int256(10_000e18));
+        swapHelper.swap{value: projIsToken0 ? 0 : buyAmountIn}(key, !projIsToken0, -int256(buyAmountIn));
         uint256 ethAfter = address(this).balance;
         uint256 projAfter = IERC20(address(projectToken)).balanceOf(address(this));
-        assertTrue(projAfter < projBefore, "Should have spent project tokens");
-        assertTrue(ethAfter > ethBefore, "Should have received ETH from selling project tokens");
-        uint256 ethReceived = ethAfter - ethBefore;
-        emit log_named_uint("  ETH received from selling project tokens", ethReceived);
-        vm.deal(address(this), 1000 ether);
-        ethBefore = address(this).balance;
-        projBefore = IERC20(address(projectToken)).balanceOf(address(this));
-        swapHelper.swap{value: projIsToken0 ? 0 : 1 ether}(key, !projIsToken0, -int256(1 ether));
-        ethAfter = address(this).balance;
-        projAfter = IERC20(address(projectToken)).balanceOf(address(this));
         assertTrue(ethAfter < ethBefore, "Should have spent ETH");
         assertTrue(projAfter > projBefore, "Should have received project tokens from buying");
         uint256 projReceived = projAfter - projBefore;
         emit log_named_uint("  Project tokens received from buying with ETH", projReceived);
-        uint256 tokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+
+        ethBefore = address(this).balance;
+        projBefore = IERC20(address(projectToken)).balanceOf(address(this));
+        swapHelper.swap(key, projIsToken0, -int256(projReceived / 2));
+        ethAfter = address(this).balance;
+        projAfter = IERC20(address(projectToken)).balanceOf(address(this));
+        assertTrue(projAfter < projBefore, "Should have spent project tokens");
+        assertTrue(ethAfter > ethBefore, "Should have received ETH from selling project tokens");
+        uint256 ethReceived = ethAfter - ethBefore;
+        emit log_named_uint("  ETH received from selling project tokens", ethReceived);
+
         uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         assertTrue(posLiq > 0, "Pool should still have liquidity after both swaps");
         emit log_named_uint("  Remaining position liquidity", posLiq);
     }
 
-    function test_fork_ethPool_rebalanceAfterPriceMovement() public {
+    /// @notice `rebalanceLiquidity` is gated on CORRIDOR drift (a genuine issuance/cash-out rate change), not raw
+    /// spot-price movement — the swaps below move price but leave the corridor untouched, so a real ruleset weight
+    /// change is what actually clears the drift guard. The organic buy-then-sell order (see
+    /// `test_fork_ethPool_swapBothDirections`) still proves real trading works around the rebalance.
+    function test_fork_ethPool_rebalanceAfterWeightChange() public {
         _accumulateTokens(projectId, address(projectToken), 100_000e18);
         vm.prank(multisig);
         hook.deployPool(projectId);
@@ -368,28 +379,34 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
         PoolKey memory key = hook.poolKeyOf(projectId, JBConstants.NATIVE_TOKEN);
         PoolId poolId = key.toId();
         SwapHelper swapHelper = new SwapHelper(V4_POOL_MANAGER);
-        vm.prank(multisig);
-        jbController.mintTokensOf({
-            projectId: projectId, tokenCount: 50_000e18, beneficiary: address(this), memo: "", useReservedPercent: false
-        });
         IERC20(address(projectToken)).approve(address(swapHelper), type(uint256).max);
         bool projIsToken0 = Currency.unwrap(key.currency0) == address(projectToken);
-        (, int24 tickBefore,,) = V4_POOL_MANAGER.getSlot0(poolId);
-        emit log_named_int("  Tick before swaps", tickBefore);
-        swapHelper.swap(key, projIsToken0, -int256(20_000e18));
-        vm.deal(address(this), 1000 ether);
-        swapHelper.swap{value: projIsToken0 ? 0 : 2 ether}(key, !projIsToken0, -int256(2 ether));
-        swapHelper.swap(key, projIsToken0, -int256(15_000e18));
-        (, int24 tickAfterSwaps,,) = V4_POOL_MANAGER.getSlot0(poolId);
-        emit log_named_int("  Tick after swaps", tickAfterSwaps);
-        _accumulateTokens(projectId, address(projectToken), 50_000e18);
         uint256 oldTokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         uint128 oldLiq = V4_POSITION_MANAGER.getPositionLiquidity(oldTokenId);
+        (, int24 tickBefore,,) = V4_POOL_MANAGER.getSlot0(poolId);
+        emit log_named_int("  Tick before swaps", tickBefore);
+
+        // A real buy (give ETH, receive project token) pushes spot into the single-sided ask band and leaves it
+        // holding real ETH, then a real sell moves price back — organic two-way trading around the position.
+        uint256 buyAmountIn = _crossingBuyAmount(projectId, oldLiq);
+        vm.deal(address(this), buyAmountIn + 1000 ether);
+        uint256 projBeforeBuy = IERC20(address(projectToken)).balanceOf(address(this));
+        swapHelper.swap{value: projIsToken0 ? 0 : buyAmountIn}(key, !projIsToken0, -int256(buyAmountIn));
+        uint256 projReceived = IERC20(address(projectToken)).balanceOf(address(this)) - projBeforeBuy;
+        swapHelper.swap(key, projIsToken0, -int256(projReceived / 2));
+        (, int24 tickAfterSwaps,,) = V4_POOL_MANAGER.getSlot0(poolId);
+        emit log_named_int("  Tick after swaps", tickAfterSwaps);
         emit log_named_uint("  Old position liquidity", oldLiq);
+
+        // Move the economic corridor with a real ruleset weight change (a genuine rate change, not incidental
+        // trading).
+        _queueHalvedWeightRuleset(projectId, 5000);
+
         _mockOracleTwapEqualsSpot(
             hook.oracleHook(), V4_POOL_MANAGER, hook.poolKeyOf(projectId, JBConstants.NATIVE_TOKEN)
         );
-        vm.prank(multisig);
+        // Permissionless: any non-owner stranger may rebalance once the corridor has genuinely drifted.
+        vm.prank(address(0xB0BB1E));
         hook.rebalanceLiquidity({projectId: projectId, terminalToken: JBConstants.NATIVE_TOKEN});
         uint256 newTokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         assertTrue(newTokenId != oldTokenId, "Token ID should change after rebalance");
@@ -426,30 +443,84 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
         emit log_named_int("  current tick", currentTick);
         emit log_named_uint("  position liquidity", posLiq);
         SwapHelper swapHelper = new SwapHelper(V4_POOL_MANAGER);
-        vm.prank(multisig);
-        jbController.mintTokensOf({
-            projectId: extremeProjectId,
-            tokenCount: 50_000e18,
-            beneficiary: address(this),
-            memo: "",
-            useReservedPercent: false
-        });
         IERC20(address(extremeToken)).approve(address(swapHelper), type(uint256).max);
         bool projIsToken0 = Currency.unwrap(key.currency0) == address(extremeToken);
+
+        // `deployPool` mints a single-sided (asks-only) position: it holds zero terminal token until a real buy
+        // pushes spot into the ask band and leaves terminal token behind as principal. So the organic order is
+        // BUY-then-SELL — a sell attempted first would find zero terminal token in range.
+        uint256 buyAmountIn = _crossingBuyAmount(extremeProjectId, posLiq);
+        vm.deal(address(this), buyAmountIn + 1000 ether);
+        uint256 projBefore = IERC20(address(extremeToken)).balanceOf(address(this));
+        swapHelper.swap{value: projIsToken0 ? 0 : buyAmountIn}(key, !projIsToken0, -int256(buyAmountIn));
+        uint256 projAfter = IERC20(address(extremeToken)).balanceOf(address(this));
+        assertTrue(projAfter > projBefore, "Should receive project tokens from buying (95% tax rate)");
+        uint256 projReceived = projAfter - projBefore;
+        emit log_named_uint("  Tokens received from buy", projReceived);
+
         uint256 ethBefore = address(this).balance;
-        swapHelper.swap(key, projIsToken0, -int256(5000e18));
+        swapHelper.swap(key, projIsToken0, -int256(projReceived / 2));
         uint256 ethAfter = address(this).balance;
         assertTrue(ethAfter > ethBefore, "Should receive ETH from selling tokens (95% tax rate)");
         emit log_named_uint("  ETH received from sell", ethAfter - ethBefore);
-        vm.deal(address(this), 1000 ether);
-        uint256 projBefore = IERC20(address(extremeToken)).balanceOf(address(this));
-        swapHelper.swap{value: projIsToken0 ? 0 : 0.5 ether}(key, !projIsToken0, -int256(0.5 ether));
-        uint256 projAfter = IERC20(address(extremeToken)).balanceOf(address(this));
-        assertTrue(projAfter > projBefore, "Should receive project tokens from buying (95% tax rate)");
-        emit log_named_uint("  Tokens received from buy", projAfter - projBefore);
+
         uint128 finalLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         assertTrue(finalLiq > 0, "Pool should still have liquidity after extreme tax rate swaps");
         emit log_named_uint("  Final position liquidity", finalLiq);
+    }
+
+    /// @notice 90% of the ETH cost to fully cross a project's single-sided ask band, computed off its own active
+    /// tick bounds/liquidity — big enough to leave real terminal-token principal behind, small enough not to send
+    /// spot to the tick-space extreme (there's no interposing liquidity beyond this one position to absorb an
+    /// oversized swap).
+    function _crossingBuyAmount(uint256 pid, uint128 liquidity) internal view returns (uint256 buyAmountIn) {
+        int24 tickLower = hook.activeTickLowerOf(pid, JBConstants.NATIVE_TOKEN);
+        int24 tickUpper = hook.activeTickUpperOf(pid, JBConstants.NATIVE_TOKEN);
+        uint256 costToFullyCross = SqrtPriceMath.getAmount0Delta({
+            sqrtPriceAX96: TickMath.getSqrtPriceAtTick(tickLower),
+            sqrtPriceBX96: TickMath.getSqrtPriceAtTick(tickUpper),
+            liquidity: liquidity,
+            roundUp: true
+        });
+        buyAmountIn = (costToFullyCross * 90) / 100;
+    }
+
+    /// @notice Queue a real ruleset with a halved weight, effective immediately (the base ruleset's `duration` is
+    /// 0, so `JBRulesets.deriveStartFrom` starts the next cycle at `mustStartAtOrAfter` == `block.timestamp`). Used
+    /// to genuinely shift the project's issuance/cash-out corridor so `rebalanceLiquidity`'s drift guard clears.
+    function _queueHalvedWeightRuleset(uint256 pid, uint16 cashOutTaxRate) internal {
+        JBRulesetMetadata memory metadata = JBRulesetMetadata({
+            reservedPercent: 1000,
+            cashOutTaxRate: cashOutTaxRate,
+            baseCurrency: uint32(uint160(JBConstants.NATIVE_TOKEN)),
+            pausePay: false,
+            pauseCreditTransfers: false,
+            allowOwnerMinting: true,
+            allowSetCustomToken: true,
+            allowTerminalMigration: false,
+            allowSetTerminals: false,
+            allowSetController: false,
+            allowAddAccountingContext: false,
+            allowAddPriceFeed: false,
+            ownerMustSendPayouts: false,
+            holdFees: false,
+            scopeCashOutsToLocalBalances: true,
+            useDataHookForPay: false,
+            useDataHookForCashOut: false,
+            dataHook: address(0),
+            metadata: 0
+        });
+        JBRulesetConfig[] memory configs = new JBRulesetConfig[](1);
+        configs[0].mustStartAtOrAfter = 0;
+        configs[0].duration = 0;
+        configs[0].weight = 500_000e18;
+        configs[0].weightCutPercent = 0;
+        configs[0].approvalHook = IJBRulesetApprovalHook(address(0));
+        configs[0].metadata = metadata;
+        configs[0].splitGroups = new JBSplitGroup[](0);
+        configs[0].fundAccessLimitGroups = new JBFundAccessLimitGroup[](0);
+        vm.prank(multisig);
+        jbController.queueRulesetsOf({projectId: pid, rulesetConfigurations: configs, memo: ""});
     }
 
     function _launchProject(bool withOwnerMinting, uint16 cashOutTaxRate, uint112 weight)
