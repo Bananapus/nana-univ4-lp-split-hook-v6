@@ -95,21 +95,25 @@ contract SingleSided_AddLiquidityTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
-        // (a) A (second) position is tracked, minted above the lifted spot.
+        // (a) A (second) position is tracked, minted above the lifted spot; the first is BURNED, not orphaned — the
+        // consolidation invariant means the hook tracks exactly one live position.
         uint256 secondTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(secondTokenId, 0, "tokenIdOf should be nonzero after addLiquidity");
-        assertNotEq(secondTokenId, firstTokenId, "addLiquidity should mint a fresh ask, not overwrite the first");
+        assertNotEq(secondTokenId, firstTokenId, "addLiquidity should mint a fresh ask, not overwrite in place");
+        assertEq(
+            positionManager.getPositionLiquidity(firstTokenId), 0, "the first position must be burned, not orphaned"
+        );
 
-        // (b) The new position holds ZERO terminal tokens (asks-only) and the full post-deploy accumulation as its
-        // project-token side.
+        // (b) The new position holds ZERO terminal tokens (asks-only) and folds BOTH the burned first position's
+        // recovered project tokens (0.5e18) AND the post-deploy accumulation (0.3e18) into a single 0.8e18 ask.
         (,,,, uint256 amount0Locked, uint256 amount1Locked,) = positionManager._positions(secondTokenId);
         bool terminalIsToken0 = address(terminalToken) < address(projectToken);
         if (terminalIsToken0) {
             assertEq(amount0Locked, 0, "terminal-token side must be zero (asks-only)");
-            assertEq(amount1Locked, 0.3e18, "project-token side should equal the post-deploy accumulation");
+            assertEq(amount1Locked, 0.8e18, "project side should fold recovered (0.5e18) + new accumulation (0.3e18)");
         } else {
             assertEq(amount1Locked, 0, "terminal-token side must be zero (asks-only)");
-            assertEq(amount0Locked, 0.3e18, "project-token side should equal the post-deploy accumulation");
+            assertEq(amount0Locked, 0.8e18, "project side should fold recovered (0.5e18) + new accumulation (0.3e18)");
         }
 
         // (c) The new ask's range sits on the "above current spot, up to the ceiling" side of the corridor. In RAW
@@ -136,6 +140,127 @@ contract SingleSided_AddLiquidityTest is LPSplitHookV4TestBase {
             hook.accumulatedProjectTokens(PROJECT_ID),
             0,
             "no leftover expected at 100% PositionManager usage; ledger should be fully consumed"
+        );
+    }
+
+    /// @notice Initialize the pool a fifth of the way up a realistic corridor and return the pool key plus the
+    /// corridor bounds, so the fragmentation/credit tests can drive spot moves that stay strictly inside the band.
+    function _initPoolAtLowerFifth() internal returns (PoolKey memory key, int24 corridorLower, int24 corridorUpper) {
+        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
+        (JBRuleset memory ruleset,) = controller.currentRulesetOf(PROJECT_ID);
+        (corridorLower, corridorUpper) = JBUniswapV4LPSplitHookMath.calculateTickBounds({
+            directory: IJBDirectory(address(directory)),
+            suckerRegistry: IJBSuckerRegistry(address(0)),
+            projectId: PROJECT_ID,
+            terminalToken: address(terminalToken),
+            projectToken: address(projectToken),
+            controller: address(controller),
+            ruleset: ruleset
+        });
+        assertLt(corridorLower, corridorUpper, "precondition: corridor must be non-degenerate");
+
+        int24 initialTick = corridorLower + (corridorUpper - corridorLower) / 5;
+        Currency terminalCurrency = Currency.wrap(address(terminalToken));
+        Currency projectCurrency = Currency.wrap(address(projectToken));
+        (Currency currency0, Currency currency1) = terminalCurrency < projectCurrency
+            ? (terminalCurrency, projectCurrency)
+            : (projectCurrency, terminalCurrency);
+        key = PoolKey({
+            currency0: currency0,
+            currency1: currency1,
+            fee: hook.POOL_FEE(),
+            tickSpacing: hook.TICK_SPACING(),
+            hooks: hook.oracleHook()
+        });
+        positionManager.initializePool(key, TickMath.getSqrtPriceAtTick(initialTick));
+    }
+
+    /// @notice No fragmentation: after a deploy and two subsequent adds (each following a spot move), the hook tracks
+    /// EXACTLY ONE live position — the previously tracked ids are burned, not orphaned — and
+    /// `collectAndRouteLPFees`
+    /// can still collect from the tracked position. The hook never calls `cashOutTokensOf`.
+    function test_AddLiquidity_NoFragmentation_OneLivePositionAfterRepeatedAdds() public {
+        (PoolKey memory key, int24 corridorLower, int24 corridorUpper) = _initPoolAtLowerFifth();
+        int24 initialTick = corridorLower + (corridorUpper - corridorLower) / 5;
+
+        uint256 cashOutCallsBefore = terminal.cashOutCallCount();
+
+        // Deploy: mint the first ask.
+        _accumulateTokens(PROJECT_ID, 0.5e18);
+        vm.prank(owner);
+        hook.deployPool(PROJECT_ID);
+        uint256 t1 = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+
+        // Buy #1 lifts spot; more tokens accumulate; add consolidates (burns t1, mints t2).
+        int24 lift1 = initialTick + (corridorUpper - initialTick) / 3;
+        _setSpotTick(key, lift1);
+        _accumulateTokens(PROJECT_ID, 0.3e18);
+        vm.prank(owner);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
+        uint256 t2 = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+
+        // Buy #2 lifts spot again; add consolidates (burns t2, mints t3).
+        int24 lift2 = lift1 + (corridorUpper - lift1) / 3;
+        _setSpotTick(key, lift2);
+        _accumulateTokens(PROJECT_ID, 0.2e18);
+        vm.prank(owner);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
+        uint256 t3 = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+
+        // Exactly one live position: each add re-mints a distinct id; the prior ids are burned.
+        assertTrue(t1 != t2 && t2 != t3 && t1 != t3, "each consolidation should mint a distinct id");
+        assertEq(positionManager.getPositionLiquidity(t1), 0, "first position must be burned, not orphaned");
+        assertEq(positionManager.getPositionLiquidity(t2), 0, "second position must be burned, not orphaned");
+        assertGt(positionManager.getPositionLiquidity(t3), 0, "the tracked position must be live");
+
+        // The tracked position folds every accumulation (0.5 + 0.3 + 0.2 = 1.0e18) into one ask — nothing stranded.
+        (,,,, uint256 amount0Locked, uint256 amount1Locked,) = positionManager._positions(t3);
+        bool terminalIsToken0 = address(terminalToken) < address(projectToken);
+        uint256 projectSide = terminalIsToken0 ? amount1Locked : amount0Locked;
+        uint256 terminalSide = terminalIsToken0 ? amount0Locked : amount1Locked;
+        assertEq(projectSide, 1e18, "the single live position must hold the full 1.0e18 of accumulated project tokens");
+        assertEq(terminalSide, 0, "asks-only: the live position holds zero terminal tokens");
+
+        // `collectAndRouteLPFees` still collects from the tracked position (proving no value is stranded on burned
+        // ids).
+        positionManager.setCollectableFees(t3, terminalIsToken0 ? 0.01e18 : 0, terminalIsToken0 ? 0 : 0.01e18);
+        uint256 decreaseCallsBefore = positionManager.decreaseLiquidityCallCount();
+        hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
+        assertEq(
+            positionManager.decreaseLiquidityCallCount(),
+            decreaseCallsBefore + 1,
+            "collectAndRouteLPFees must collect from the live tracked position"
+        );
+
+        // The hook never cashed out across the whole lifecycle.
+        assertEq(terminal.cashOutCallCount(), cashOutCallsBefore, "no cashOutTokensOf calls during deploy/add cycle");
+    }
+
+    /// @notice Credit sweep: project-token credits held by the hook are folded into the minted position (claimed into
+    /// ERC-20 and added as principal), not silently stranded.
+    function test_Deploy_FoldsHookHeldProjectTokenCredits() public {
+        _initPoolAtLowerFifth();
+
+        // Accumulate ERC-20 reserved tokens, and separately grant the hook project-token CREDITS (as if a reserved
+        // distribution landed as credits before the project tokenized).
+        _accumulateTokens(PROJECT_ID, 0.5e18);
+        jbTokens.setCreditBalance(address(hook), PROJECT_ID, 0.2e18);
+
+        vm.prank(owner);
+        hook.deployPool(PROJECT_ID);
+
+        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        assertNotEq(tokenId, 0, "deployPool should have minted a position");
+
+        // The position folds accumulated ERC-20 (0.5e18) + claimed credits (0.2e18) = 0.7e18 into its project side.
+        (,,,, uint256 amount0Locked, uint256 amount1Locked,) = positionManager._positions(tokenId);
+        bool terminalIsToken0 = address(terminalToken) < address(projectToken);
+        uint256 projectSide = terminalIsToken0 ? amount1Locked : amount0Locked;
+        assertEq(projectSide, 0.7e18, "credits must be folded into the position, not stranded");
+
+        // The hook's credit balance was swept to zero.
+        assertEq(
+            jbTokens.creditBalanceOf(address(hook), PROJECT_ID), 0, "hook credits should be claimed into the position"
         );
     }
 }
