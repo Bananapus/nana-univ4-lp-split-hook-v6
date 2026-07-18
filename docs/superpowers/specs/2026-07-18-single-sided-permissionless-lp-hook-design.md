@@ -55,17 +55,36 @@ not from the AMM spot price:
 
 Spot never affects these bounds. It enters only through Uniswap's mint mechanics (see Rebalance).
 
-## Position shape
+## Position shape — one adaptive position with terminal-driven bid depth
 
-A **single** concentrated position, matching the current hook's shape — but seeded single-sided and
-never cash-out-funded. Its steady-state range is the full `[floor, ceiling]` corridor (smooth liquidity
-across the whole corridor); at seed it occupies only the ask sub-range above the current spot
-(`[max(spot, floor), ceiling]`), and grows to span the corridor as trading + rebalances build the bid
-side. It is always one position (not separate legs).
+Always **exactly one** position, never separate legs. Its upper bound is always the **ceiling**; its
+lower bound `X` is **adaptive**, set so the position absorbs everything the hook holds:
 
-Uniswap concentrated-liquidity fact this design leans on: a position `[Pa, Pb]` at spot `Pc` holds only
-the "ask" asset when `Pc <= Pa` (spot at/below the range's bottom), only the "bid" asset when
-`Pc >= Pb`, and a spot-determined mix in between.
+- **Asks are anchored to ALL project tokens.** The liquidity `L` is chosen so the ask leg
+  `[spot, ceiling]` deploys the hook's entire project-token balance up to the ceiling. Asks are never
+  starved by a scarce terminal balance.
+- **The lower bound `X` is a function of how much terminal the hook holds.** Solve
+  `sqrt(X) = sqrt(spot) − T/L`, so the terminal balance `T` exactly fills the bid leg `[X, spot]` at the
+  same `L`. Consequences:
+  - `T = 0` → `X = spot` → asks-only (this is the fresh-deploy case).
+  - small `T` → `X` just below spot → a thin, shallow bid.
+  - larger `T` → `X` slides deeper toward the floor.
+- **Clamp `X ≥ floor`.** Never bid below the redemption floor (such bids are economically dead — a
+  seller would cash out instead). If `T` is so abundant that `X` would fall below the floor, pin
+  `X = floor` and **route the excess terminal to the project's balance** (reuse the fee/route plumbing)
+  rather than strand it.
+
+This single adaptive range replaces the earlier "fixed `[floor, ceiling]` vs asks-only
+`[max(spot, floor), ceiling]`" choice: it deploys all project as asks AND all affordable terminal as a
+bid whose depth scales with terminal — one position, no leftover in the normal case, and a real AMM
+sell venue as soon as any terminal has accrued (on top of the always-available bonding-curve floor).
+
+Closed form uses the `LiquidityAmounts`/tick math already in the repo. Applied uniformly by the
+consolidate routine to deploy, add, and rebalance.
+
+Uniswap fact this leans on: a position `[Pa, Pb]` at spot `Pc` holds only the "ask" asset when
+`Pc <= Pa`, only the "bid" asset when `Pc >= Pb`, and a spot-determined mix in between — so anchoring
+`L` to the project (ask) side and solving `X` for the terminal (bid) side deploys both without leftover.
 
 ## deployPool — single-sided seed, no cash-out
 
@@ -98,15 +117,17 @@ as bids down toward the floor. "Spans `[floor, ceiling]`" is the rebalanced stea
 tick and mints the single-sided asks across the full `[floor, ceiling]` (spot at the bottom → all
 project tokens). This is the only case where the hook sets the price; it is uncommon for revnets.
 
-**Degenerate cases to handle:** if `P >= ceiling` (deployed so early that no decay has occurred, so the
-pre-set spot equals/exceeds the current issuance ceiling), the ask band `[P, ceiling]` is empty or
-inverted — defer (revert with a clear error / no-op) until decay opens a band, since asks at/above the
-current ceiling are dead (arbitrage mints instead). If `P` is far ABOVE `ceiling` (an adversary
-mis-initialized the pool), the seed still only ever deposits project-token asks above spot; it can never
-be tricked into funding a terminal side, and the first TWAP-guarded rebalance re-centers it.
-
-**Access:** unchanged from the current hook — owner / `SET_BUYBACK_POOL` until the issuance weight has
-decayed to <= 10% of the accumulation-time weight, then permissionless (`_requireDeployOrAddAuth`).
+**Access + economic gate (permissionless):** `deployPool` and `addLiquidity` are **fully permissionless**
+— the old owner-until-10×-weight-decay gate (`_requireDeployOrAddAuth`) is REMOVED. In its place, both
+ask-minting paths revert when the **current AMM spot ≥ the current issuance price** (`ceiling`):
+`JBUniswapV4LPSplitHook_SpotAboveCeilingAtSeed`. This is the precise economic version of the old proxy —
+at genesis `spot == issuance` (blocked), and only once the weight decays does the issuance price rise
+above the pre-set spot, opening a live corridor where asks below the ceiling are fillable. It also means
+nobody can seed/extend the pool at or above the mint price (where asks would be dead and the price could
+be griefed). The hook-initializes-at-floor fallback trivially passes (`floor < ceiling`). If an
+adversary mis-initialized the pool far above the ceiling, this guard simply blocks deploy until arbitrage
+/ decay brings spot back below issuance. `rebalanceLiquidity` keeps its own TWAP + drift guards (it
+re-ranges an existing position); it may apply the same spot-below-issuance check.
 
 ## Organic two-sided evolution (no cash-out)
 
@@ -153,8 +174,8 @@ next rebalance/add. Never burned.
 
 | Action | Current two-sided hook | This variant |
 |---|---|---|
-| `deployPool` | owner → permissionless at 10x weight decay | same |
-| `addLiquidity` | owner → permissionless at 10x weight decay | same |
+| `deployPool` | owner → permissionless at 10x weight decay | **permissionless; reverts if spot ≥ issuance price** |
+| `addLiquidity` | owner → permissionless at 10x weight decay | **permissionless; reverts if spot ≥ issuance price** |
 | `rebalanceLiquidity` | owner / `SET_BUYBACK_POOL`, always | **permissionless + TWAP + drift** |
 | `collectAndRouteLPFees` | permissionless | same |
 | `claimFeeTokensFor` | owner / `SET_BUYBACK_POOL` | same |

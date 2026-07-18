@@ -20,6 +20,7 @@ Removing the cash-out deletes the buggy `_fundTerminalTokenSide`, so **PR #171 /
 - The hook NEVER burns project tokens; leftover is carried in the accumulation ledger.
 - Reserved-split-only intake (`groupId == 1`), unchanged.
 - Non-fork tests: `forge test --no-match-path 'test/fork/*'`. Fork tests: `vm.createSelectFork("ethereum", 21_700_000)`, keyless archive RPC `RPC_ETHEREUM_MAINNET=https://eth.drpc.org`.
+- **EIP-170 final gate:** `forge build --sizes` must show `JBUniswapV4LPSplitHook` runtime <= 24,576 bytes (it deploys directly, not behind a proxy). Intermediate commits MAY exceed while the single-sided logic coexists with the not-yet-removed cash-out path; the cash-out removal frees the space. Verify `--sizes` immediately after the cash-out removal and again at the final gate. (Baseline pre-redesign: 23,589; +1,277 from single-sided logic; the removed cash-out path must net negative.)
 - Spec: `docs/superpowers/specs/2026-07-18-single-sided-permissionless-lp-hook-design.md`.
 
 ## File Structure
