@@ -31,6 +31,7 @@ import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerR
 import {IGeomeanOracle} from "@bananapus/univ4-router-v6/src/interfaces/IGeomeanOracle.sol";
 
 import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
+import {ReentrancyGuard} from "solady/src/utils/ReentrancyGuard.sol";
 
 import {IJBUniswapV4LPSplitHook} from "./interfaces/IJBUniswapV4LPSplitHook.sol";
 import {JBLPSplitHookHelpers} from "./libraries/JBLPSplitHookHelpers.sol";
@@ -61,7 +62,11 @@ import {JBUniswapV4LPSplitHookMath} from "./libraries/JBUniswapV4LPSplitHookMath
 /// @dev Each clone manages exactly one Uniswap V4 pool per project (one terminal-token pairing). Pool deployment
 /// requires `SET_BUYBACK_POOL` permission. The pool uses a 1% fee tier, 200-tick spacing, and a shared oracle hook
 /// for TWAP observations.
-contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPermissioned {
+/// @dev Every state-changing external entry point that can reach an external call (terminal `pay`/`addToBalanceOf`,
+/// controller `claimTokensFor`/`transferCreditsFrom`, or the Uniswap V4 PositionManager) is guarded with
+/// solady's `ReentrancyGuard.nonReentrant`. Guarded functions never call each other externally (via `this.`) —
+/// they share internal `_`-prefixed helpers — so the guard cannot self-revert on a legitimate call path.
+contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPermissioned, ReentrancyGuard {
     using SafeERC20 for IERC20;
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
@@ -571,7 +576,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// `SET_BUYBACK_POOL` from the project owner. Safe for anyone to call.
     /// @param projectId The ID of the project whose accumulated tokens should be added as liquidity.
     /// @param terminalToken The terminal token paired with the project token in the deployed pool.
-    function addLiquidity(uint256 projectId, address terminalToken) external {
+    function addLiquidity(uint256 projectId, address terminalToken) external nonReentrant {
         // Require a deployed pool for this project/terminal-token pair — `addLiquidity` only grows an existing pool.
         uint256 activeTokenId = tokenIdOf[projectId][terminalToken];
         if (activeTokenId == 0) {
@@ -627,7 +632,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// credit balance is restored so it can be retried later without blocking the ERC-20 claim path.
     /// @param projectId The project to claim accumulated fee proceeds for.
     /// @param beneficiary The address that should receive any claimed fee proceeds.
-    function claimFeeTokensFor(uint256 projectId, address beneficiary) external {
+    function claimFeeTokensFor(uint256 projectId, address beneficiary) external nonReentrant {
         // Only the project owner (or a SET_BUYBACK_POOL delegate) may direct where this project's fee proceeds go.
         _requirePermissionFrom({
             account: _ownerOf(projectId), projectId: projectId, permissionId: JBPermissionIds.SET_BUYBACK_POOL
@@ -702,7 +707,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param projectId The ID of the project whose LP fees to collect.
     /// @param terminalToken The terminal token paired with the project token in the pool.
     // forge-lint: disable-next-line(mixed-case-function)
-    function collectAndRouteLPFees(uint256 projectId, address terminalToken) external {
+    function collectAndRouteLPFees(uint256 projectId, address terminalToken) external nonReentrant {
         // Ensure a pool has been deployed for this project/token pair.
         uint256 tokenId = tokenIdOf[projectId][terminalToken];
         if (tokenId == 0) {
@@ -726,7 +731,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// of
     /// what it was when accumulation began; otherwise requires `SET_BUYBACK_POOL` permission from the project owner.
     /// @param projectId The ID of the project whose accumulated tokens should be deployed as LP.
-    function deployPool(uint256 projectId) external {
+    function deployPool(uint256 projectId) external nonReentrant {
         // Allow anyone to deploy if the current ruleset's weight has decayed 10x from the initial weight.
         // Otherwise, require SET_BUYBACK_POOL permission from the project owner.
         address controller = _controllerOf(projectId);
@@ -784,7 +789,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// post-deploy, `addLiquidity` converts it into more liquidity. The hook never burns.
     /// @dev Only accepts reserved-token splits (groupId == 1). Reverts if the sender is not the project's controller or
     /// if the project has no ERC-20 token deployed.
-    function processSplitWith(JBSplitHookContext calldata context) external payable {
+    function processSplitWith(JBSplitHookContext calldata context) external payable nonReentrant {
         if (address(context.split.hook) != address(this)) {
             revert JBUniswapV4LPSplitHook_NotHookSpecifiedInContext({
                 expectedHook: address(this), actualHook: address(context.split.hook)
@@ -858,7 +863,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// of the re-centered two-sided position.
     /// @param projectId The ID of the project whose LP position should be rebalanced.
     /// @param terminalToken The terminal token paired with the project token in the pool.
-    function rebalanceLiquidity(uint256 projectId, address terminalToken) external {
+    function rebalanceLiquidity(uint256 projectId, address terminalToken) external nonReentrant {
         address terminal = _primaryTerminalOf({projectId: projectId, token: terminalToken});
         if (terminal == address(0)) {
             revert JBUniswapV4LPSplitHook_InvalidTerminalToken({projectId: projectId, terminalToken: terminalToken});
