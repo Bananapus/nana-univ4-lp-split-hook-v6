@@ -28,6 +28,7 @@ import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionMa
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
@@ -180,11 +181,16 @@ contract TokenIdFork is ForkDeployHelper {
         emit log_named_uint("  position liquidity", posLiq);
     }
 
+    /// @notice `rebalanceLiquidity`'s drift guard is gated on CORRIDOR movement (a genuine issuance-rate change),
+    /// not on raw trading activity — a swap alone leaves the corridor untouched. A real buy is still exercised first
+    /// (proving the tokenId bookkeeping this test targets survives organic trading), then a real ruleset weight
+    /// change genuinely shifts the corridor so the rebalance clears the guard.
     function test_fork_h31_tokenId_updatesAfterRebalance() public {
         _accumulateTokens(projectId, address(projectToken), 100_000e18);
         vm.prank(multisig);
         hook.deployPool(projectId);
         uint256 oldTokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+        uint128 oldLiq = V4_POSITION_MANAGER.getPositionLiquidity(oldTokenId);
         PoolKey memory key = hook.poolKeyOf(projectId, JBConstants.NATIVE_TOKEN);
         TokenIdSwapHelper swapHelper = new TokenIdSwapHelper(V4_POOL_MANAGER);
         vm.prank(multisig);
@@ -193,13 +199,32 @@ contract TokenIdFork is ForkDeployHelper {
         });
         IERC20(address(projectToken)).approve(address(swapHelper), type(uint256).max);
         bool projIsToken0 = Currency.unwrap(key.currency0) == address(projectToken);
-        swapHelper.swap(key, projIsToken0, -int256(20_000e18));
+        // A real buy (give ETH, receive project token) pushes spot into the single-sided ask band, sized off the
+        // seed position's own tick bounds so it lands inside the band instead of rocketing to the tick-space
+        // extreme (there is no interposing liquidity beyond this single position).
+        int24 seedTickLower = hook.activeTickLowerOf(projectId, JBConstants.NATIVE_TOKEN);
+        int24 seedTickUpper = hook.activeTickUpperOf(projectId, JBConstants.NATIVE_TOKEN);
+        uint256 costToFullyCrossAsk = SqrtPriceMath.getAmount0Delta({
+            sqrtPriceAX96: TickMath.getSqrtPriceAtTick(seedTickLower),
+            sqrtPriceBX96: TickMath.getSqrtPriceAtTick(seedTickUpper),
+            liquidity: oldLiq,
+            roundUp: true
+        });
+        uint256 buyAmountIn = (costToFullyCrossAsk * 90) / 100;
+        vm.deal(address(this), buyAmountIn + 1 ether);
+        swapHelper.swap{value: projIsToken0 ? 0 : buyAmountIn}(key, !projIsToken0, -int256(buyAmountIn));
         _accumulateTokens(projectId, address(projectToken), 50_000e18);
+
+        // Move the economic corridor with a real ruleset weight change (a genuine rate change, not incidental
+        // trading).
+        _queueHalvedWeightRuleset(projectId, 5000);
+
         uint256 nextTokenIdBeforeRebalance = V4_POSITION_MANAGER.nextTokenId();
         _mockOracleTwapEqualsSpot(
             hook.oracleHook(), V4_POOL_MANAGER, hook.poolKeyOf(projectId, JBConstants.NATIVE_TOKEN)
         );
-        vm.prank(multisig);
+        // Permissionless: any non-owner stranger may rebalance once the corridor has genuinely drifted.
+        vm.prank(address(0xB0BB1E));
         hook.rebalanceLiquidity({projectId: projectId, terminalToken: JBConstants.NATIVE_TOKEN});
         uint256 newTokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         uint256 nextTokenIdAfterRebalance = V4_POSITION_MANAGER.nextTokenId();
@@ -211,6 +236,44 @@ contract TokenIdFork is ForkDeployHelper {
         emit log_named_uint("  old tokenId", oldTokenId);
         emit log_named_uint("  new tokenId", newTokenId);
         emit log_named_uint("  new position liquidity", newLiq);
+    }
+
+    /// @notice Queue a real ruleset with a halved weight, effective immediately (the base ruleset's `duration` is
+    /// 0, so `JBRulesets.deriveStartFrom` starts the next cycle at `mustStartAtOrAfter` == `block.timestamp`). Used
+    /// to genuinely shift the project's issuance/cash-out corridor so `rebalanceLiquidity`'s drift guard clears.
+    function _queueHalvedWeightRuleset(uint256 pid, uint16 cashOutTaxRate) internal {
+        JBRulesetMetadata memory metadata = JBRulesetMetadata({
+            reservedPercent: 1000,
+            cashOutTaxRate: cashOutTaxRate,
+            baseCurrency: uint32(uint160(JBConstants.NATIVE_TOKEN)),
+            pausePay: false,
+            pauseCreditTransfers: false,
+            allowOwnerMinting: true,
+            allowSetCustomToken: true,
+            allowTerminalMigration: false,
+            allowSetTerminals: false,
+            allowSetController: false,
+            allowAddAccountingContext: false,
+            allowAddPriceFeed: false,
+            ownerMustSendPayouts: false,
+            holdFees: false,
+            scopeCashOutsToLocalBalances: true,
+            useDataHookForPay: false,
+            useDataHookForCashOut: false,
+            dataHook: address(0),
+            metadata: 0
+        });
+        JBRulesetConfig[] memory configs = new JBRulesetConfig[](1);
+        configs[0].mustStartAtOrAfter = 0;
+        configs[0].duration = 0;
+        configs[0].weight = 500_000e18;
+        configs[0].weightCutPercent = 0;
+        configs[0].approvalHook = IJBRulesetApprovalHook(address(0));
+        configs[0].metadata = metadata;
+        configs[0].splitGroups = new JBSplitGroup[](0);
+        configs[0].fundAccessLimitGroups = new JBFundAccessLimitGroup[](0);
+        vm.prank(multisig);
+        jbController.queueRulesetsOf({projectId: pid, rulesetConfigurations: configs, memo: ""});
     }
 
     function _launchProject(uint16 cashOutTaxRate, uint112 weight) internal returns (uint256 id) {
