@@ -50,7 +50,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidStageForAction.selector);
-        hook.rebalanceLiquidity(newProjectId, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(newProjectId, address(terminalToken));
     }
 
     // -----------------------------------------------------------------------
@@ -69,7 +69,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidStageForAction.selector);
-        hook.rebalanceLiquidity(PROJECT_ID, address(otherToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(otherToken));
     }
 
     // -----------------------------------------------------------------------
@@ -83,7 +83,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidTerminalToken.selector);
-        hook.rebalanceLiquidity(PROJECT_ID, randomToken, 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, randomToken);
     }
 
     // -----------------------------------------------------------------------
@@ -96,7 +96,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
         uint256 burnCountBefore = positionManager.burnCallCount();
 
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         assertEq(
             positionManager.burnCallCount(),
@@ -115,7 +115,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
         uint256 burnCountBefore = positionManager.burnCallCount();
 
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         assertEq(
             positionManager.burnCallCount(), burnCountBefore + 1, "PositionManager burn should be called exactly once"
@@ -133,7 +133,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
         // mintCountBefore should be 1 (from the initial _accumulateAndDeploy)
 
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         assertEq(
             positionManager.mintCallCount(),
@@ -153,7 +153,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
         assertNotEq(originalTokenId, 0, "original tokenId should be nonzero");
 
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(newTokenId, 0, "new tokenId should be nonzero");
@@ -171,7 +171,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
 
         vm.prank(randomUser);
         vm.expectRevert();
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
     }
 
     // -----------------------------------------------------------------------
@@ -210,7 +210,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
         uint256 addToBalanceCountBefore = terminal.addToBalanceCallCount();
 
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         // Fees should have been routed: either pay (for fee project) or addToBalance (for original project)
         bool feesRouted =
@@ -234,7 +234,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PriceDeviationTooHigh.selector);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
     }
 
     /// @notice rebalanceLiquidity reverts when the oracle TWAP cannot be read (un-warmed oracle), rather than
@@ -246,7 +246,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_TwapUnavailable.selector);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
     }
 
     // --- Helper ------------------------------------------------------------

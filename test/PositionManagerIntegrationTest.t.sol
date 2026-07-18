@@ -65,7 +65,7 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         terminalToken.mint(address(positionManager), 50e18);
 
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(newTokenId, oldTokenId, "tokenId should change after rebalance");
@@ -157,7 +157,7 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         uint256 addBefore = terminal.addToBalanceCallCount();
 
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         // Verify fees were routed.
         bool feesRouted = (terminal.payCallCount() > payBefore) || (terminal.addToBalanceCallCount() > addBefore);

@@ -290,7 +290,7 @@ contract GeomeanLPForkTest is ForkDeployHelper {
             hook.oracleHook(), V4_POOL_MANAGER, hook.poolKeyOf(projectId, JBConstants.NATIVE_TOKEN)
         );
         vm.prank(multisig);
-        hook.rebalanceLiquidity(projectId, JBConstants.NATIVE_TOKEN, 0, 0);
+        hook.rebalanceLiquidity(projectId, JBConstants.NATIVE_TOKEN);
         uint256 newTokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         assertTrue(newTokenId != 0, "new position should exist after rebalance");
         assertTrue(newTokenId != originalTokenId, "tokenId should change after rebalance");

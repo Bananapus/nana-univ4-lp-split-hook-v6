@@ -122,9 +122,7 @@ contract Integration_TerminalMigration is ForkDeployHelper {
         });
         _mockOracleTwapEqualsSpot(hook.oracleHook(), V4_POOL_MANAGER, hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN));
         vm.prank(multisig);
-        hook.rebalanceLiquidity({
-            projectId: pid, terminalToken: JBConstants.NATIVE_TOKEN, decreaseAmount0Min: 0, decreaseAmount1Min: 0
-        });
+        hook.rebalanceLiquidity({projectId: pid, terminalToken: JBConstants.NATIVE_TOKEN});
         uint256 newTokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
         assertTrue(newTokenId > 0, "New tokenId exists");
         uint128 newLiq = V4_POSITION_MANAGER.getPositionLiquidity(newTokenId);

@@ -239,7 +239,7 @@ contract ReentrantFeeTerminal {
                 }
             } else if (reentryMode == ReentryMode.REBALANCE) {
                 // Re-enter rebalanceLiquidity. Should fail (no permission).
-                try hook.rebalanceLiquidity(projectId, terminalTokenAddr, 0, 0) {
+                try hook.rebalanceLiquidity(projectId, terminalTokenAddr) {
                 // Should NOT reach here
                 }
                 catch {
@@ -392,7 +392,7 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
 
         // 6. Call rebalanceLiquidity (owner has implicit SET_BUYBACK_POOL permission)
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         // 7. Verify: re-entry was attempted but blocked by permission check
         assertTrue(malFeeTerminal.reentrancyAttempted(), "Re-entry should have been attempted during pay()");

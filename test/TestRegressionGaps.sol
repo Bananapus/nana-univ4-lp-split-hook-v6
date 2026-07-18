@@ -47,7 +47,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         uint256 totalTerminalBefore = hookTerminalBefore + pmTerminalBefore;
 
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         // After rebalance: total system tokens (hook + PM) should not increase
         uint256 hookProjectAfter = projectToken.balanceOf(address(hook));
@@ -83,7 +83,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         uint256 mintCountBefore = positionManager.mintCallCount();
 
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
 
@@ -124,7 +124,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         uint256 addToBalanceBefore = terminal.addToBalanceCallCount();
 
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         // Verify fees were routed (either pay or addToBalance was called)
         bool feesRouted =
@@ -148,7 +148,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
 
         vm.prank(attacker);
         vm.expectRevert();
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
     }
 
     // -----------------------------------------------------------------------
@@ -160,7 +160,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
     function test_Rebalance_ConsecutiveRebalancesSucceed() public {
         // First rebalance
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         uint256 tokenIdAfterFirst = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(tokenIdAfterFirst, 0, "Token ID should be nonzero after first rebalance");
@@ -171,7 +171,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
 
         // Second rebalance
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         uint256 tokenIdAfterSecond = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(tokenIdAfterSecond, 0, "Token ID should be nonzero after second rebalance");
@@ -193,7 +193,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         uint256 payCountBefore = terminal.payCallCount();
 
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         // No fee routing via pay should have occurred (pay is only for fee project)
         assertEq(terminal.payCallCount(), payCountBefore, "No pay calls when zero fees");
@@ -218,7 +218,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         uint256 addToBalanceBefore = terminal.addToBalanceCallCount();
 
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         // Either leftover project tokens were burned or terminal tokens returned to balance
         bool leftoversHandled =
@@ -450,7 +450,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         terminalToken.mint(address(positionManager), 100e18);
 
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(newTokenId, 0, "Rebalance should succeed after weight change");
@@ -520,7 +520,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         terminalToken.mint(address(positionManager), 100e18);
 
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(newTokenId, 0, "Rebalance should succeed with narrow tick range");

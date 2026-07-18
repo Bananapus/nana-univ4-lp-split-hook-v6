@@ -128,7 +128,7 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
 
         // Rebalance (requires owner permission)
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         // Verify old position was burned and new one minted
         assertEq(

@@ -387,7 +387,7 @@ contract FeeTokensExcludedFromRebalanceTest is LPSplitHookV4TestBase {
 
         // Step 3: rebalance the LP position.
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         // Step 4: verify fee tokens are intact after rebalance.
         uint256 claimableAfter = hook.claimableFeeTokens(PROJECT_ID);
