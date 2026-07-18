@@ -60,7 +60,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         uint256 tokenBurnsBefore = controller.burnCallCount();
 
         vm.prank(owner);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
         // Same position topped up via INCREASE_LIQUIDITY — no new position minted, no position burned (no re-range).
         assertEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), activeTokenId, "active position id unchanged");
@@ -77,7 +77,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         _deployAndAccumulateMore(40e18);
 
         vm.prank(owner);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
         // The funding cash-out carried the buyback "skip" metadata keyed to the hook's `buybackHook` registry,
         // forcing a direct bonding-curve cash-out (never the AMM).
@@ -100,7 +100,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         _deployAndAccumulateMore(40e18);
 
         vm.prank(owner);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
         // With a registry set, the force-direct metadata is non-empty (the inverse of the zero-registry fallback).
         assertGt(terminal.lastCashOutMetadata().length, 0, "force-direct metadata attached when a registry is set");
@@ -118,7 +118,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PriceDeviationTooHigh.selector);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
     }
 
     function test_AddLiquidity_RevertsWhenTwapUnavailable() public {
@@ -129,7 +129,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_TwapUnavailable.selector);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
     }
 
     // ─── Re-range path
@@ -152,7 +152,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         uint256 tokenBurnsBefore = controller.burnCallCount();
 
         vm.prank(owner);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
         // The stale position is BURNED and a single fresh position is re-minted at the live corridor — funds
         // consolidate into one position (no retired set), and no project tokens are burned.
@@ -198,7 +198,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         uint256 burnsBefore = controller.burnCallCount();
 
         vm.prank(owner);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
         assertEq(controller.burnCallCount(), burnsBefore, "dust is carried, never burned");
         assertGt(hook.accumulatedProjectTokens(PROJECT_ID), 0, "project-token dust carried back to the ledger");
@@ -211,7 +211,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         _deployAndAccumulateMore(40e18);
 
         vm.prank(owner);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
         // Every project token the hook still holds is exactly the accounted accumulation ledger — nothing stranded.
         assertEq(
@@ -230,7 +230,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         jbTokens.setCreditBalance(address(hook), PROJECT_ID, 100e18);
 
         vm.prank(owner);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
         // Every project token the hook still holds is exactly the accounted accumulation ledger — nothing stranded.
         assertEq(
@@ -247,7 +247,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, extra);
 
         vm.prank(owner);
-        try hook.addLiquidity(PROJECT_ID, address(terminalToken), 0) {
+        try hook.addLiquidity(PROJECT_ID, address(terminalToken)) {
             // Invariant: the hook never leaves project tokens unaccounted (everything is either in the LP or in the
             // accumulation ledger). An interacting EOA cannot extract value beyond the carried ledger.
             assertEq(
@@ -269,7 +269,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
 
         vm.prank(makeAddr("randomUser"));
         vm.expectRevert();
-        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
     }
 
     function test_AddLiquidity_PermissionlessAfterWeightDecay() public {
@@ -288,7 +288,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
 
         uint256 increasesBefore = positionManager.increaseCallCount();
         vm.prank(makeAddr("anyone"));
-        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
         assertEq(positionManager.increaseCallCount(), increasesBefore + 1, "anyone can add after weight decay");
     }
 
@@ -300,7 +300,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidStageForAction.selector);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
     }
 
     function test_AddLiquidity_RevertsWhenNothingAccumulated() public {
@@ -309,7 +309,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoTokensAccumulated.selector);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
     }
 
     // ─── Gas
@@ -320,7 +320,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         uint256 gasBefore = gasleft();
-        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
         uint256 gasUsed = gasBefore - gasleft();
 
         // Batched top-up should stay well under a generous ceiling (sanity bound, not a tight target).
