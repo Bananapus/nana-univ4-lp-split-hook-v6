@@ -244,35 +244,15 @@ library JBUniswapV4LPSplitHookMath {
         view
         returns (uint160 sqrtPriceX96)
     {
-        // Query the cash out rate (price floor) for fallback logic.
-        uint256 cashOutRate = getCashOutRate({
-            directory: directory,
-            suckerRegistry: suckerRegistry,
-            projectId: projectId,
-            terminalToken: terminalToken,
-            controller: controller,
-            ruleset: ruleset
-        });
-
-        // No surplus: initialize at the issuance price (price ceiling) since there's no floor.
-        if (cashOutRate == 0) {
-            return getIssuanceRateSqrtPriceX96({
-                directory: directory,
-                projectId: projectId,
-                terminalToken: terminalToken,
-                projectToken: projectToken,
-                controller: controller,
-                ruleset: ruleset
-            });
-        }
-
         // Seed a hook-initialized pool just inside the cash-out (floor) bound of the economic corridor so nearly the
         // entire project balance deploys as asks across the [floor, ceiling] corridor rather than wasting the
         // [floor, midpoint] band. The seed sits ONE spacing inside the floor rather than exactly on it: the exact
         // economic boundary is the same extreme the pre-init guard treats as manipulation, so keeping the seed
-        // strictly within the band stays consistent with that invariant. Ordering-aware: the floor bound is the
-        // corridor's LOWER tick when the project is token0 and its UPPER tick when it is token1 (the ask leg always
-        // fills from the floor toward the issuance ceiling).
+        // strictly within the band stays consistent with that invariant. This uses the same corridor as every other
+        // path, so a zero-cash-out project (whose corridor pins its ceiling on the exact issuance tick) still seeds
+        // STRICTLY below that ceiling and deploys, rather than seeding at the issuance price and rejecting its own
+        // pool. Ordering-aware: the floor bound is the corridor's LOWER tick when the project is token0 and its UPPER
+        // tick when it is token1 (the ask leg always fills from the floor toward the issuance ceiling).
         (int24 tickLower, int24 tickUpper) = calculateTickBounds({
             directory: directory,
             suckerRegistry: suckerRegistry,
@@ -283,10 +263,18 @@ library JBUniswapV4LPSplitHookMath {
             ruleset: ruleset
         });
         (address token0,) = JBLPSplitHookHelpers.sortTokens({tokenA: terminalToken, tokenB: projectToken});
-        int24 seedTick = projectToken == token0 ? tickLower + _TICK_SPACING : tickUpper - _TICK_SPACING;
-        // For a corridor barely wider than one spacing, keep the seed strictly between the bounds.
-        if (seedTick <= tickLower) seedTick = tickLower + 1;
-        if (seedTick >= tickUpper) seedTick = tickUpper - 1;
+        // Offset one spacing off the floor bound toward the ceiling, then clamp so the seed stays at least one spacing
+        // short of the ceiling. Both bounds are spacing-aligned, so the seed is too — never landing on an unaligned tick
+        // that would collapse the asks-only adaptive range. For a one-spacing corridor the clamp folds the seed back
+        // onto the floor bound itself (spot == floor), leaving a non-degenerate one-spacing ask leg to the ceiling.
+        int24 seedTick;
+        if (projectToken == token0) {
+            seedTick = tickLower + _TICK_SPACING;
+            if (seedTick > tickUpper - _TICK_SPACING) seedTick = tickUpper - _TICK_SPACING;
+        } else {
+            seedTick = tickUpper - _TICK_SPACING;
+            if (seedTick < tickLower + _TICK_SPACING) seedTick = tickLower + _TICK_SPACING;
+        }
         return TickMath.getSqrtPriceAtTick(seedTick);
     }
 

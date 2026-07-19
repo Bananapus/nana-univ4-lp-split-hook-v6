@@ -20,6 +20,8 @@ import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {LibClone} from "solady/src/utils/LibClone.sol";
 import {MockGeomeanOracle} from "./mock/MockGeomeanOracle.sol";
+import {MockERC20} from "./mock/MockERC20.sol";
+import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 
 /// @notice Subclass exposing internals so unit tests can drive them directly.
 contract CodexExposedHook is JBUniswapV4LPSplitHook {
@@ -177,8 +179,8 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
     }
 
     /// @notice Default harness ordering. With cashOutRate rounding to 0, the corridor's ceiling-side bound must equal
-    /// the aligned issuance tick, so a fresh-pool deploy (seeded at issuance = the ceiling) reverts SpotAboveCeilingAtSeed
-    /// instead of wrongly passing a bound one spacing past issuance.
+    /// the aligned issuance tick, and a pool PRE-INITIALIZED at exactly that issuance price (spot == the ceiling) is
+    /// rejected as out-of-bounds — the cheapest manipulation that would single-side the initial liquidity at the ceiling.
     function test_Finding3_ZeroCashOut_CeilingIsIssuanceTick_DefaultOrdering() public {
         store.setSurplus(PROJECT_ID, 0);
 
@@ -190,10 +192,11 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         // The ceiling bound sits on the aligned issuance tick (within one alignment step), not one spacing past it.
         assertLt(_absTick(ceilingBound, issuanceTick), TICK_SPACING(), "ceiling anchors on the issuance tick");
 
-        // A fresh-pool deploy seeds at the issuance price; the spot lands at the ceiling and must be rejected.
+        // Pre-initialize the pool at exactly the issuance ceiling; the deploy must reject the boundary spot.
+        positionManager.initializePool(_poolKey(), TickMath.getSqrtPriceAtTick(ceilingBound));
         _accumulateTokens(PROJECT_ID, 0.5e18);
         vm.prank(owner);
-        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_SpotAboveCeilingAtSeed.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
         hook.deployPool(PROJECT_ID);
     }
 
@@ -429,5 +432,176 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         vm.prank(user);
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
         assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), oldTokenId, "meaningful accumulation must add");
+    }
+
+    // ─── Cold-start seed helpers (Fix A / Fix B) ───
+
+    /// @notice Wire a fresh project whose ERC-20 project token sorts BELOW its ERC-20 terminal token (project = token0),
+    /// mirroring `SingleSided_OrderingTest` — the opposite of the default harness ordering.
+    function _wireProjectToken0Codex(uint256 pid) internal returns (MockERC20 proj, MockERC20 term) {
+        proj = new MockERC20("Proj0", "P0", 18);
+        term = new MockERC20("Term1", "T1", 18);
+        uint256 salt;
+        while (address(proj) >= address(term)) {
+            salt++;
+            if (salt % 2 == 1) proj = new MockERC20("Proj0", "P0", 18);
+            else term = new MockERC20("Term1", "T1", 18);
+        }
+        controller.setWeight(pid, DEFAULT_WEIGHT);
+        controller.setFirstWeight(pid, DEFAULT_FIRST_WEIGHT);
+        controller.setReservedPercent(pid, DEFAULT_RESERVED_PERCENT);
+        controller.setBaseCurrency(pid, 1);
+        _setDirectoryController(pid, address(controller));
+        _setDirectoryTerminal(pid, address(term), address(terminal));
+        jbProjects.setOwner(pid, owner);
+        terminal.setProjectToken(pid, address(proj));
+        terminal.setAccountingContext(pid, address(term), uint32(uint160(address(term))), 18);
+        terminal.addAccountingContext(
+            pid, JBAccountingContext({token: address(term), decimals: 18, currency: uint32(uint160(address(term)))})
+        );
+        jbTokens.setToken(pid, address(proj));
+        store.setBalance(address(terminal), pid, address(term), 10e18);
+        _addDirectoryTerminal(pid, address(terminal));
+    }
+
+    function _accumulateFor(uint256 pid, MockERC20 proj, uint256 amount) internal {
+        proj.mint(address(controller), amount);
+        vm.startPrank(address(controller));
+        proj.approve(address(hook), amount);
+        hook.processSplitWith(_buildContext(pid, address(proj), amount, 1));
+        vm.stopPrank();
+    }
+
+    function _spotTickFor(uint256 pid, address term) internal view returns (int24) {
+        PoolKey memory key = hook.poolKeyOf(pid, term);
+        (uint160 sqrtPriceX96,,,) = IPoolManager(address(poolManager)).getSlot0(key.toId());
+        return TickMath.getTickAtSqrtPrice(sqrtPriceX96);
+    }
+
+    function _lockedSidesFor(
+        uint256 tokenId,
+        address term,
+        address proj
+    )
+        internal
+        view
+        returns (uint256 projectSide, uint256 terminalSide)
+    {
+        (,,,, uint256 a0, uint256 a1,) = positionManager._positions(tokenId);
+        bool terminalIsToken0 = term < proj;
+        (projectSide, terminalSide) = terminalIsToken0 ? (a1, a0) : (a0, a1);
+    }
+
+    /// @notice Assert a cold-start deploy minted an asks-only position seeded strictly on the ask-fillable side of the
+    /// issuance ceiling, with a non-degenerate range — the invariant both Fix A (zero-cashout) and Fix B (one-spacing
+    /// corridor) must satisfy for either token ordering.
+    function _assertColdStartAsksOnlyBelowCeiling(uint256 pid, address term, address proj) internal view {
+        uint256 tokenId = hook.tokenIdOf(pid, term);
+        assertNotEq(tokenId, 0, "cold-start deploy must mint a position");
+
+        (uint256 projectSide, uint256 terminalSide) = _lockedSidesFor(tokenId, term, proj);
+        assertEq(terminalSide, 0, "cold-start deploy is asks-only (no terminal paired)");
+        assertGt(projectSide, 0, "the project balance deploys as asks");
+
+        (int24 lo, int24 hi) = _corridorOf(pid, term, proj);
+        int24 spot = _spotTickFor(pid, term);
+        if (proj < term) {
+            // project = token0: asks fill upward toward the ceiling (upper tick); the seed must sit strictly below it.
+            assertLt(spot, hi, "seed sits strictly below the issuance ceiling (upper tick)");
+        } else {
+            // project = token1: asks fill downward toward the ceiling (lower tick); the seed must sit strictly above it.
+            assertGt(spot, lo, "seed sits strictly above the issuance ceiling (lower tick)");
+        }
+
+        assertLt(hook.activeTickLowerOf(pid, term), hook.activeTickUpperOf(pid, term), "range must be non-degenerate");
+    }
+
+    /// @notice Sweep the (linear) cash-out surplus to find a value that collapses the economic corridor to exactly one
+    /// tick spacing, so the cold-start seed lands on the minimum-width corridor Fix B targets.
+    function _findOneSpacingSurplus(uint256 pid, address term, address proj) internal returns (uint256) {
+        int24 spacing = TICK_SPACING();
+        for (uint256 i = 0; i < 600; i++) {
+            uint256 surplus = 1e15 + i * 5e11;
+            store.setSurplus(pid, surplus);
+            (int24 lo, int24 hi) = _corridorOf(pid, term, proj);
+            if (hi - lo == spacing) return surplus;
+        }
+        revert("no one-spacing surplus found");
+    }
+
+    // ─── Fix A (MEDIUM): a zero-cashout cold-start pool seeds strictly below the ceiling and deploys ───
+
+    /// @notice Default ordering (project = token1): cashOutRate rounds to 0 (no surplus) with nonzero issuance. The
+    /// hook-initialized pool seeds strictly on the ask side of the issuance ceiling, so the cold-start deploy SUCCEEDS
+    /// (asks-only) rather than self-reverting on its own seed.
+    function test_FixA_ZeroCashOut_ColdStartDeploys_DefaultOrdering() public {
+        store.setSurplus(PROJECT_ID, 0);
+        _accumulateTokens(PROJECT_ID, 0.5e18);
+        vm.prank(owner);
+        hook.deployPool(PROJECT_ID);
+        _assertColdStartAsksOnlyBelowCeiling(PROJECT_ID, address(terminalToken), address(projectToken));
+    }
+
+    /// @notice Mirror ordering (project = token0): the same zero-cashout cold-start deploy succeeds.
+    function test_FixA_ZeroCashOut_ColdStartDeploys_ProjectToken0() public {
+        uint256 pid = 21;
+        (MockERC20 proj, MockERC20 term) = _wireProjectToken0Codex(pid);
+        store.setSurplus(pid, 0);
+        _accumulateFor(pid, proj, 0.5e18);
+        vm.prank(owner);
+        hook.deployPool(pid);
+        _assertColdStartAsksOnlyBelowCeiling(pid, address(term), address(proj));
+    }
+
+    // ─── Fix B (LOW): a one-spacing-wide corridor cold-start yields a non-degenerate asks-only range ───
+
+    /// @notice Default ordering (project = token1): a corridor exactly one tick spacing wide seeds the cold-start pool
+    /// on the aligned floor bound, leaving a non-degenerate one-spacing asks-only range instead of collapsing to
+    /// tickLower >= tickUpper.
+    function test_FixB_OneSpacingCorridor_ColdStartDeploys_DefaultOrdering() public {
+        uint256 surplus = _findOneSpacingSurplus(PROJECT_ID, address(terminalToken), address(projectToken));
+        store.setSurplus(PROJECT_ID, surplus);
+        (int24 lo, int24 hi) = _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
+        assertEq(hi - lo, TICK_SPACING(), "precondition: corridor is exactly one spacing wide");
+
+        _accumulateTokens(PROJECT_ID, 0.5e18);
+        vm.prank(owner);
+        hook.deployPool(PROJECT_ID);
+        _assertColdStartAsksOnlyBelowCeiling(PROJECT_ID, address(terminalToken), address(projectToken));
+    }
+
+    /// @notice Mirror ordering (project = token0): a one-spacing corridor cold-start also deploys non-degenerately.
+    function test_FixB_OneSpacingCorridor_ColdStartDeploys_ProjectToken0() public {
+        uint256 pid = 22;
+        (MockERC20 proj, MockERC20 term) = _wireProjectToken0Codex(pid);
+        uint256 surplus = _findOneSpacingSurplus(pid, address(term), address(proj));
+        store.setSurplus(pid, surplus);
+        (int24 lo, int24 hi) = _corridorOf(pid, address(term), address(proj));
+        assertEq(hi - lo, TICK_SPACING(), "precondition: corridor is exactly one spacing wide");
+
+        _accumulateFor(pid, proj, 0.5e18);
+        vm.prank(owner);
+        hook.deployPool(pid);
+        _assertColdStartAsksOnlyBelowCeiling(pid, address(term), address(proj));
+    }
+
+    /// @notice A wide corridor still seeds one aligned spacing inside the cash-out floor for the project = token0
+    /// ordering (the token1 case is covered by `test_Finding9_FreshPoolSeedsAtFloor`).
+    function test_FixB_WideCorridor_SeedsOneSpacingInsideFloor_ProjectToken0() public {
+        uint256 pid = 23;
+        (MockERC20 proj, MockERC20 term) = _wireProjectToken0Codex(pid);
+        // A low surplus over a large supply keeps the cash-out floor genuinely below the issuance ceiling (wide band).
+        store.setTaxedCashOutCurve({projectId: pid, surplus: 1e18, supply: 1_000_000e18, taxRate: 4000});
+
+        (int24 corridorLower, int24 corridorUpper) = _corridorOf(pid, address(term), address(proj));
+        // project = token0 → the cash-out floor is the corridor's LOWER tick; the seed sits one spacing inside it.
+        int24 expectedSeedTick = corridorLower + TICK_SPACING();
+
+        _accumulateFor(pid, proj, 0.5e18);
+        vm.prank(owner);
+        hook.deployPool(pid);
+
+        assertEq(_spotTickFor(pid, address(term)), expectedSeedTick, "wide corridor seeds one spacing inside the floor");
+        assertLt(expectedSeedTick, corridorUpper - TICK_SPACING() + 1, "seed stays strictly below the ceiling");
     }
 }

@@ -330,8 +330,9 @@ contract ZeroRateFallbackRegression is LPSplitHookV4TestBase {
     // 8. Initial price: zero cashout rate with both orderings → sane values
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice When cashOutRate=0, _computeInitialSqrtPrice falls back to the issuance rate
-    ///         sqrtPrice. Both orderings should produce a valid price strictly within (MIN, MAX).
+    /// @notice When cashOutRate=0, _computeInitialSqrtPrice seeds strictly inside the economic corridor (one aligned
+    ///         spacing off the floor), NOT on the issuance ceiling — so the hook's own zero-cash-out pool remains
+    ///         deployable. Both orderings should produce a valid price strictly within (MIN, MAX) and inside the corridor.
     function test_initialPrice_zeroCashOut_bothOrderings() public {
         store.setSurplus(PROJECT_ID, 0);
 
@@ -341,10 +342,11 @@ contract ZeroRateFallbackRegression is LPSplitHookV4TestBase {
         assertGt(initPrice_A, TickMath.MIN_SQRT_PRICE, "A: initial price > MIN");
         assertLt(initPrice_A, TickMath.MAX_SQRT_PRICE, "A: initial price < MAX");
 
-        // Should equal the issuance rate sqrtPrice (fallback behavior).
-        uint160 issuance_A =
-            harness.exposed_getIssuanceRateSqrtPriceX96(PROJECT_ID, address(terminalToken), highProjectToken);
-        assertEq(initPrice_A, issuance_A, "A: initial price == issuance sqrtPrice");
+        (int24 lowerA, int24 upperA) =
+            harness.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), highProjectToken);
+        int24 seedA = TickMath.getTickAtSqrtPrice(initPrice_A);
+        assertGt(seedA, lowerA, "A: seed sits strictly inside the corridor floor");
+        assertLt(seedA, upperA, "A: seed sits strictly below the corridor ceiling");
 
         // ── Ordering B: terminalToken is token1 ──
         uint160 initPrice_B =
@@ -352,8 +354,10 @@ contract ZeroRateFallbackRegression is LPSplitHookV4TestBase {
         assertGt(initPrice_B, TickMath.MIN_SQRT_PRICE, "B: initial price > MIN");
         assertLt(initPrice_B, TickMath.MAX_SQRT_PRICE, "B: initial price < MAX");
 
-        uint160 issuance_B =
-            harness.exposed_getIssuanceRateSqrtPriceX96(PROJECT_ID, address(terminalToken), lowProjectToken);
-        assertEq(initPrice_B, issuance_B, "B: initial price == issuance sqrtPrice");
+        (int24 lowerB, int24 upperB) =
+            harness.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), lowProjectToken);
+        int24 seedB = TickMath.getTickAtSqrtPrice(initPrice_B);
+        assertGt(seedB, lowerB, "B: seed sits strictly inside the corridor floor");
+        assertLt(seedB, upperB, "B: seed sits strictly below the corridor ceiling");
     }
 }
