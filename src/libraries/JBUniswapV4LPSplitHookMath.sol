@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {mulDiv, sqrt} from "@prb/math/src/Common.sol";
-import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
 import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBMultiTerminal} from "@bananapus/core-v6/src/interfaces/IJBMultiTerminal.sol";
@@ -14,6 +11,9 @@ import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRule
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
+import {mulDiv, sqrt} from "@prb/math/src/Common.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 
 import {JBLPSplitHookHelpers} from "./JBLPSplitHookHelpers.sol";
 
@@ -917,7 +917,7 @@ library JBUniswapV4LPSplitHookMath {
     /// @param directory The JBDirectory to query.
     /// @param projectId The ID of the project.
     /// @param token The token whose primary terminal to resolve.
-    /// @return The project's primary terminal for `token` (address(0) if none is set).
+    /// @return terminal The project's primary terminal for `token` (address(0) if none is set).
     function _primaryTerminalOf(
         IJBDirectory directory,
         uint256 projectId,
@@ -925,7 +925,7 @@ library JBUniswapV4LPSplitHookMath {
     )
         private
         view
-        returns (address)
+        returns (address terminal)
     {
         return address(directory.primaryTerminalOf({projectId: projectId, token: token}));
     }

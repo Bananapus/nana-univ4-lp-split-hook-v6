@@ -42,7 +42,7 @@ interface IJBUniswapV4LPSplitHookDeployer {
     /// @notice Deploy a new hook clone for a fee project.
     /// @param feeProjectId The project ID to receive LP fees.
     /// @param feePercent The percentage of LP fees to route to the fee project.
-    /// @param buybackHook The buyback-hook registry the clone targets for force-direct cash-outs (may be zero).
+    /// @param buybackHook The buyback-hook registry to store as a configuration reference on the clone (may be zero).
     /// @param salt A salt to use for the deterministic deployment.
     /// @return hook The deployed hook clone.
     function deployHookFor(
