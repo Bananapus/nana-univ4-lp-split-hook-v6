@@ -579,8 +579,10 @@ contract PriceMathTest is LPSplitHookV4TestBase {
 
         (int24 tickLower, int24 tickUpper) =
             testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
-        uint160 sqrtPriceInit =
-            testableHook.exposed_computeInitialSqrtPrice(PROJECT_ID, address(terminalToken), address(projectToken));
+        // Price the position at the corridor midpoint: a genuinely two-sided (balanced) price so the pre-held ratio
+        // math is exercised in range. The hook's own seed sits near the floor (asks-only), which is not the balanced
+        // regime this ratio-preservation invariant is about.
+        uint160 sqrtPriceInit = TickMath.getSqrtPriceAtTick(tickLower + (tickUpper - tickLower) / 2);
         uint256 r = testableHook.exposed_getCashOutRate(PROJECT_ID, address(terminalToken)); // terminal per project,
         // WAD
 

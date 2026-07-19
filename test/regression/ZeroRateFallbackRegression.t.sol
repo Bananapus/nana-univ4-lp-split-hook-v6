@@ -301,8 +301,9 @@ contract ZeroRateFallbackRegression is LPSplitHookV4TestBase {
     // 7. Tick bounds: zero cashout rate with both orderings → valid ranges
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice When cashOutRate=0, _calculateTickBounds centers around the issuance tick.
-    ///         Both token orderings should produce valid, non-collapsed ranges within bounds.
+    /// @notice When cashOutRate=0, `calculateTickBounds` pins the ceiling-side bound EXACTLY on the issuance tick and
+    ///         places the floor-side bound one spacing away (no redemption floor), for a one-spacing corridor in both
+    ///         orderings — so a spot at the issuance tick is correctly rejected rather than passing a fabricated bound.
     function test_tickBounds_zeroRates_bothOrderings() public {
         store.setSurplus(PROJECT_ID, 0);
 
@@ -312,8 +313,9 @@ contract ZeroRateFallbackRegression is LPSplitHookV4TestBase {
         assertLt(tickLower_A, tickUpper_A, "A: tickLower < tickUpper");
         assertGe(tickLower_A, TickMath.MIN_TICK, "A: tickLower >= MIN_TICK");
         assertLe(tickUpper_A, TickMath.MAX_TICK, "A: tickUpper <= MAX_TICK");
-        // Range should span at least 2 * TICK_SPACING (not collapsed)
-        assertGe(tickUpper_A - tickLower_A, 2 * int24(200), "A: range >= 2 * TICK_SPACING");
+        // The corridor is exactly two spacings wide: the ceiling is pinned on the issuance tick, the floor-side bound
+        // sits two spacings away (leaving room for an ask leg below the ceiling), no redemption floor beyond it.
+        assertEq(tickUpper_A - tickLower_A, int24(400), "A: corridor is two spacings (ceiling pinned on issuance)");
 
         // ── Ordering B: terminalToken is token1 ──
         (int24 tickLower_B, int24 tickUpper_B) =
@@ -321,7 +323,7 @@ contract ZeroRateFallbackRegression is LPSplitHookV4TestBase {
         assertLt(tickLower_B, tickUpper_B, "B: tickLower < tickUpper");
         assertGe(tickLower_B, TickMath.MIN_TICK, "B: tickLower >= MIN_TICK");
         assertLe(tickUpper_B, TickMath.MAX_TICK, "B: tickUpper <= MAX_TICK");
-        assertGe(tickUpper_B - tickLower_B, 2 * int24(200), "B: range >= 2 * TICK_SPACING");
+        assertEq(tickUpper_B - tickLower_B, int24(400), "B: corridor is two spacings (ceiling pinned on issuance)");
     }
 
     // ═══════════════════════════════════════════════════════════════════════

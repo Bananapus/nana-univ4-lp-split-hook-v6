@@ -3,15 +3,20 @@ pragma solidity 0.8.28;
 
 import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
 import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
+import {JBUniswapV4LPSplitHookMath} from "../src/libraries/JBUniswapV4LPSplitHookMath.sol";
 import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/IJBBuybackHookRegistry.sol";
+import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
+import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {LibClone} from "solady/src/utils/LibClone.sol";
 
@@ -45,7 +50,16 @@ contract CodexExposedHook is JBUniswapV4LPSplitHook {
 
 /// @notice Codex audit fix coverage. Each test names its finding and asserts the corrected behavior.
 contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
+    using PoolIdLibrary for PoolKey;
+    using StateLibrary for IPoolManager;
+
     CodexExposedHook internal exposedHook;
+
+    function _spotTickOf(uint256 projectId) internal view returns (int24) {
+        PoolKey memory key = hook.poolKeyOf(projectId, address(terminalToken));
+        (uint160 sqrtPriceX96,,,) = IPoolManager(address(poolManager)).getSlot0(key.toId());
+        return TickMath.getTickAtSqrtPrice(sqrtPriceX96);
+    }
 
     function _poolKey() internal view returns (PoolKey memory key) {
         Currency terminalCurrency = Currency.wrap(address(terminalToken));
@@ -101,5 +115,111 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         exposedHook.exposed_mintPosition({
             key: key, tickLower: -spacing, tickUpper: spacing, liquidity: 1000, amount0: overflowAmount, amount1: 0
         });
+    }
+
+    // ─── Finding 9: a hook-initialized (fresh) pool seeds at the cash-out floor, not the geometric midpoint ───
+
+    /// @notice Deploying onto a pool the hook initializes itself seeds the pool just inside the cash-out (floor) bound,
+    /// so nearly the entire project balance deploys as asks across [floor, ceiling] rather than wasting the
+    /// [floor, midpoint] band the old geometric-midpoint seed left empty.
+    function test_Finding9_FreshPoolSeedsAtFloor() public {
+        // A non-inverted corridor: cash-out value (floor) sits genuinely below the issuance ceiling. A low surplus
+        // relative to a large supply keeps the cash-out rate small, so the cash-out price is the economic floor.
+        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 1e18, supply: 1_000_000e18, taxRate: 4000});
+
+        (int24 corridorLower, int24 corridorUpper) = _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
+        // The floor bound is ordering-aware: corridor LOWER when project is token0, UPPER when project is token1. The
+        // seed sits exactly one spacing inside that floor.
+        bool projectIsToken0 = address(projectToken) < address(terminalToken);
+        int24 expectedSeedTick = projectIsToken0 ? corridorLower + TICK_SPACING() : corridorUpper - TICK_SPACING();
+
+        // No pre-initialization: the hook initializes the pool itself during deployPool.
+        _accumulateTokens(PROJECT_ID, 0.5e18);
+        vm.prank(owner);
+        hook.deployPool(PROJECT_ID);
+
+        int24 seedTick = _spotTickOf(PROJECT_ID);
+        assertEq(seedTick, expectedSeedTick, "fresh pool must seed one spacing inside the cash-out floor");
+
+        // The seed sits near the floor extreme, not the geometric midpoint the old code used.
+        int24 midTick = corridorLower + (corridorUpper - corridorLower) / 2;
+        int24 distFromMid = seedTick >= midTick ? seedTick - midTick : midTick - seedTick;
+        assertGt(distFromMid, (corridorUpper - corridorLower) / 4, "seed must sit near the floor, not the midpoint");
+    }
+
+    // ─── Finding 3: cashOutRate == 0 corridor pins the ceiling on the EXACT issuance tick ───
+
+    function _zeroCashOutIssuanceTick(uint256 projectId, address term, address proj) internal view returns (int24) {
+        (JBRuleset memory ruleset,) = controller.currentRulesetOf(projectId);
+        uint160 issuanceSqrtPrice = JBUniswapV4LPSplitHookMath.getIssuanceRateSqrtPriceX96({
+            directory: IJBDirectory(address(directory)),
+            projectId: projectId,
+            terminalToken: term,
+            projectToken: proj,
+            controller: address(controller),
+            ruleset: ruleset
+        });
+        return TickMath.getTickAtSqrtPrice(issuanceSqrtPrice);
+    }
+
+    function _corridorOf(uint256 projectId, address term, address proj) internal view returns (int24 lo, int24 hi) {
+        (JBRuleset memory ruleset,) = controller.currentRulesetOf(projectId);
+        (lo, hi) = JBUniswapV4LPSplitHookMath.calculateTickBounds({
+            directory: IJBDirectory(address(directory)),
+            suckerRegistry: IJBSuckerRegistry(address(0)),
+            projectId: projectId,
+            terminalToken: term,
+            projectToken: proj,
+            controller: address(controller),
+            ruleset: ruleset
+        });
+    }
+
+    /// @notice Default harness ordering. With cashOutRate rounding to 0, the corridor's ceiling-side bound must equal
+    /// the aligned issuance tick, so a fresh-pool deploy (seeded at issuance = the ceiling) reverts SpotAboveCeilingAtSeed
+    /// instead of wrongly passing a bound one spacing past issuance.
+    function test_Finding3_ZeroCashOut_CeilingIsIssuanceTick_DefaultOrdering() public {
+        store.setSurplus(PROJECT_ID, 0);
+
+        int24 issuanceTick = _zeroCashOutIssuanceTick(PROJECT_ID, address(terminalToken), address(projectToken));
+        (int24 corridorLower, int24 corridorUpper) = _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
+
+        bool projectIsToken0 = address(projectToken) < address(terminalToken);
+        int24 ceilingBound = projectIsToken0 ? corridorUpper : corridorLower;
+        // The ceiling bound sits on the aligned issuance tick (within one alignment step), not one spacing past it.
+        assertLt(_absTick(ceilingBound, issuanceTick), TICK_SPACING(), "ceiling anchors on the issuance tick");
+
+        // A fresh-pool deploy seeds at the issuance price; the spot lands at the ceiling and must be rejected.
+        _accumulateTokens(PROJECT_ID, 0.5e18);
+        vm.prank(owner);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_SpotAboveCeilingAtSeed.selector);
+        hook.deployPool(PROJECT_ID);
+    }
+
+    /// @notice A spot STRICTLY below the issuance ceiling still deploys successfully under the zero-cashout corridor.
+    function test_Finding3_ZeroCashOut_StrictlyBelowCeiling_Succeeds() public {
+        store.setSurplus(PROJECT_ID, 0);
+        (int24 corridorLower, int24 corridorUpper) = _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
+
+        // Seat spot one spacing on the ask-fillable side of the ceiling: strictly inside the corridor, leaving a
+        // one-spacing ask leg between spot and the exact-issuance ceiling. Ordering-aware.
+        bool projectIsToken0 = address(projectToken) < address(terminalToken);
+        int24 spotTick = projectIsToken0 ? corridorUpper - TICK_SPACING() : corridorLower + TICK_SPACING();
+
+        PoolKey memory key = _poolKey();
+        positionManager.initializePool(key, TickMath.getSqrtPriceAtTick(spotTick));
+
+        _accumulateTokens(PROJECT_ID, 0.5e18);
+        vm.prank(owner);
+        hook.deployPool(PROJECT_ID);
+        assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "deploy strictly below ceiling must succeed");
+    }
+
+    function _absTick(int24 a, int24 b) internal pure returns (int24) {
+        return a >= b ? a - b : b - a;
+    }
+
+    function TICK_SPACING() internal view returns (int24) {
+        return hook.TICK_SPACING();
     }
 }
