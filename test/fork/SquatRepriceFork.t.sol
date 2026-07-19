@@ -364,7 +364,9 @@ contract SquatRepriceFork is ForkDeployHelper {
         assertLe(ethSpent, 1, "keeper spent more than dust ETH on reprice");
         assertLe(projSpent, 1, "keeper spent more than dust project tokens on reprice");
 
-        // --- deployPool must now SUCCEED.
+        // --- deployPool must now SUCCEED. Deploying onto a pre-initialized (repriced) pool now validates spot against
+        // the oracle TWAP; force TWAP == spot so the guard passes without seeding 30 minutes of observation history.
+        _mockOracleTwapEqualsSpot(hook.oracleHook(), V4_POOL_MANAGER, key);
         vm.prank(multisig);
         hook.deployPool(pid);
         assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "pool should deploy after reprice");

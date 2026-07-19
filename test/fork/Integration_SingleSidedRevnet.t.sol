@@ -255,6 +255,9 @@ contract Integration_SingleSidedRevnet is ForkDeployHelper {
         assertEq(preexistingSpot, initSqrtPrice, "pool must read back the pre-initialized spot");
 
         // ── 3. Permissionless deploy: a random, non-owner address seeds the pool from the accumulated tokens.
+        // Deploying onto a pre-initialized pool now validates spot against the oracle TWAP; force TWAP == spot so the
+        // guard passes deterministically without seeding 30 minutes of observation history.
+        _mockOracleTwapEqualsSpot(hook.oracleHook(), V4_POOL_MANAGER, key);
         vm.prank(randomDeployer);
         hook.deployPool(pid);
 
