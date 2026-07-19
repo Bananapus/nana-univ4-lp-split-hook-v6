@@ -41,15 +41,17 @@ import {JBUniswapV4LPSplitHookMath} from "./libraries/JBUniswapV4LPSplitHookMath
 /// @notice A split hook that builds and manages a Uniswap V4 liquidity position for a Juicebox project, using the
 /// project's reserved-token distributions as the seed capital. The lifecycle has two stages:
 ///
-/// 1. Accumulation — Each time the project distributes reserved tokens, the hook's share is held in escrow. Anyone can
+/// 1. Accumulation — Each time the project distributes reserved tokens, the hook's share is held in escrow. Anyone
+/// can
 /// trigger `deployPool`, which mints the accumulated tokens as a single-sided ask position — seeded purely from those
 /// accumulated tokens, never from a cash-out — spanning from the pool's live price out to the project's
 /// issuance/cash-out corridor.
 ///
 /// 2. Grow-and-route — After the pool exists, further reserved tokens sent to the hook keep accumulating in escrow.
 /// Anyone can later call `addLiquidity` to convert the accumulated tokens into more protocol-owned liquidity: it checks
-/// the pool's spot price against the oracle TWAP to reject sandwiched adds, then mints another single-sided ask position
-/// spanning from the pool's live price out to the project's issuance/cash-out corridor. LP trading fees are collected
+/// the pool's spot price against the oracle TWAP to reject sandwiched adds, then mints another single-sided ask
+/// position spanning from the pool's live price out to the project's issuance/cash-out corridor. LP trading fees are
+/// collected
 /// periodically from the project's currently tracked position and routed back to the project's terminal balance,
 /// with an optional protocol fee split to a configurable fee project. The hook never burns project tokens:
 /// supply-reducing burns are a protocol-layer split-routing decision, so every token this hook touches ends up as
@@ -59,7 +61,8 @@ import {JBUniswapV4LPSplitHookMath} from "./libraries/JBUniswapV4LPSplitHookMath
 /// issuance and cash-out prices when they drift from the original deployment parameters.
 ///
 /// @dev Each clone manages exactly one Uniswap V4 pool per project (one terminal-token pairing). `deployPool`,
-/// `addLiquidity`, `rebalanceLiquidity`, and `collectAndRouteLPFees` are permissionless — anyone may call them — with
+/// `addLiquidity`, `rebalanceLiquidity`, and `collectAndRouteLPFees` are permissionless — anyone may call them —
+/// with
 /// abuse bounded by economic gates (a seed/add reverts once spot reaches the issuance ceiling) and an oracle-TWAP
 /// deviation guard. The pool uses a 1% fee tier, 200-tick spacing, and a shared oracle hook for TWAP observations.
 /// @dev Every state-changing external entry point that can reach an external call (terminal `pay`/`addToBalanceOf`,
@@ -79,7 +82,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @notice Thrown when `initialize` is called on a clone whose chain-specific properties have already been set.
     error JBUniswapV4LPSplitHook_AlreadyInitialized();
     /// @notice Thrown when a token amount that must fit a Uniswap V4 `uint128` field exceeds `type(uint128).max`, so a
-    /// silent truncation (which could disable a mint or shrink a burn slippage floor to near-zero) is rejected outright.
+    /// silent truncation (which could disable a mint or shrink a burn slippage floor to near-zero) is rejected
+    /// outright.
     error JBUniswapV4LPSplitHook_AmountExceedsUint128(uint256 amount);
     /// @notice Thrown when `addLiquidity` is called with less accumulated project-token balance than
     /// `_MIN_ADD_ACCUMULATION`, so a trivial (dust) accumulation cannot force a full fee-collect+burn+remint churn.
@@ -269,8 +273,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @notice The terminal-token balance currently held for each project as protocol-owned bid-leg liquidity.
     /// @dev Mirrors `accumulatedProjectTokens` for the terminal side. Credited ONLY from this project's own
     /// LP-fee collections (the non-cut remainder of the terminal-token fee) and its own unconsumed mint leftovers.
-    /// `_consolidateAndReMint` sizes the bid leg from this ledger plus the project's own burn-recovered terminal — never
-    /// from the hook's raw token balance — so one project can never consume another's terminal or an outside donation.
+    /// `_consolidateAndReMint` sizes the bid leg from this ledger plus the project's own burn-recovered terminal —
+    /// never from the hook's raw token balance — so one project can never consume another's terminal or an outside
+    /// donation.
     /// @custom:param projectId The ID of the project whose accumulated terminal-token bid liquidity to read.
     /// @custom:param terminalToken The terminal token paired with the project's token in its pool.
     mapping(uint256 projectId => mapping(address terminalToken => uint256)) public accumulatedTerminalTokens;
@@ -1649,7 +1654,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         });
 
         // The terminal amount paired into the mint (caps + liquidity) is the solved/clamped bid `bidAmountForMint`, not
-        // the full held terminal — so a floor-pinned excess is left over and carried back to the terminal ledger rather
+        // the full held terminal — so a floor-pinned excess is left over and carried back to the terminal ledger
+        // rather
         // than over-minted.
         uint256 amount0 = projectIsToken0 ? projectAmount : bidAmountForMint;
         uint256 amount1 = projectIsToken0 ? bidAmountForMint : projectAmount;
@@ -1672,7 +1678,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         // CEI: clear BOTH ledgers before the external mint; any unconsumed remainder on either side is carried back
         // below (never burned, never deposited to the treasury). Record the corridor this position is ranged against
-        // (drift-guard basis; independent of the adaptive bounds) here too — it does not depend on the mint result, and
+        // (drift-guard basis; independent of the adaptive bounds) here too — it does not depend on the mint result,
+        // and
         // writing it pre-mint keeps `corridorLower`/`corridorUpper` off the stack across the (inlined) mint.
         accumulatedProjectTokens[projectId] = 0;
         accumulatedTerminalTokens[projectId][terminalToken] = 0;
@@ -1930,21 +1937,26 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         // Attempt the fee-project cut on the project-token side, then carry the remainder into the ask-leg ledger.
         if (projectFee > 0) {
-            accumulatedProjectTokens[projectId] +=
-                _attemptFeeProjectCut({projectId: projectId, feeToken: projectToken, amount: projectFee});
+            accumulatedProjectTokens[
+                projectId
+            ] += _attemptFeeProjectCut({projectId: projectId, feeToken: projectToken, amount: projectFee});
         }
 
         // Attempt the fee-project cut on the terminal-token side, then carry the remainder into the bid-leg ledger
         // (protocol-owned liquidity), NOT into the project's treasury.
         if (terminalFee > 0) {
-            accumulatedTerminalTokens[projectId][terminalToken] +=
-                _attemptFeeProjectCut({projectId: projectId, feeToken: terminalToken, amount: terminalFee});
+            accumulatedTerminalTokens[
+                projectId
+            ][
+                terminalToken
+            ] += _attemptFeeProjectCut({projectId: projectId, feeToken: terminalToken, amount: terminalFee});
         }
     }
 
     /// @notice Take a best-effort protocol fee cut of `amount` (in `feeToken`) for `projectId` by paying it to the
     /// configured fee project, and return the non-cut remainder. Symmetric across the terminal-token and project-token
-    /// sides. The cut is forgiven — the full `amount` is returned — when there is no cut to take, when the fee project
+    /// sides. The cut is forgiven — the full `amount` is returned — when there is no cut to take, when the fee
+    /// project
     /// has no terminal accepting `feeToken`, or when the fee terminal's `pay` reverts; a forgiven cut never blocks the
     /// surrounding fee collection.
     /// @dev Fee routing uses zero slippage (minReturnedTokens = 0) by design: slippage protection is the fee project's
@@ -1988,7 +2000,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // fee-project token migration must not strand the earlier claim behind a new token contract.
         address claimToken = claimableFeeTokenOf[projectId];
         if (claimToken != address(0) && claimToken != feeProjectToken) {
-            revert JBUniswapV4LPSplitHook_UnclaimedFeeTokenChanged({previousToken: claimToken, nextToken: feeProjectToken});
+            revert JBUniswapV4LPSplitHook_UnclaimedFeeTokenChanged({
+                previousToken: claimToken, nextToken: feeProjectToken
+            });
         }
 
         // Pre-increment with `cut` as a conservative estimate; reconciled to the actual received amount after the pay.
@@ -2094,7 +2108,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             });
         } else {
             IERC20(feeToken).forceApprove({spender: feeTerminal, value: amount});
-            beneficiaryTokenCount = IJBMultiTerminal(feeTerminal).pay({
+            beneficiaryTokenCount = IJBMultiTerminal(feeTerminal)
+                .pay({
                 projectId: feeProjectId,
                 token: feeToken,
                 amount: amount,

@@ -73,7 +73,10 @@ contract SingleSided_AdaptiveBidTest is LPSplitHookV4TestBase {
 
     /// @notice The adaptive `[tickLower, tickUpper]` and paired bid for the current corridor/spot at a given terminal
     /// size, resolved via the pure solver, plus the ordering-derived ask-anchor and bid-bound ticks.
-    function _solveRange(uint256 projectAmount, uint256 terminalAmount)
+    function _solveRange(
+        uint256 projectAmount,
+        uint256 terminalAmount
+    )
         internal
         returns (int24 askAnchorTick, int24 bidBoundTick, uint256 bidAmountForMint)
     {

@@ -126,15 +126,18 @@ library JBUniswapV4LPSplitHookMath {
 
             (address token0,) = JBLPSplitHookHelpers.sortTokens({tokenA: terminalToken, tokenB: projectToken});
 
-            // The floor-side bound sits two spacings from the exact-issuance ceiling. Two spacings (not one) leaves room
-            // for a spot strictly below the ceiling to still align an ask leg one spacing deep, so a pre-initialized
+            // The floor-side bound sits two spacings from the exact-issuance ceiling. Two spacings (not one) leaves
+            // room for a spot strictly below the ceiling to still align an ask leg one spacing deep, so a
+            // pre-initialized
             // pool below the issuance price remains deployable; there is no redemption floor to place more precisely.
             int24 floorGap = 2 * _TICK_SPACING;
 
-            int24 zeroMinUsable =
-                JBLPSplitHookHelpers.alignTickToSpacing({tick: TickMath.MIN_TICK, spacing: _TICK_SPACING}) + _TICK_SPACING;
-            int24 zeroMaxUsable =
-                JBLPSplitHookHelpers.alignTickToSpacing({tick: TickMath.MAX_TICK, spacing: _TICK_SPACING}) - _TICK_SPACING;
+            int24 zeroMinUsable = JBLPSplitHookHelpers.alignTickToSpacing({
+                tick: TickMath.MIN_TICK, spacing: _TICK_SPACING
+            }) + _TICK_SPACING;
+            int24 zeroMaxUsable = JBLPSplitHookHelpers.alignTickToSpacing({
+                tick: TickMath.MAX_TICK, spacing: _TICK_SPACING
+            }) - _TICK_SPACING;
 
             if (projectToken == token0) {
                 // Project is token0: the issuance ceiling is the corridor UPPER bound. Align DOWN (as the cashOut != 0
@@ -264,8 +267,9 @@ library JBUniswapV4LPSplitHookMath {
         });
         (address token0,) = JBLPSplitHookHelpers.sortTokens({tokenA: terminalToken, tokenB: projectToken});
         // Offset one spacing off the floor bound toward the ceiling, then clamp so the seed stays at least one spacing
-        // short of the ceiling. Both bounds are spacing-aligned, so the seed is too — never landing on an unaligned tick
-        // that would collapse the asks-only adaptive range. For a one-spacing corridor the clamp folds the seed back
+        // short of the ceiling. Both bounds are spacing-aligned, so the seed is too — never landing on an unaligned
+        // tick that would collapse the asks-only adaptive range. For a one-spacing corridor the clamp folds the seed
+        // back
         // onto the floor bound itself (spot == floor), leaving a non-degenerate one-spacing ask leg to the ceiling.
         int24 seedTick;
         if (projectToken == token0) {

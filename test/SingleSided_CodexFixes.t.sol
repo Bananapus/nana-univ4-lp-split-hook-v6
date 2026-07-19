@@ -46,7 +46,12 @@ contract CodexExposedHook is JBUniswapV4LPSplitHook {
         external
     {
         _mintPosition({
-            key: key, tickLower: tickLower, tickUpper: tickUpper, liquidity: liquidity, amount0: amount0, amount1: amount1
+            key: key,
+            tickLower: tickLower,
+            tickUpper: tickUpper,
+            liquidity: liquidity,
+            amount0: amount0,
+            amount1: amount1
         });
     }
 }
@@ -120,7 +125,8 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         });
     }
 
-    // ─── Finding 9: a hook-initialized (fresh) pool seeds at the cash-out floor, not the geometric midpoint ───
+    // ─── Finding 9: a hook-initialized (fresh) pool seeds at the cash-out floor, not the geometric midpoint
+    // ───
 
     /// @notice Deploying onto a pool the hook initializes itself seeds the pool just inside the cash-out (floor) bound,
     /// so nearly the entire project balance deploys as asks across [floor, ceiling] rather than wasting the
@@ -130,7 +136,8 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         // relative to a large supply keeps the cash-out rate small, so the cash-out price is the economic floor.
         store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 1e18, supply: 1_000_000e18, taxRate: 4000});
 
-        (int24 corridorLower, int24 corridorUpper) = _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
+        (int24 corridorLower, int24 corridorUpper) =
+            _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
         // The floor bound is ordering-aware: corridor LOWER when project is token0, UPPER when project is token1. The
         // seed sits exactly one spacing inside that floor.
         bool projectIsToken0 = address(projectToken) < address(terminalToken);
@@ -180,12 +187,14 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
 
     /// @notice Default harness ordering. With cashOutRate rounding to 0, the corridor's ceiling-side bound must equal
     /// the aligned issuance tick, and a pool PRE-INITIALIZED at exactly that issuance price (spot == the ceiling) is
-    /// rejected as out-of-bounds — the cheapest manipulation that would single-side the initial liquidity at the ceiling.
+    /// rejected as out-of-bounds — the cheapest manipulation that would single-side the initial liquidity at the
+    /// ceiling.
     function test_Finding3_ZeroCashOut_CeilingIsIssuanceTick_DefaultOrdering() public {
         store.setSurplus(PROJECT_ID, 0);
 
         int24 issuanceTick = _zeroCashOutIssuanceTick(PROJECT_ID, address(terminalToken), address(projectToken));
-        (int24 corridorLower, int24 corridorUpper) = _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
+        (int24 corridorLower, int24 corridorUpper) =
+            _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
 
         bool projectIsToken0 = address(projectToken) < address(terminalToken);
         int24 ceilingBound = projectIsToken0 ? corridorUpper : corridorLower;
@@ -203,7 +212,8 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
     /// @notice A spot STRICTLY below the issuance ceiling still deploys successfully under the zero-cashout corridor.
     function test_Finding3_ZeroCashOut_StrictlyBelowCeiling_Succeeds() public {
         store.setSurplus(PROJECT_ID, 0);
-        (int24 corridorLower, int24 corridorUpper) = _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
+        (int24 corridorLower, int24 corridorUpper) =
+            _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
 
         // Seat spot one spacing on the ask-fillable side of the ceiling: strictly inside the corridor, leaving a
         // one-spacing ask leg between spot and the exact-issuance ceiling. Ordering-aware.
@@ -231,7 +241,8 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
 
     function _preInitAtMid() internal returns (int24 midTick) {
         store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
-        (int24 corridorLower, int24 corridorUpper) = _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
+        (int24 corridorLower, int24 corridorUpper) =
+            _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
         midTick = corridorLower + (corridorUpper - corridorLower) / 2;
         positionManager.initializePool(_poolKey(), TickMath.getSqrtPriceAtTick(midTick));
     }
@@ -242,7 +253,8 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         // The pool key includes the oracle hook, so install the fixed oracle BEFORE pre-initializing so the pre-init
         // pool and the hook's computed key match.
         store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
-        (int24 corridorLower, int24 corridorUpper) = _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
+        (int24 corridorLower, int24 corridorUpper) =
+            _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
         int24 midTick = corridorLower + (corridorUpper - corridorLower) / 2;
 
         MockGeomeanOracle fixedOracle = new MockGeomeanOracle();
@@ -290,8 +302,8 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
     }
 
     /// @notice Terminal sitting loose on the shared clone (a donation, or another project's recovered terminal) is
-    /// NEVER paired into a project's deploy nor routed out — the deploy is asks-only and the loose balance is untouched.
-    /// On the pre-fix code this balance was read as the mint's terminal side and captured.
+    /// NEVER paired into a project's deploy nor routed out — the deploy is asks-only and the loose balance is
+    /// untouched. On the pre-fix code this balance was read as the mint's terminal side and captured.
     function test_Finding1_DonatedTerminalNotSweptAtDeploy() public {
         int24 midTick = _preInitAtMid();
         midTick; // pool is pre-initialized at mid.
@@ -308,7 +320,9 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         assertEq(terminalSide, 0, "donated terminal must not be paired into the position (asks-only)");
         assertEq(projectSide, 0.5e18, "the full project balance deploys as asks");
         assertEq(terminalToken.balanceOf(address(hook)), donation, "donation stays on the hook, never swept or routed");
-        assertEq(terminal.addToBalanceCallCount(), addToBalanceBefore, "no terminal is routed out on an asks-only deploy");
+        assertEq(
+            terminal.addToBalanceCallCount(), addToBalanceBefore, "no terminal is routed out on an asks-only deploy"
+        );
     }
 
     /// @notice Two projects share the clone. Project B's terminal accumulated on the hook is not consumed when project
@@ -332,7 +346,9 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
     /// principal) into the re-minted bid leg.
     function test_Finding1_RebalanceFoldsRecoveredBid() public {
         (int24 corridorLower, int24 corridorUpper) = _corridorAtMid();
-        positionManager.initializePool(_poolKey(), TickMath.getSqrtPriceAtTick(corridorLower + (corridorUpper - corridorLower) / 2));
+        positionManager.initializePool(
+            _poolKey(), TickMath.getSqrtPriceAtTick(corridorLower + (corridorUpper - corridorLower) / 2)
+        );
         _accumulateTokens(PROJECT_ID, 0.5e18);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
@@ -359,7 +375,8 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         (lo, hi) = _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
     }
 
-    // ─── Finding 5 (MEDIUM): a rebalance collects fees before the re-mint, folding them into the bid-leg ledger ───
+    // ─── Finding 5 (MEDIUM): a rebalance collects fees before the re-mint, folding them into the bid-leg ledger
+    // ───
 
     /// @notice A rebalance collects and routes LP fees BEFORE the burn/re-mint. The terminal-fee remainder is folded
     /// into this project's bid-leg ledger and re-minted as bid liquidity — it is NOT deposited into the treasury and
@@ -370,7 +387,9 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         // Even with the treasury-surplus bump enabled, no `addToBalanceOf` deposit happens for routed fees anymore.
         terminal.setBumpSurplusOnAddToBalance(true);
         (int24 corridorLower, int24 corridorUpper) = _corridorAtMid();
-        positionManager.initializePool(_poolKey(), TickMath.getSqrtPriceAtTick(corridorLower + (corridorUpper - corridorLower) / 2));
+        positionManager.initializePool(
+            _poolKey(), TickMath.getSqrtPriceAtTick(corridorLower + (corridorUpper - corridorLower) / 2)
+        );
         _accumulateTokens(PROJECT_ID, 1e18);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
@@ -451,8 +470,8 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
 
     // ─── Cold-start seed helpers (Fix A / Fix B) ───
 
-    /// @notice Wire a fresh project whose ERC-20 project token sorts BELOW its ERC-20 terminal token (project = token0),
-    /// mirroring `SingleSided_OrderingTest` — the opposite of the default harness ordering.
+    /// @notice Wire a fresh project whose ERC-20 project token sorts BELOW its ERC-20 terminal token (project =
+    /// token0), mirroring `SingleSided_OrderingTest` — the opposite of the default harness ordering.
     function _wireProjectToken0Codex(uint256 pid) internal returns (MockERC20 proj, MockERC20 term) {
         proj = new MockERC20("Proj0", "P0", 18);
         term = new MockERC20("Term1", "T1", 18);
@@ -524,7 +543,8 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
             // project = token0: asks fill upward toward the ceiling (upper tick); the seed must sit strictly below it.
             assertLt(spot, hi, "seed sits strictly below the issuance ceiling (upper tick)");
         } else {
-            // project = token1: asks fill downward toward the ceiling (lower tick); the seed must sit strictly above it.
+            // project = token1: asks fill downward toward the ceiling (lower tick); the seed must sit strictly above
+            // it.
             assertGt(spot, lo, "seed sits strictly above the issuance ceiling (lower tick)");
         }
 
@@ -636,8 +656,9 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
 
-        // Inject FAR more of this project's own terminal than a 0.5e18 ask leg's bid can absorb, so the burn recovers an
-        // excess that must pin the bid bound at the floor. Fund only the injected principal (so the mock's SWEEP has no
+        // Inject FAR more of this project's own terminal than a 0.5e18 ask leg's bid can absorb, so the burn recovers
+        // an excess that must pin the bid bound at the floor. Fund only the injected principal (so the mock's SWEEP has
+        // no
         // unlocked terminal to hand back to the hook, keeping the ledger-only-retention assertion meaningful).
         uint256 injected = 1_000_000e18;
         terminalToken.mint(address(positionManager), injected);
@@ -669,6 +690,8 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
             excess,
             "the floor-pinned excess is carried into the terminal bid-leg ledger"
         );
-        assertEq(terminalToken.balanceOf(address(hook)), excess, "the excess is retained in the hook as ledger, not stranded");
+        assertEq(
+            terminalToken.balanceOf(address(hook)), excess, "the excess is retained in the hook as ledger, not stranded"
+        );
     }
 }

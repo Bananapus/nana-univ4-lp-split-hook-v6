@@ -303,7 +303,8 @@ contract ZeroRateFallbackRegression is LPSplitHookV4TestBase {
 
     /// @notice When cashOutRate=0, `calculateTickBounds` pins the ceiling-side bound EXACTLY on the issuance tick and
     ///         places the floor-side bound one spacing away (no redemption floor), for a one-spacing corridor in both
-    ///         orderings — so a spot at the issuance tick is correctly rejected rather than passing a fabricated bound.
+    ///         orderings — so a spot at the issuance tick is correctly rejected rather than passing a fabricated
+    /// bound.
     function test_tickBounds_zeroRates_bothOrderings() public {
         store.setSurplus(PROJECT_ID, 0);
 
@@ -332,7 +333,8 @@ contract ZeroRateFallbackRegression is LPSplitHookV4TestBase {
 
     /// @notice When cashOutRate=0, _computeInitialSqrtPrice seeds strictly inside the economic corridor (one aligned
     ///         spacing off the floor), NOT on the issuance ceiling — so the hook's own zero-cash-out pool remains
-    ///         deployable. Both orderings should produce a valid price strictly within (MIN, MAX) and inside the corridor.
+    ///         deployable. Both orderings should produce a valid price strictly within (MIN, MAX) and inside the
+    /// corridor.
     function test_initialPrice_zeroCashOut_bothOrderings() public {
         store.setSurplus(PROJECT_ID, 0);
 

@@ -22,7 +22,15 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 contract RevertingPayTerminal {
     error PayReverted();
 
-    function pay(uint256, address, uint256, address, uint256, string calldata, bytes calldata)
+    function pay(
+        uint256,
+        address,
+        uint256,
+        address,
+        uint256,
+        string calldata,
+        bytes calldata
+    )
         external
         payable
         returns (uint256)
@@ -57,7 +65,8 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
         terminalTokenIsToken0 = address(terminalToken) < address(projectToken);
     }
 
-    // ─── Helpers ───────────────────────────────────────────────────────────
+    // ─── Helpers
+    // ───────────────────────────────────────────────────────────
 
     function _deployA() internal returns (uint256 tokenId) {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
@@ -80,8 +89,9 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
     function _poolKeyA() internal view returns (PoolKey memory key) {
         Currency terminalCurrency = Currency.wrap(address(terminalToken));
         Currency projectCurrency = Currency.wrap(address(projectToken));
-        (Currency currency0, Currency currency1) =
-            terminalCurrency < projectCurrency ? (terminalCurrency, projectCurrency) : (projectCurrency, terminalCurrency);
+        (Currency currency0, Currency currency1) = terminalCurrency < projectCurrency
+            ? (terminalCurrency, projectCurrency)
+            : (projectCurrency, terminalCurrency);
         key = PoolKey({
             currency0: currency0,
             currency1: currency1,
@@ -178,7 +188,8 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
         tokenId = hook.tokenIdOf(PROJECT_B, address(terminalToken));
     }
 
-    // ─── Project-token side ─────────────────────────────────────────────────
+    // ─── Project-token side
+    // ─────────────────────────────────────────────────
 
     /// @notice When the fee project has a terminal accepting the PROJECT token, the project-token side takes a cut and
     /// only the remainder is carried into the accumulation ledger.
@@ -201,9 +212,7 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
         assertEq(terminal.lastPayProjectId(), FEE_PROJECT_ID, "cut routed to fee project");
         assertEq(terminal.lastPayAmount(), cut, "cut is feePercent of the project fee");
         assertEq(hook.claimableFeeTokens(PROJECT_ID) - claimBefore, cut, "cut tracked as claimable fee tokens");
-        assertEq(
-            hook.accumulatedProjectTokens(PROJECT_ID) - accBefore, projFee - cut, "only the remainder accumulates"
-        );
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID) - accBefore, projFee - cut, "only the remainder accumulates");
     }
 
     /// @notice When the fee project has NO terminal for the project token, the whole project-token fee is forgiven and
@@ -223,7 +232,8 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
         assertEq(hook.accumulatedProjectTokens(PROJECT_ID) - accBefore, projFee, "full project fee accumulates");
     }
 
-    // ─── Terminal-token side ────────────────────────────────────────────────
+    // ─── Terminal-token side
+    // ────────────────────────────────────────────────
 
     /// @notice The non-cut terminal remainder is routed into the per-project terminal ledger, NOT deposited into the
     /// project's treasury via `addToBalanceOf`.
@@ -278,7 +288,8 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
         assertGt(terminalSide, 0, "the bid leg is funded from the terminal ledger");
     }
 
-    // ─── Best-effort (try/catch) ─────────────────────────────────────────────
+    // ─── Best-effort (try/catch)
+    // ─────────────────────────────────────────────
 
     /// @notice A fee terminal whose `pay` reverts forgives the terminal cut: collection succeeds, the whole fee lands
     /// in the ledger, no claim is tracked, and the reentrancy reserve counters are fully rolled back.
@@ -323,7 +334,8 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
         assertEq(_inflightCount(address(feeProjectToken)), 0, "inflight routing count fully rolled back");
     }
 
-    // ─── Native ETH terminal ─────────────────────────────────────────────────
+    // ─── Native ETH terminal
+    // ─────────────────────────────────────────────────
 
     /// @dev Deploy a native-ETH-terminal pool for PROJECT_ID (native auto-selected as the highest-value terminal).
     function _deployNativePool() internal returns (uint256 tokenId) {
@@ -365,7 +377,9 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
         assertEq(terminal.lastPayProjectId(), FEE_PROJECT_ID, "native cut routed to fee project");
         assertEq(terminal.lastPayAmount(), cut, "native cut forwarded as value");
         assertEq(hook.claimableFeeTokens(PROJECT_ID) - claimBefore, cut, "cut tracked as claimable fee tokens");
-        assertEq(hook.accumulatedTerminalTokens(PROJECT_ID, NATIVE), fee - cut, "native remainder to native bid-leg ledger");
+        assertEq(
+            hook.accumulatedTerminalTokens(PROJECT_ID, NATIVE), fee - cut, "native remainder to native bid-leg ledger"
+        );
     }
 
     /// @notice A forgiven native-terminal cut routes the whole native fee into the native bid-leg ledger.
@@ -381,9 +395,11 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
         assertEq(hook.accumulatedTerminalTokens(PROJECT_ID, NATIVE), fee, "forgiven native fee fully ledgered");
     }
 
-    // ─── Isolation (regression of the Critical) ──────────────────────────────
+    // ─── Isolation (regression of the Critical)
+    // ──────────────────────────────
 
-    /// @notice A project's mint sizes its terminal leg ONLY from its own recovered terminal plus its own ledger — never
+    /// @notice A project's mint sizes its terminal leg ONLY from its own recovered terminal plus its own ledger —
+    /// never
     /// from another project's ledger or an outside donation sitting in the shared clone's raw balance.
     function test_Isolation_MintNeverConsumesOtherLedgerOrDonation() public {
         _deployA(); // asks-only: A has zero recovered terminal and an empty terminal ledger.

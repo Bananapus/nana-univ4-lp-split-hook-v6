@@ -19,7 +19,8 @@ import {MockJBController} from "./mock/MockJBContracts.sol";
 /// @dev Registered as BOTH the project's controller and its terminal, so the `msg.sender == controller` check in
 ///      `processSplitWith` would pass on a nested call. Under the single-sided design, `_carryLeftovers` routes the
 ///      unconsumed terminal-token side into this project's `accumulatedTerminalTokens` ledger via a PURE state write
-///      (no `addToBalanceOf`), and an asks-only deploy never pairs terminal at all — so `deployPool` makes no external
+///      (no `addToBalanceOf`), and an asks-only deploy never pairs terminal at all — so `deployPool` makes no
+/// external
 ///      terminal call, and this armed re-entry is never even reached.
 contract ReentrantControllerTerminal is MockJBController {
     JBUniswapV4LPSplitHook public hook;
@@ -289,9 +290,11 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
     // ─────────────────────────────────────────────────────────────────────
 
     /// @notice After the cross-project-capture fix, `deployPool` pairs ONLY terminal recovered from burning this
-    ///         project's own position — which is zero on a first deploy — so it is strictly asks-only. Terminal loose
-    ///         on the shared clone (here, funded onto the hook) is never consumed and never routed via `addToBalanceOf`,
-    ///         so the deploy-time reentry surface through the leftover route is eliminated entirely: the malicious
+    ///         project's own position — which is zero on a first deploy — so it is strictly asks-only. Terminal
+    /// loose
+    ///         on the shared clone (here, funded onto the hook) is never consumed and never routed via
+    /// `addToBalanceOf`, so the deploy-time reentry surface through the leftover route is eliminated entirely: the
+    /// malicious
     ///         terminal's `addToBalanceOf` is never even called. Only the project-token leftover is carried to the
     ///         ledger (a pure state write, no external call).
     function test_reentrancy_deployPool_reentryAccumulatesSafely() public {
@@ -348,7 +351,9 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
             "Asks-only deploy must not call addToBalanceOf, so no re-entry can be attempted"
         );
         assertEq(
-            terminalToken.balanceOf(address(hook)), 10e18, "funded terminal must be untouched (never paired, never routed)"
+            terminalToken.balanceOf(address(hook)),
+            10e18,
+            "funded terminal must be untouched (never paired, never routed)"
         );
 
         // 8. Only the 20% project-token leftover (at 80% mint usage) is carried back to the ledger — a pure state
