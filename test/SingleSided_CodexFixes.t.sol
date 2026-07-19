@@ -604,4 +604,45 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         assertEq(_spotTickFor(pid, address(term)), expectedSeedTick, "wide corridor seeds one spacing inside the floor");
         assertLt(expectedSeedTick, corridorUpper - TICK_SPACING() + 1, "seed stays strictly below the ceiling");
     }
+
+    // ─── Fix C (coverage): floor-pinned excess terminal is routed out via _carryLeftovers → _addToProjectBalance ───
+
+    /// @notice When a rebalance recovers MORE terminal than the floor-leg bid can absorb, the bid bound pins at the
+    /// cash-out floor and the excess terminal is routed to the project's terminal balance in exactly one
+    /// `addToBalanceOf` call — never paired beyond capacity and never stranded in the hook.
+    function test_FixC_RebalanceFloorPinnedExcessTerminal_RoutedOutOnce() public {
+        (int24 corridorLower, int24 corridorUpper) = _corridorAtMid();
+        positionManager.initializePool(
+            _poolKey(), TickMath.getSqrtPriceAtTick(corridorLower + (corridorUpper - corridorLower) / 2)
+        );
+        _accumulateTokens(PROJECT_ID, 0.5e18);
+        vm.prank(owner);
+        hook.deployPool(PROJECT_ID);
+        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+
+        // Inject FAR more of this project's own terminal than a 0.5e18 ask leg's bid can absorb, so the burn recovers an
+        // excess that must pin the bid bound at the floor. Fund only the injected principal (so the mock's SWEEP has no
+        // unlocked terminal to hand back to the hook, keeping the "zero stranded" assertion meaningful).
+        uint256 injected = 1_000_000e18;
+        terminalToken.mint(address(positionManager), injected);
+        positionManager.injectPositionBalance(tokenId, address(terminalToken), injected);
+        projectToken.mint(address(positionManager), 1000e18);
+
+        controller.setWeight(PROJECT_ID, 900e18); // move the corridor to clear the drift guard.
+
+        uint256 addToBalanceBefore = terminal.addToBalanceCallCount();
+        vm.prank(owner);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
+
+        // Exactly one deposit routed the floor-pinned excess; no terminal is left stranded on the hook.
+        assertEq(terminal.addToBalanceCallCount() - addToBalanceBefore, 1, "excess terminal routed in one addToBalanceOf");
+        assertEq(terminalToken.balanceOf(address(hook)), 0, "no terminal stranded in the hook");
+
+        // The bid was pinned at the floor: only part of the recovered terminal was paired into the re-minted position.
+        (, uint256 terminalSide) = _lockedSidesFor(
+            hook.tokenIdOf(PROJECT_ID, address(terminalToken)), address(terminalToken), address(projectToken)
+        );
+        assertGt(terminalSide, 0, "the floor-leg bid is seeded from recovered terminal");
+        assertLt(terminalSide, injected, "the paired bid is capped at floor capacity, below the recovered terminal");
+    }
 }
