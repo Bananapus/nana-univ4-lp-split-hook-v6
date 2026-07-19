@@ -263,8 +263,10 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         _accumulateAndDeploy(PROJECT_ID, 100e18); // deploy consumes the accumulation (no dust at 100% usage)
         oracle.setTwapTick(_spotTick());
 
+        // With nothing (or only dust) accumulated, addLiquidity reverts on the dust-churn threshold guard rather than
+        // forcing a re-mint. Zero accumulation is below the threshold too.
         vm.prank(owner);
-        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoTokensAccumulated.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_AccumulationBelowThreshold.selector);
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
     }
 

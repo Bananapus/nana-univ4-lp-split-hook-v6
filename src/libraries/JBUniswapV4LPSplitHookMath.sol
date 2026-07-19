@@ -131,24 +131,24 @@ library JBUniswapV4LPSplitHookMath {
             // pool below the issuance price remains deployable; there is no redemption floor to place more precisely.
             int24 floorGap = 2 * _TICK_SPACING;
 
-            int24 minUsable =
+            int24 zeroMinUsable =
                 JBLPSplitHookHelpers.alignTickToSpacing({tick: TickMath.MIN_TICK, spacing: _TICK_SPACING}) + _TICK_SPACING;
-            int24 maxUsable =
+            int24 zeroMaxUsable =
                 JBLPSplitHookHelpers.alignTickToSpacing({tick: TickMath.MAX_TICK, spacing: _TICK_SPACING}) - _TICK_SPACING;
 
             if (projectToken == token0) {
                 // Project is token0: the issuance ceiling is the corridor UPPER bound. Align DOWN (as the cashOut != 0
                 // path aligns tickUpper) and keep the floor-gap below it inside the usable range.
                 tickUpper = JBLPSplitHookHelpers.alignTickToSpacing({tick: issuanceTick, spacing: _TICK_SPACING});
-                if (tickUpper > maxUsable) tickUpper = maxUsable;
-                if (tickUpper < minUsable + floorGap) tickUpper = minUsable + floorGap;
+                if (tickUpper > zeroMaxUsable) tickUpper = zeroMaxUsable;
+                if (tickUpper < zeroMinUsable + floorGap) tickUpper = zeroMinUsable + floorGap;
                 tickLower = tickUpper - floorGap;
             } else {
                 // Project is token1: the issuance ceiling is the corridor LOWER bound. Align UP (as the cashOut != 0
                 // path aligns tickLower) and keep the floor-gap above it inside the usable range.
                 tickLower = JBLPSplitHookHelpers.alignTickToSpacingCeil({tick: issuanceTick, spacing: _TICK_SPACING});
-                if (tickLower < minUsable) tickLower = minUsable;
-                if (tickLower > maxUsable - floorGap) tickLower = maxUsable - floorGap;
+                if (tickLower < zeroMinUsable) tickLower = zeroMinUsable;
+                if (tickLower > zeroMaxUsable - floorGap) tickLower = zeroMaxUsable - floorGap;
                 tickUpper = tickLower + floorGap;
             }
             return (tickLower, tickUpper);

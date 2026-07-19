@@ -81,6 +81,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @notice Thrown when a token amount that must fit a Uniswap V4 `uint128` field exceeds `type(uint128).max`, so a
     /// silent truncation (which could disable a mint or shrink a burn slippage floor to near-zero) is rejected outright.
     error JBUniswapV4LPSplitHook_AmountExceedsUint128(uint256 amount);
+    /// @notice Thrown when `addLiquidity` is called with less accumulated project-token balance than
+    /// `_MIN_ADD_ACCUMULATION`, so a trivial (dust) accumulation cannot force a full fee-collect+burn+remint churn.
+    error JBUniswapV4LPSplitHook_AccumulationBelowThreshold(uint256 projectId, uint256 accumulated, uint256 threshold);
     /// @notice Thrown when a pre-initialized pool's price falls outside the project's economic tick range.
     /// @dev This prevents frontrunning attacks where an attacker initializes the pool at an extreme price.
     error JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds(
@@ -187,6 +190,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// the
     /// same effective range (paying gas + realizing burn slippage) for no re-centering benefit is rejected.
     int24 internal constant _MIN_REBALANCE_DRIFT_TICKS = TICK_SPACING;
+
+    /// @notice The minimum accumulated project-token balance `addLiquidity` requires before it will churn the position.
+    /// @dev Below this, LP-fee dust (down to 1 wei of project-token fee carried into the accumulation ledger) would
+    /// otherwise force a full fee-collect+burn+remint on every accrual. Trivial accumulation keeps accruing in the
+    /// ledger until it crosses this floor, then deploys as liquidity — `deployPool` and the fee/credit accounting are
+    /// unaffected.
+    uint256 internal constant _MIN_ADD_ACCUMULATION = 1e15;
 
     /// @notice The slippage floor, out of `BPS`, applied to a burned position's contract-derived principal read.
     /// @dev When consolidating, the hook computes the position's current token amounts from its on-chain liquidity and
@@ -567,22 +577,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         return _totalOutstandingFeeTokenClaims[token];
     }
 
-    /// @notice Get the terminal-token balance this hook can spend for LP operations.
-    /// @dev ERC-20 balances can include fee-project tokens that already belong to claimants. Those unavailable tokens
-    /// must not be used as cash-out proceeds or LP principal.
-    /// @param terminalToken The terminal token to inspect.
-    /// @return spendableBalance The balance available after excluding committed fee-token claims.
-    function _spendableTerminalTokenBalance(address terminalToken) internal view returns (uint256 spendableBalance) {
-        uint256 balance = _getTerminalTokenBalance(terminalToken);
-
-        // Native fee proceeds are tracked as credits, not as claimable ERC-20 balances, so the whole balance is free.
-        if (_isNativeToken(terminalToken)) return balance;
-
-        // Keep claimable fee ERC-20s out of LP accounting so they cannot be spent before beneficiaries claim them.
-        uint256 unavailable = _unavailableFeeTokenBalance(terminalToken);
-        return balance > unavailable ? balance - unavailable : 0;
-    }
-
     /// @notice Look up the ERC-20 token address for a project.
     /// @param projectId The ID of the project.
     /// @return The project's deployed ERC-20 (address(0) if the project is credits-only with no ERC-20).
@@ -617,9 +611,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         address controller = _controllerOf(projectId);
         (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
 
-        // Nothing to add if no reserved tokens have accumulated since the last add.
-        if (accumulatedProjectTokens[projectId] == 0) {
-            revert JBUniswapV4LPSplitHook_NoTokensAccumulated({projectId: projectId});
+        // Require a non-trivial accumulation so LP-fee dust (down to 1 wei carried into the ledger) cannot force a full
+        // fee-collect+burn+remint churn on every accrual. Dust keeps accruing until it crosses the threshold.
+        uint256 accumulated = accumulatedProjectTokens[projectId];
+        if (accumulated < _MIN_ADD_ACCUMULATION) {
+            revert JBUniswapV4LPSplitHook_AccumulationBelowThreshold({
+                projectId: projectId, accumulated: accumulated, threshold: _MIN_ADD_ACCUMULATION
+            });
         }
 
         // Resolve the project's ERC-20 and the pool key once for the TWAP guard and the mint below.
@@ -904,6 +902,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         PoolKey memory key = poolKeysOf[projectId][terminalToken];
         address controller = _controllerOf(projectId);
         (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
+
+        // Collect and route accrued LP trading fees BEFORE recomputing the corridor so the corridor — used for BOTH
+        // the drift-guard comparison and the stored drift basis — reflects the post-fee surplus (routing terminal fees
+        // raises surplus, which raises the true cash-out floor). This makes an immediate second rebalance see no drift.
+        _collectAndRouteFees({
+            projectId: projectId, projectToken: projectToken, terminalToken: terminalToken, tokenId: tokenId, key: key
+        });
 
         // Recompute the project's economic corridor from its current rates.
         (int24 floorTick, int24 ceilingTick) = JBUniswapV4LPSplitHookMath.calculateTickBounds({
@@ -1363,6 +1368,21 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     )
         internal
     {
+        // Collect and route any accrued LP trading fees BEFORE computing the corridor so the corridor (and the drift
+        // basis stored by `_consolidateAndReMint`) reflect the post-fee surplus — routing terminal fees into the
+        // project's balance raises surplus, which raises the true cash-out floor. Skipped on a first deploy (no
+        // position yet). The burn inside `_consolidateAndReMint` then recovers only principal.
+        uint256 existingTokenId = tokenIdOf[projectId][terminalToken];
+        if (existingTokenId != 0) {
+            _collectAndRouteFees({
+                projectId: projectId,
+                projectToken: projectToken,
+                terminalToken: terminalToken,
+                tokenId: existingTokenId,
+                key: poolKeysOf[projectId][terminalToken]
+            });
+        }
+
         // The project's economic corridor (cash-out floor to issuance ceiling), as a sorted ascending raw tick range.
         // The adaptive-range logic inside `_consolidateAndReMint` anchors asks to the full project balance up to the
         // ceiling and solves the bid bound from the terminal balance (clamped at the floor), spanning the live spot.
@@ -1564,23 +1584,15 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint256 claimedCredits = _claimHookCreditsFor({projectId: projectId, controller: controller});
 
         // Burn the live position (if any), recovering only its PRINCIPAL with a contract-derived slippage floor.
-        // Snapshot the project balance AFTER claiming credits so the recovered-delta excludes them (counted
-        // separately below).
+        // Snapshot the balances AFTER claiming credits so the recovered-deltas exclude them (counted separately below).
+        // LP trading fees are collected and routed by the CALLER before this runs (so the corridor reflects post-fee
+        // surplus), leaving the burn to recover only principal.
         uint256 existingTokenId = tokenIdOf[projectId][terminalToken];
         uint256 recoveredProject;
+        uint256 recoveredTerminal;
         if (existingTokenId != 0) {
-            // Route accrued LP trading fees to the project (net of the fee-project cut) BEFORE burning the position.
-            // Otherwise the burn's TAKE_PAIR would sweep the fees in alongside the principal, and this re-mint would
-            // silently compound them into LP — permanently forgoing the fee-project's cut on every add/rebalance.
-            _collectAndRouteFees({
-                projectId: projectId,
-                projectToken: projectToken,
-                terminalToken: terminalToken,
-                tokenId: existingTokenId,
-                key: key
-            });
-
             uint256 projBalBeforeBurn = IERC20(projectToken).balanceOf(address(this));
+            uint256 termBalBeforeBurn = _getTerminalTokenBalance(terminalToken);
             (uint128 min0, uint128 min1) = _burnSlippageFloor({
                 tokenId: existingTokenId,
                 tickLower: activeTickLowerOf[projectId][terminalToken],
@@ -1591,13 +1603,16 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 tokenId: existingTokenId, key: key, decreaseAmount0Min: min0, decreaseAmount1Min: min1
             });
             recoveredProject = IERC20(projectToken).balanceOf(address(this)) - projBalBeforeBurn;
+            recoveredTerminal = _getTerminalTokenBalance(terminalToken) - termBalBeforeBurn;
         }
 
         // Held amounts to re-mint. Project side = ledger + recovered-from-burn + freshly claimed credits (all now in
-        // this hook's transferable balance). Terminal side = the spendable terminal balance (the burn's recovered
-        // terminal, minus any balance already reserved for fee-token claims) — never caller-supplied.
+        // this hook's transferable balance). Terminal side = ONLY the terminal recovered from burning THIS project's
+        // position (0 on a first deploy → asks-only). The shared clone's raw terminal balance may include other
+        // projects' recovered terminal, donations, or another project's tokens set as this one's terminal; spending
+        // that balance would let one project capture another's — so it is never touched.
         uint256 projectAmount = accumulatedProjectTokens[projectId] + recoveredProject + claimedCredits;
-        uint256 terminalAmount = _spendableTerminalTokenBalance(terminalToken);
+        uint256 terminalAmount = recoveredTerminal;
 
         // Resolve token ordering once; it flips both the economic gate and the adaptive ask/bid geometry.
         (address token0,) = _sortTokens({tokenA: projectToken, tokenB: Currency.unwrap(_toCurrency(terminalToken))});

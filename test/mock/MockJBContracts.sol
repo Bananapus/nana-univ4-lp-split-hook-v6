@@ -511,9 +511,16 @@ contract MockJBMultiTerminal {
         return reclaimAmount;
     }
 
+    /// @notice When set, `addToBalanceOf` raises the store's tracked surplus by the deposited amount, modeling a real
+    /// terminal where routed LP fees increase surplus (and thus the cash-out floor). Off by default.
+    bool public bumpSurplusOnAddToBalance;
+
+    function setBumpSurplusOnAddToBalance(bool value) external {
+        bumpSurplusOnAddToBalance = value;
+    }
+
     function addToBalanceOf(
-        uint256,
-        /* projectId */
+        uint256 projectId,
         address token,
         uint256 amount,
         bool,
@@ -529,6 +536,11 @@ contract MockJBMultiTerminal {
 
         if (amount > 0 && token != address(0x000000000000000000000000000000000000EEEe)) {
             require(MockERC20(token).transferFrom(msg.sender, address(this), amount), "TRANSFER_FROM_FAILED");
+        }
+
+        if (bumpSurplusOnAddToBalance && amount > 0 && storeAddress != address(0)) {
+            MockJBTerminalStore store = MockJBTerminalStore(storeAddress);
+            store.setSurplus(projectId, store.surplusPerToken(projectId) + amount);
         }
     }
 

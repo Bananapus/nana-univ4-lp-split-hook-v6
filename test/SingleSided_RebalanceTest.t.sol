@@ -10,6 +10,7 @@ import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
@@ -25,18 +26,26 @@ contract SingleSided_RebalanceTest is LPSplitHookV4TestBase {
 
     address internal constant STRANGER = address(0xBEEF);
 
-    /// @notice Set a realistic corridor, accumulate, and deploy the single-sided position. Also seed the hook with
-    /// terminal tokens (an accrued bid side) and the PositionManager with both tokens so burns/mints settle.
+    /// @notice Set a realistic corridor, pre-initialize the pool at mid (so the asks-only deploy sits mid-corridor with
+    /// room for a bid leg below spot), accumulate, and deploy. Inject `bidAmount` terminal INTO the deployed position
+    /// (simulating buyers filling asks and leaving terminal principal behind) so the rebalance's burn recovers it as
+    /// the bid — the only legitimate terminal source after the cross-project-capture fix (recovered terminal only).
     function _deploySingleSidedWithBid(uint256 projectAmount, uint256 bidAmount) internal returns (uint256 tokenId) {
         store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
+
+        (int24 corridorLower, int24 corridorUpper) = _freshCorridor();
+        positionManager.initializePool(
+            _poolKey(), TickMath.getSqrtPriceAtTick(corridorLower + (corridorUpper - corridorLower) / 2)
+        );
 
         _accumulateTokens(PROJECT_ID, projectAmount);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
         tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
 
-        // Accrued terminal tokens sitting on the hook become the re-mint's bid side.
-        terminalToken.mint(address(hook), bidAmount);
+        // The bid capital lives INSIDE the position (recovered on burn), not loose on the hook.
+        terminalToken.mint(address(positionManager), bidAmount);
+        positionManager.injectPositionBalance(tokenId, address(terminalToken), bidAmount);
         // The PositionManager must hold enough of both tokens to satisfy TAKE_PAIR on burn and SWEEP after mint.
         projectToken.mint(address(positionManager), 1000e18);
         terminalToken.mint(address(positionManager), 1000e18);
@@ -58,6 +67,21 @@ contract SingleSided_RebalanceTest is LPSplitHookV4TestBase {
             projectToken: address(projectToken),
             controller: address(controller),
             ruleset: ruleset
+        });
+    }
+
+    function _poolKey() internal view returns (PoolKey memory key) {
+        Currency terminalCurrency = Currency.wrap(address(terminalToken));
+        Currency projectCurrency = Currency.wrap(address(projectToken));
+        (Currency currency0, Currency currency1) = terminalCurrency < projectCurrency
+            ? (terminalCurrency, projectCurrency)
+            : (projectCurrency, terminalCurrency);
+        key = PoolKey({
+            currency0: currency0,
+            currency1: currency1,
+            fee: hook.POOL_FEE(),
+            tickSpacing: hook.TICK_SPACING(),
+            hooks: hook.oracleHook()
         });
     }
 

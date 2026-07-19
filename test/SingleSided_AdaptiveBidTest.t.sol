@@ -2,15 +2,56 @@
 pragma solidity 0.8.28;
 
 import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
+import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 import {JBUniswapV4LPSplitHookMath} from "../src/libraries/JBUniswapV4LPSplitHookMath.sol";
 import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
+import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
+import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
 import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
+
+/// @notice Exposes the internal adaptive-range solver so the bid-depth math can be tested directly. Post cross-project
+/// fix, `deployPool` is asks-only (no hook-held terminal is ever paired); the adaptive bid is exercised only when a
+/// burn recovers this project's own terminal principal. The solver itself is unchanged and pure, so testing it
+/// directly is the faithful way to cover bid-depth-vs-terminal-size behavior.
+contract AdaptiveBidExposedHook is JBUniswapV4LPSplitHook {
+    constructor(
+        address directory,
+        IJBPermissions permissions,
+        address tokens,
+        IAllowanceTransfer permit2,
+        IJBSuckerRegistry suckerRegistry
+    )
+        JBUniswapV4LPSplitHook(directory, permissions, tokens, permit2, suckerRegistry)
+    {}
+
+    function exposed_adaptiveRange(
+        bool projectIsToken0,
+        int24 corridorLower,
+        int24 corridorUpper,
+        uint160 sqrtSpotX96,
+        uint256 projectAmount,
+        uint256 terminalAmount
+    )
+        external
+        pure
+        returns (int24 tickLower, int24 tickUpper, uint256 bidAmountForMint)
+    {
+        return _adaptiveRange({
+            projectIsToken0: projectIsToken0,
+            corridorLower: corridorLower,
+            corridorUpper: corridorUpper,
+            sqrtSpotX96: sqrtSpotX96,
+            projectAmount: projectAmount,
+            terminalAmount: terminalAmount
+        });
+    }
+}
 
 /// @notice Adaptive bid-depth coverage for `deployPool`: the single minted position always deploys the ENTIRE project
 /// balance as asks up to the issuance ceiling, and the bid bound moves with the hook's held terminal balance —
@@ -27,6 +68,36 @@ contract SingleSided_AdaptiveBidTest is LPSplitHookV4TestBase {
     int24 internal _spotTick;
     int24 internal _ceilingEcon;
     int24 internal _floorEcon;
+
+    AdaptiveBidExposedHook internal _solver;
+
+    /// @notice The adaptive `[tickLower, tickUpper]` and paired bid for the current corridor/spot at a given terminal
+    /// size, resolved via the pure solver, plus the ordering-derived ask-anchor and bid-bound ticks.
+    function _solveRange(uint256 projectAmount, uint256 terminalAmount)
+        internal
+        returns (int24 askAnchorTick, int24 bidBoundTick, uint256 bidAmountForMint)
+    {
+        if (address(_solver) == address(0)) {
+            _solver = new AdaptiveBidExposedHook(
+                address(directory),
+                IJBPermissions(address(permissions)),
+                address(jbTokens),
+                IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3),
+                IJBSuckerRegistry(address(0))
+            );
+        }
+        bool projectIsToken0 = address(projectToken) < address(terminalToken);
+        (int24 tickLower, int24 tickUpper, uint256 bid) = _solver.exposed_adaptiveRange({
+            projectIsToken0: projectIsToken0,
+            corridorLower: _corridorLower,
+            corridorUpper: _corridorUpper,
+            sqrtSpotX96: TickMath.getSqrtPriceAtTick(_spotTick),
+            projectAmount: projectAmount,
+            terminalAmount: terminalAmount
+        });
+        (askAnchorTick, bidBoundTick) = projectIsToken0 ? (tickUpper, tickLower) : (tickLower, tickUpper);
+        bidAmountForMint = bid;
+    }
 
     /// @notice Set a realistic corridor, pre-initialize the pool at mid-corridor, and fund the PositionManager. Records
     /// the corridor bounds and the economic floor/ceiling (ordering-aware) for the tests.
@@ -167,20 +238,16 @@ contract SingleSided_AdaptiveBidTest is LPSplitHookV4TestBase {
         // A small fraction of the bid-leg capacity: enough to register a bid at least one tick-spacing deep, but far
         // from filling the leg — so the bid bound stays close to spot.
         uint256 smallTerminal = _maxBidCapacity() / 8;
-        uint256 tokenId = _seedAndDeploy({projectAmount: PROJECT_AMOUNT, terminalHeld: smallTerminal});
+        (, int24 bidBoundTick, uint256 bidPaired) = _solveRange(PROJECT_AMOUNT, smallTerminal);
 
-        (, int24 bidBoundTick) = _askAndBidTicks();
-        (uint256 projectSide, uint256 terminalSide) = _lockedSides(tokenId);
-
-        assertEq(projectSide, PROJECT_AMOUNT, "asks stay fully deployed regardless of the (scarce) terminal");
-        assertGt(terminalSide, 0, "a small terminal seeds a real (non-empty) bid leg");
+        assertEq(bidPaired, smallTerminal, "a scarce terminal is fully paired (not floor-pinned)");
+        assertTrue(bidBoundTick != _floorEcon, "a small terminal must NOT pin the bid at the floor");
 
         // The bid bound sits strictly between the live spot and the cash-out floor — a genuine, shallow bid.
         int24 depthFromSpot = _absDiff(bidBoundTick, _spotTick);
         int24 spanToFloor = _absDiff(_floorEcon, _spotTick);
         assertGt(depthFromSpot, 0, "the bid bound must move off the spot");
         assertLt(depthFromSpot, spanToFloor / 2, "a shallow bid stays much closer to spot than to the floor");
-        assertTrue(bidBoundTick != _floorEcon, "a small terminal must NOT pin the bid at the floor");
     }
 
     // ─── Larger T: deeper bid toward the floor
@@ -189,46 +256,31 @@ contract SingleSided_AdaptiveBidTest is LPSplitHookV4TestBase {
     function test_Deploy_LargerTerminal_DeeperBid() public {
         _prepareCorridorAndPool();
         uint256 capacity = _maxBidCapacity();
-        uint256 snap = vm.snapshotState();
 
-        _seedAndDeploy({projectAmount: PROJECT_AMOUNT, terminalHeld: capacity / 8});
-        (, int24 bidSmall) = _askAndBidTicks();
+        (, int24 bidSmall,) = _solveRange(PROJECT_AMOUNT, capacity / 8);
         int24 depthSmall = _absDiff(bidSmall, _spotTick);
 
-        vm.revertToState(snap);
-
-        _seedAndDeploy({projectAmount: PROJECT_AMOUNT, terminalHeld: capacity / 2});
-        (, int24 bidLarge) = _askAndBidTicks();
+        (, int24 bidLarge,) = _solveRange(PROJECT_AMOUNT, capacity / 2);
         int24 depthLarge = _absDiff(bidLarge, _spotTick);
 
         assertGt(depthLarge, depthSmall, "a larger terminal must push the bid bound deeper toward the floor");
         assertTrue(bidLarge != _floorEcon, "the larger (but not abundant) terminal must NOT pin at the floor");
     }
 
-    // ─── Abundant T: pinned at the floor, excess routed to the project balance
-    // ───────────────────
+    // ─── Abundant T: pinned at the floor, excess left over (routed to the project balance by the caller)
+    // ────────
 
     function test_Deploy_AbundantTerminal_PinnedAtFloor_ExcessRouted() public {
         _prepareCorridorAndPool();
-        uint256 addToBalanceBefore = terminal.addToBalanceCallCount();
         uint256 terminalHeld = 1000e18;
-        uint256 tokenId = _seedAndDeploy({projectAmount: PROJECT_AMOUNT, terminalHeld: terminalHeld});
+        (, int24 bidBoundTick, uint256 bidPaired) = _solveRange(PROJECT_AMOUNT, terminalHeld);
 
-        (, int24 bidBoundTick) = _askAndBidTicks();
-        (uint256 projectSide, uint256 terminalSide) = _lockedSides(tokenId);
-
-        assertEq(projectSide, PROJECT_AMOUNT, "asks stay fully deployed even when the terminal is abundant");
         assertEq(bidBoundTick, _floorEcon, "an abundant terminal pins the bid bound at the cash-out floor");
-        assertGt(terminalSide, 0, "the floor-depth bid still pairs terminal into the position");
-        assertLt(terminalSide, terminalHeld, "the abundant terminal exceeds the floor-leg capacity");
-
-        // The excess (held terminal beyond the floor-leg capacity) was routed to the project's terminal balance via a
-        // single addToBalanceOf — never stranded on the hook, never minted past the floor.
-        assertEq(
-            terminal.addToBalanceCallCount(), addToBalanceBefore + 1, "the excess terminal must be routed exactly once"
-        );
-        assertEq(terminalToken.balanceOf(address(hook)), 0, "no terminal may be stranded on the hook after routing");
-        assertGt(terminalHeld - terminalSide, 0, "a non-zero excess must have been routed");
+        assertGt(bidPaired, 0, "the floor-depth bid still pairs terminal into the position");
+        assertLt(bidPaired, terminalHeld, "the abundant terminal exceeds the floor-leg capacity");
+        // The excess (terminal beyond the floor-leg capacity) is NOT paired into the mint; the caller carries it to the
+        // project's terminal balance as a leftover (covered by the consolidation/leftover tests), never stranded.
+        assertGt(terminalHeld - bidPaired, 0, "a non-zero excess must be left over");
     }
 
     // ─── Asks are NEVER starved, across the whole terminal-size spectrum

@@ -286,13 +286,15 @@ contract ReentrantFeeTerminal {
 ///      accounting revert or a permission check that happens to still apply.
 contract ReentrancyTest is LPSplitHookV4TestBase {
     // ─────────────────────────────────────────────────────────────────────
-    // Test 1: deployPool re-entry via addToBalanceOf is blocked by the guard
+    // Test 1: deployPool is asks-only, so it never routes terminal via addToBalanceOf
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice A malicious controller+terminal re-enters `processSplitWith` during `deployPool`'s
-    ///         `addToBalanceOf` call (triggered by uninvested terminal-token dust from the single-sided mint).
-    ///         The `nonReentrant` guard on `processSplitWith` blocks the nested call deterministically; the
-    ///         outer `deployPool` call still completes successfully.
+    /// @notice After the cross-project-capture fix, `deployPool` pairs ONLY terminal recovered from burning this
+    ///         project's own position — which is zero on a first deploy — so it is strictly asks-only. Terminal loose
+    ///         on the shared clone (here, funded onto the hook) is never consumed and never routed via `addToBalanceOf`,
+    ///         so the deploy-time reentry surface through the leftover route is eliminated entirely: the malicious
+    ///         terminal's `addToBalanceOf` is never even called. Only the project-token leftover is carried to the
+    ///         ledger (a pure state write, no external call).
     function test_reentrancy_deployPool_reentryAccumulatesSafely() public {
         // 1. Create malicious controller+terminal.
         ReentrantControllerTerminal malicious =
@@ -334,39 +336,33 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
         uint256 accBefore = hook.accumulatedProjectTokens(PROJECT_ID);
         assertEq(accBefore, accumulateAmount, "Pre-condition: tokens accumulated");
 
-        // 6. Enable re-entry and deploy the pool.
+        // 6. Arm re-entry (the malicious terminal would re-enter on `addToBalanceOf`) and deploy the pool.
         malicious.enableReentry();
 
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
-        // 7. The reentrant call into `processSplitWith` was attempted from inside `addToBalanceOf`, and the
-        // `nonReentrant` guard blocked it deterministically.
-        assertTrue(malicious.reentrancyAttempted(), "Re-entry should have been attempted during addToBalanceOf");
-        assertFalse(malicious.reentrancySucceeded(), "Re-entrant processSplitWith must be blocked by the guard");
+        // 7. The deploy is asks-only: it never routes terminal, so `addToBalanceOf` is never called and the armed
+        // re-entry is never even attempted. The funded terminal on the hook is left completely untouched.
+        assertFalse(
+            malicious.reentrancyAttempted(),
+            "Asks-only deploy must not call addToBalanceOf, so no re-entry can be attempted"
+        );
         assertEq(
-            malicious.reentryRevertSelector(),
-            ReentrancyGuard.Reentrancy.selector,
-            "Blocked re-entry must revert specifically via the nonReentrant guard, not some other error"
+            terminalToken.balanceOf(address(hook)), 10e18, "funded terminal must be untouched (never paired, never routed)"
         );
 
-        // 8. Because the guard reverts before the callee's body runs, the blocked re-entry adds nothing beyond the
-        // 20% project-token leftover the legitimate mint (at 80% usage) already carried back into the ledger —
-        // reading the ledger from inside the blocked callback proves the re-entry itself contributed zero.
+        // 8. Only the 20% project-token leftover (at 80% mint usage) is carried back to the ledger — a pure state
+        // write with no external call.
         uint256 legitimateLeftover = 200e18; // 20% of the 1000e18 deploy amount, per positionManager.setUsagePercent
-        assertEq(
-            malicious.accumulatedDuringReentry(),
-            legitimateLeftover,
-            "Blocked re-entry must not add anything beyond the legitimate carried-forward leftover"
-        );
         assertEq(
             hook.accumulatedProjectTokens(PROJECT_ID),
             legitimateLeftover,
-            "Ledger holds only the legitimate leftover; nothing from the blocked re-entry"
+            "Ledger holds only the legitimate project-token leftover"
         );
         assertEq(malicious.burnCallCount(), 0, "no burn should occur on a first deployment");
 
-        // 9. Verify: pool deployed successfully despite the blocked re-entry attempt.
+        // 9. Verify: pool deployed successfully (asks-only).
         assertTrue(
             hook.isPoolDeployed(PROJECT_ID, address(terminalToken)),
             "Pool should deploy successfully despite re-entry attempt"
