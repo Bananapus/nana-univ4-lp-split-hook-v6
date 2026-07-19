@@ -36,14 +36,13 @@
 ```text
 reserved-token split distributions
   -> accumulate project tokens before pool deployment
-authorized deploy call
-  -> computes price bounds from issuance and cash-out economics
-  -> cashes out the optimal fraction for terminal tokens
-  -> deploys or uses the target pool and mints the concentrated LP position
+permissionless deploy call
+  -> computes price bounds from issuance and cash-out economics (floor tick = cash-out/redemption price)
+  -> deploys or uses the target pool and mints a single-sided ask position from the accumulated project tokens (no cash-out)
 post-deployment
-  -> new reserved tokens keep accumulating; `addLiquidity` converts them into more liquidity (top-up while the live corridor matches the active position, else re-range into a new position), validating the pool spot price against the oracle TWAP and cashing out the optimal fraction directly through the bonding curve
-  -> on re-range the stale position is burned and a single fresh position is re-minted at the live corridor (funds consolidate, no fragmentation)
-  -> fees can be collected from the single active position and the position can be rebalanced
+  -> new reserved tokens keep accumulating; `addLiquidity` folds them into the single position by burning the prior position and re-minting one adaptive position, after validating the pool spot price against the oracle TWAP; any bid side is funded only from the terminal recovered by burning the hook's own prior position (never a cash-out)
+  -> funds always consolidate into exactly one position per pair — no fragmentation
+  -> fees can be collected from the single active position and the position can be rebalanced (both permissionless, drift/TWAP-guarded)
 ```
 
 ## Accounting model
@@ -54,7 +53,7 @@ It also owns claim segregation for routed LP fees. Outstanding ERC-20 fee-token 
 
 ## Security model
 
-- The main risks are price-bound math, optimal cash-out math, and staged behavior drift.
+- The main risks are price-bound math (including the cash-out-price floor), adaptive-range sizing, and staged behavior drift.
 - Rebalance is effectively a remove-collect-recompute-mint pipeline and should be reviewed as one unit.
 - Pool initialization race conditions matter on first deployment.
 - Accumulation/LP-funding logic, fee routing, and outstanding-claim accounting are coupled.
@@ -62,7 +61,7 @@ It also owns claim segregation for routed LP fees. Outstanding ERC-20 fee-token 
 ## Safe change guide
 
 - Review pre-deployment and post-deployment behavior together whenever state layout changes.
-- Keep price-bound math, optimal cash-out math, and rebalance logic synchronized.
+- Keep price-bound math, the cash-out-price floor derivation, adaptive-range sizing, and rebalance logic synchronized.
 - If you change fee routing or accumulation/leftover-carry behavior, re-check outstanding fee-token and fee-credit claim segregation and in-flight fee routing assumptions.
 - If fee routing changes, inspect downstream fee-project behavior and claim paths.
 - Keep deployer assumptions aligned with the address registry, deployment scripts, immutable implementation address, and one-shot V4 constants used to preserve the deployer address across chains.

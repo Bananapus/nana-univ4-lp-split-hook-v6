@@ -15,8 +15,8 @@ This repo takes reserved Juicebox token issuance and turns it into a managed Uni
 - `JBUniswapV4LPSplitHook`: accumulation, deployment, liquidity growth, rebalancing, and fee tracking
 - `JBUniswapV4LPSplitHookDeployer`: clone and provenance packaging
 - `deployPool(...)`: first-pool deployment entrypoint
-- `addLiquidity(...)`: convert post-deploy accumulation into more liquidity (top-up or re-range); same auth model as `deployPool`
-- `rebalanceLiquidity(...)` / `claimFeeTokensFor(...)`: operate the position and release tracked fee value
+- `addLiquidity(...)`: fold post-deploy accumulation into the single position (burn prior, re-mint one); permissionless like `deployPool`
+- `rebalanceLiquidity(...)`: permissionless re-centering of the position; `claimFeeTokensFor(...)`: owner/`SET_BUYBACK_POOL`-gated release of tracked fee value
 
 ## Journey 1: Accumulate reserved tokens before a pool exists
 
@@ -46,7 +46,7 @@ This repo takes reserved Juicebox token issuance and turns it into a managed Uni
 
 ## Journey 2: Deploy the initial UniV4 LP position
 
-**Actor:** operator or, after weight decay, a permissionless caller.
+**Actor:** anyone (deployment is permissionless).
 
 **Intent:** create the first bounded LP position using project economics.
 
@@ -54,13 +54,13 @@ This repo takes reserved Juicebox token issuance and turns it into a managed Uni
 
 - enough reserved tokens have accumulated
 - the terminal token and project-token assumptions are correct
-- the caller understands when deployment is permissioned versus permissionless
+- the caller understands the economic gate (the seed reverts once the pool spot reaches the issuance ceiling)
 
 **Main Flow**
 
 1. Call `deployPool(...)` directly or use the deployer clone path.
-2. Respect the normal `SET_BUYBACK_POOL` requirement unless the documented decay threshold has been crossed.
-3. Derive tick bounds from issuance and cash-out assumptions rather than arbitrary price intuition.
+2. Note that deployment is permissionless; the seed reverts if the pool spot has already reached the issuance ceiling.
+3. Derive tick bounds from issuance and cash-out assumptions rather than arbitrary price intuition (the floor tick is placed at the project's cash-out/redemption price).
 4. Optionally register the deployed instance in the address registry.
 
 **Failure Modes**
@@ -87,7 +87,7 @@ This repo takes reserved Juicebox token issuance and turns it into a managed Uni
 **Main Flow**
 
 1. Collect accrued LP fees (from the single active position).
-2. Call `addLiquidity` to convert accumulated post-deploy reserved tokens into more liquidity — topping up the active position while the live corridor matches it, or re-ranging into a new position once the corridor drifts past the threshold.
+2. Call `addLiquidity` to fold accumulated post-deploy reserved tokens into the project's single position — burning the prior position and re-minting one adaptive position, under an oracle-TWAP deviation guard.
 3. Rebalance when price or issuance conditions make the old range stale.
 4. Keep fee routing and fee-project assumptions aligned with the intended model.
 

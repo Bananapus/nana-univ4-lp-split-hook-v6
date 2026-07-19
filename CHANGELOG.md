@@ -1,5 +1,13 @@
 # V5 to V6 Changelog
 
+## 1.4.0 — Single-sided, cash-out-free, permissionless redesign
+
+- The hook seeds a project's Uniswap V4 buyback pool with **single-sided liquidity**: at seed it is asks-only, offering the accumulated project tokens from the live spot up to the issuance ceiling. It maintains **exactly one adaptive position per `(projectId, terminalToken)`** via consolidate-and-re-mint — route accrued LP fees, burn the prior V4 position, and fold recovered principal, the accumulation ledger, and swept credits into one fresh position.
+- The hook **never performs a cash-out**: it never calls `cashOutTokensOf`, never touches project surplus, and never burns project tokens. The corridor floor is still placed at the project's cash-out (redemption) price, but the price is used only to position the floor tick. Any terminal-token (bid) side of a re-minted position is funded solely from the terminal tokens the hook recovers by burning its own prior V4 position. The only Uniswap V4 position the hook burns is its own.
+- The lifecycle is **fully permissionless**: `deployPool`, `addLiquidity`, `rebalanceLiquidity`, and `collectAndRouteLPFees` are callable by anyone, each `nonReentrant`. `deployPool` and `addLiquidity` are bounded by an economic gate (the mint reverts once spot reaches the issuance ceiling); `addLiquidity`, `rebalanceLiquidity`, and already-initialized-pool `deployPool` runs are bounded by a spot-vs-30-minute-TWAP guard, and `rebalanceLiquidity` additionally by a corridor-drift threshold. Only `claimFeeTokensFor` remains gated to the project owner or `SET_BUYBACK_POOL` delegate.
+- `deployPool` auto-selects the terminal token by highest ETH-denominated value across the project's terminals and permanently locks it.
+- Security-hardening pass: removed the funding-cash-out path and its `minCashOutReturn` parameter, deleted the `AddLiquidityParams` struct, and folded burn-slippage protection into contract-derived floors (callers no longer supply slippage). See `RISKS.md` §7.5 (project-token LP fees compound with no fee-project cut) and §7.6 (terminal auto-selection is influenceable — accepted low severity).
+
 ## Scope
 
 This is a V5-to-V6 migration changelog, not a package release log or commit history. The closest V5 source comparison is `nana-lp-split-hook-v5` in `../../v5/evm`; the current repo is the V6 Uniswap V4 LP split hook package.
@@ -11,7 +19,6 @@ This is a V5-to-V6 migration changelog, not a package release log or commit hist
 - `IJBUniswapV4LPSplitHook`
 - `IJBUniswapV4LPSplitHookDeployer`
 - `JBUniswapV4LPSplitHookMath`
-- `AddLiquidityParams`
 
 ## Summary
 
@@ -31,8 +38,8 @@ This is a V5-to-V6 migration changelog, not a package release log or commit hist
   - `TokensBurned`
 - Added or changed functions:
   - `initialize(...)`
-  - `deployPool(uint256,uint256)`
-  - `addLiquidity(uint256,address,uint256)`
+  - `deployPool(uint256)`
+  - `addLiquidity(uint256,address)`
   - `poolKeyOf(uint256,address)`
   - `isPoolDeployed(uint256,address)`
   - deployer `deployHookFor(...)`

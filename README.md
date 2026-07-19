@@ -19,9 +19,9 @@
 The hook has a two-stage lifecycle:
 
 - before pool deployment, it accumulates reserved project tokens
-- after deployment, further reserved-token inflows keep accumulating, and anyone authorized can call `addLiquidity` to convert them into more protocol-owned liquidity (topping up the active position or re-ranging into a new one); the hook also manages fee collection and rebalancing
+- after deployment, further reserved-token inflows keep accumulating, and anyone can call `addLiquidity` to fold them into the project's single Uniswap V4 position (consolidated by burning the prior position and re-minting one adaptive position); the hook also manages permissionless fee collection and rebalancing
 
-The LP range is derived from project economics rather than from an arbitrary price target.
+The LP range is derived from project economics — asks anchored to the project balance up to the issuance ceiling, with the floor placed at the project's cash-out (redemption) price — rather than from an arbitrary price target.
 
 Use this repo when reserved-token issuance should become managed concentrated liquidity. Do not use it when a project only needs a buyback hook or normal reserved-token splits.
 
@@ -38,7 +38,7 @@ This repo owns a post-issuance lifecycle:
 
 1. accumulate reserved tokens
 2. deploy them into a bounded V4 position
-3. keep accumulating later inflows and grow the position via `addLiquidity` (top-up or re-range), collecting fees and rebalancing over time
+3. keep accumulating later inflows and grow the position via `addLiquidity` (which consolidates into a single re-minted position), collecting fees and rebalancing over time
 
 It does not own the project's issuance logic itself.
 
@@ -54,12 +54,10 @@ It does not own the project's issuance logic itself.
 - this hook governs post-issuance liquidity, so it should not be used to infer how project tokens were originally priced or minted
 - first-pool deployment validates any pre-initialized pool price against the project's economic tick bounds and reverts if out of range
 - LP management depends on both live market state and live Juicebox economics
-- rebalancing and fee claiming are operational powers, so projects should publish who may call them and what policy
-  governs new ranges before treating the hook as hands-off infrastructure
-- newly received reserved tokens keep accumulating after deployment and are converted into additional liquidity via `addLiquidity` (the hook never burns; supply-reducing burns are a protocol-layer split-routing decision)
-- the normal reserved-token path requires a deployed project ERC-20; if the hook also holds internal project credits, deploy/add liquidity claims them into that ERC-20 before the funding cash-out so accounting remains tied to transferable tokens
-- deploy/add liquidity compares any derived bonding-curve `minCashOutReturn` against the net terminal output for
-  nonzero-tax projects, since the terminal withholds the standard fee before sending funds to the hook
+- fee claiming (`claimFeeTokensFor`) is an operational power gated to the project owner or `SET_BUYBACK_POOL` delegate; deploy, add, rebalance, and fee collection are permissionless but bounded by economic and oracle-TWAP guards, so projects should understand who can trigger them and how new ranges are chosen before treating the hook as hands-off infrastructure
+- newly received reserved tokens keep accumulating after deployment and are converted into additional liquidity via `addLiquidity` (the hook never burns project tokens; supply-reducing burns are a protocol-layer split-routing decision)
+- the normal reserved-token path requires a deployed project ERC-20; if the hook also holds internal project credits, deploy/add liquidity claims them into that ERC-20 before minting so accounting remains tied to transferable tokens
+- the hook never cashes out: any terminal-token (bid) side of a position is funded only from the terminal tokens the hook recovers by burning its own prior V4 position, never by redeeming project tokens against the terminal
 - fee-project credits owed to claimants are reserved from that credit normalization, so a fee project cannot consume other projects' claimable fee credits as its own LP principal
 
 ## Where state lives
