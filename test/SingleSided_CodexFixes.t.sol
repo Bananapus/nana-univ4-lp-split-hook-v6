@@ -359,14 +359,15 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         (lo, hi) = _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
     }
 
-    // ─── Finding 5 (MEDIUM): the corridor (and drift basis) reflect POST-fee-routing surplus ───
+    // ─── Finding 5 (MEDIUM): a rebalance collects fees before the re-mint, folding them into the bid-leg ledger ───
 
-    /// @notice A rebalance collects and routes LP fees BEFORE computing the corridor, so routing terminal fees (which
-    /// raise surplus and thus the cash-out floor) is reflected in the stored corridor. The fee-driven floor move is what
-    /// clears the drift guard for the first rebalance; an immediate second rebalance then sees no further drift and
-    /// reverts — no free double-rebalance. On the pre-fix code the corridor was computed BEFORE fee routing, so the
-    /// first rebalance would find no drift at all (and revert), and the stored corridor would lag the post-fee surplus.
-    function test_Finding5_CorridorReflectsPostFeeSurplus_NoDoubleRebalance() public {
+    /// @notice A rebalance collects and routes LP fees BEFORE the burn/re-mint. The terminal-fee remainder is folded
+    /// into this project's bid-leg ledger and re-minted as bid liquidity — it is NOT deposited into the treasury and
+    /// does NOT bump the project's surplus (so it no longer moves the cash-out floor). Genuine corridor drift therefore
+    /// comes from a rate/surplus change; an immediate second rebalance with no further drift reverts — no free
+    /// double-rebalance.
+    function test_Finding5_FeesFoldToBidLedgerNotSurplus_NoDoubleRebalance() public {
+        // Even with the treasury-surplus bump enabled, no `addToBalanceOf` deposit happens for routed fees anymore.
         terminal.setBumpSurplusOnAddToBalance(true);
         (int24 corridorLower, int24 corridorUpper) = _corridorAtMid();
         positionManager.initializePool(_poolKey(), TickMath.getSqrtPriceAtTick(corridorLower + (corridorUpper - corridorLower) / 2));
@@ -375,7 +376,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
 
-        // Give the position a bid and MATERIAL pending terminal-side LP fees; routing them raises surplus (the floor).
+        // Give the position a bid and MATERIAL pending terminal-side LP fees.
         terminalToken.mint(address(positionManager), 1e18);
         positionManager.injectPositionBalance(tokenId, address(terminalToken), 1e18);
         uint256 fee = 60e18;
@@ -384,16 +385,30 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         else positionManager.setCollectableFees(tokenId, 0, fee);
         terminalToken.mint(address(positionManager), fee);
         projectToken.mint(address(positionManager), 1000e18);
-        terminalToken.mint(address(positionManager), 1000e18);
 
-        // First rebalance: the fee-driven surplus bump moves the floor enough to clear the drift guard.
+        uint256 surplusBefore = store.surplusPerToken(PROJECT_ID);
+        uint256 addToBalanceBefore = terminal.addToBalanceCallCount();
+
+        // Drive genuine corridor drift with a rate change (fees no longer move the floor).
+        controller.setWeight(PROJECT_ID, 900e18);
+
         vm.prank(user);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
-        // The stored drift basis reflects the POST-fee corridor: recomputing the corridor now equals what was stored.
+        // The terminal fee remainder was NOT deposited to the treasury and did NOT bump the project's surplus.
+        assertEq(
+            terminal.addToBalanceCallCount(), addToBalanceBefore, "routed fees are not deposited into the treasury"
+        );
+        assertEq(store.surplusPerToken(PROJECT_ID), surplusBefore, "routed fees do not bump the project's surplus");
+
+        // The fee remainder was folded into the bid leg alongside the recovered terminal.
+        (, uint256 terminalSide) = _lockedSides(hook.tokenIdOf(PROJECT_ID, address(terminalToken)));
+        assertGt(terminalSide, 0, "the collected fee is folded into the re-minted bid leg");
+
+        // The stored drift basis reflects the freshly computed corridor.
         (int24 postLower, int24 postUpper) = _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
-        assertEq(hook.rangedCorridorLowerOf(PROJECT_ID, address(terminalToken)), postLower, "stored floor is post-fee");
-        assertEq(hook.rangedCorridorUpperOf(PROJECT_ID, address(terminalToken)), postUpper, "stored ceiling is post-fee");
+        assertEq(hook.rangedCorridorLowerOf(PROJECT_ID, address(terminalToken)), postLower, "stored floor is current");
+        assertEq(hook.rangedCorridorUpperOf(PROJECT_ID, address(terminalToken)), postUpper, "stored ceiling is current");
 
         // An immediate second rebalance finds no further drift (no new fees, no rate change) and reverts.
         vm.prank(user);
@@ -605,12 +620,13 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         assertLt(expectedSeedTick, corridorUpper - TICK_SPACING() + 1, "seed stays strictly below the ceiling");
     }
 
-    // ─── Fix C (coverage): floor-pinned excess terminal is routed out via _carryLeftovers → _addToProjectBalance ───
+    // ─── Fix C (coverage): floor-pinned excess terminal is carried into the terminal bid-leg ledger ───
 
     /// @notice When a rebalance recovers MORE terminal than the floor-leg bid can absorb, the bid bound pins at the
-    /// cash-out floor and the excess terminal is routed to the project's terminal balance in exactly one
-    /// `addToBalanceOf` call — never paired beyond capacity and never stranded in the hook.
-    function test_FixC_RebalanceFloorPinnedExcessTerminal_RoutedOutOnce() public {
+    /// cash-out floor and the excess terminal is carried into the project's terminal bid-leg ledger (retained as
+    /// protocol-owned liquidity for the next mint) — never paired beyond capacity, never deposited into the treasury,
+    /// and never stranded outside the ledger.
+    function test_FixC_RebalanceFloorPinnedExcessTerminal_CarriedToLedger() public {
         (int24 corridorLower, int24 corridorUpper) = _corridorAtMid();
         positionManager.initializePool(
             _poolKey(), TickMath.getSqrtPriceAtTick(corridorLower + (corridorUpper - corridorLower) / 2)
@@ -622,7 +638,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
 
         // Inject FAR more of this project's own terminal than a 0.5e18 ask leg's bid can absorb, so the burn recovers an
         // excess that must pin the bid bound at the floor. Fund only the injected principal (so the mock's SWEEP has no
-        // unlocked terminal to hand back to the hook, keeping the "zero stranded" assertion meaningful).
+        // unlocked terminal to hand back to the hook, keeping the ledger-only-retention assertion meaningful).
         uint256 injected = 1_000_000e18;
         terminalToken.mint(address(positionManager), injected);
         positionManager.injectPositionBalance(tokenId, address(terminalToken), injected);
@@ -634,9 +650,10 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
-        // Exactly one deposit routed the floor-pinned excess; no terminal is left stranded on the hook.
-        assertEq(terminal.addToBalanceCallCount() - addToBalanceBefore, 1, "excess terminal routed in one addToBalanceOf");
-        assertEq(terminalToken.balanceOf(address(hook)), 0, "no terminal stranded in the hook");
+        // The floor-pinned excess is retained in the terminal ledger, not deposited into the treasury.
+        assertEq(
+            terminal.addToBalanceCallCount(), addToBalanceBefore, "excess terminal is not deposited into the treasury"
+        );
 
         // The bid was pinned at the floor: only part of the recovered terminal was paired into the re-minted position.
         (, uint256 terminalSide) = _lockedSidesFor(
@@ -644,5 +661,14 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         );
         assertGt(terminalSide, 0, "the floor-leg bid is seeded from recovered terminal");
         assertLt(terminalSide, injected, "the paired bid is capped at floor capacity, below the recovered terminal");
+
+        // The un-paired excess is exactly the ledger, and the whole excess remains held in the hook as that ledger.
+        uint256 excess = injected - terminalSide;
+        assertEq(
+            hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)),
+            excess,
+            "the floor-pinned excess is carried into the terminal bid-leg ledger"
+        );
+        assertEq(terminalToken.balanceOf(address(hook)), excess, "the excess is retained in the hook as ledger, not stranded");
     }
 }

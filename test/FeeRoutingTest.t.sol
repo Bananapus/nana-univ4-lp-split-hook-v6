@@ -8,7 +8,7 @@ import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingCo
 import {JBPermissionIds} from "@bananapus/permission-ids-v6/src/JBPermissionIds.sol";
 
 /// @notice Tests for JBUniswapV4LPSplitHook fee routing logic.
-/// @dev Covers collectAndRouteLPFees, _routeFeesToProject, _routeCollectedFees, and claimFeeTokensFor.
+/// @dev Covers collectAndRouteLPFees, _attemptFeeProjectCut, _routeCollectedFees, and claimFeeTokensFor.
 contract FeeRoutingTest is LPSplitHookV4TestBase {
     // --- Test State --------------------------------------------------------
 
@@ -113,22 +113,29 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
     // 2. Terminal token fees are routed via pay and addToBalance
     // -----------------------------------------------------------------------
 
-    /// @notice When terminal token fees are collected, they should be routed:
-    /// fee portion via terminal.pay (to fee project) and remainder via terminal.addToBalanceOf (to project).
+    /// @notice When terminal token fees are collected, the fee-project cut is paid via terminal.pay and the remainder
+    /// is carried into the terminal bid-leg ledger (protocol-owned liquidity), NOT deposited into the treasury.
     function test_CollectFees_RoutesTerminalTokenFees() public {
         uint256 feeAmount = 1000e18;
         _setTerminalTokenFees(feeAmount);
 
         uint256 payCountBefore = terminal.payCallCount();
         uint256 addBalanceCountBefore = terminal.addToBalanceCallCount();
+        uint256 ledgerBefore = hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken));
 
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
 
-        assertGt(terminal.payCallCount(), payCountBefore, "terminal.pay should have been called for fee routing");
-        assertGt(
+        uint256 expectedCut = (feeAmount * FEE_PERCENT) / 10_000;
+        assertGt(terminal.payCallCount(), payCountBefore, "terminal.pay should have been called for the fee cut");
+        assertEq(
             terminal.addToBalanceCallCount(),
             addBalanceCountBefore,
-            "terminal.addToBalanceOf should have been called for remainder routing"
+            "terminal remainder is no longer deposited into the treasury"
+        );
+        assertEq(
+            hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)) - ledgerBefore,
+            feeAmount - expectedCut,
+            "terminal remainder is carried into the bid-leg ledger"
         );
     }
 
@@ -201,9 +208,9 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
         //   slot  3 = positionManager
         //   slot  4 = feeProjectId
         //   slot  5 = feePercent
-        //   slot 12 = poolKeysOf
-        //   slot 13 = tokenIdOf
-        bytes32 outerSlot = keccak256(abi.encode(PROJECT_ID, uint256(13)));
+        //   slot 13 = poolKeysOf
+        //   slot 14 = tokenIdOf
+        bytes32 outerSlot = keccak256(abi.encode(PROJECT_ID, uint256(14)));
         bytes32 slot = keccak256(abi.encode(address(terminalToken), outerSlot));
         vm.store(address(hook), slot, bytes32(0));
 
@@ -215,7 +222,7 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
     // 7. Fee split arithmetic: 38% to fee project, 62% to original project
     // -----------------------------------------------------------------------
 
-    /// @notice Terminal token fees should be split: 38% paid to fee project, 62% added to project balance.
+    /// @notice Terminal token fees should be split: 38% paid to the fee project, 62% carried into the bid-leg ledger.
     function test_RouteFees_SplitsBetweenFeeAndOriginal() public {
         uint256 feeAmount = 1000e18;
         _setTerminalTokenFees(feeAmount);
@@ -230,8 +237,12 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
         assertEq(terminal.lastPayProjectId(), FEE_PROJECT_ID, "Pay should target FEE_PROJECT_ID");
         assertEq(terminal.lastPayAmount(), expectedFee, "Pay amount should be 38% of total fees");
 
-        // Verify addToBalance was called (for the remaining 62%)
-        assertGt(terminal.addToBalanceCallCount(), 0, "addToBalance should have been called for remainder");
+        // The remaining 62% is carried into the terminal bid-leg ledger, not deposited to the treasury.
+        assertEq(
+            hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)),
+            feeAmount - expectedFee,
+            "remainder carried into the bid-leg ledger"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -373,7 +384,7 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
     // 14. Fee routing uses minReturnedTokens == 0 (accepted behavior)
     // -----------------------------------------------------------------------
 
-    /// @notice terminal.pay() in _routeFeesToProject uses minReturnedTokens = 0 by design.
+    /// @notice terminal.pay() in the fee-cut path uses minReturnedTokens = 0 by design.
     ///         Slippage protection is the fee project's responsibility (via its own data hook /
     ///         buyback hook). A non-zero floor would revert on dust amounts where mulDiv
     ///         rounding yields 0 tokens. See RISKS.md §8.1.

@@ -140,6 +140,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     );
     /// @notice Thrown when a temporary Permit2 allowance granted for an operation is not fully consumed by it.
     error JBUniswapV4LPSplitHook_TemporaryAllowanceNotConsumed(address token, address spender, uint256 allowance);
+    /// @notice Thrown when the best-effort fee-cut payment helper is called by anyone other than this contract itself.
+    error JBUniswapV4LPSplitHook_Unauthorized();
     /// @notice Thrown when no terminal accepting the given token can be found for the project.
     error JBUniswapV4LPSplitHook_TerminalNotFound(uint256 projectId, address token);
     /// @notice Thrown when a split is routed to the hook under a group ID other than the one reserved for terminal
@@ -263,6 +265,15 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @custom:param projectId The ID of the project to get the currently accumulated pre-deployment project-token
     /// balance of.
     mapping(uint256 projectId => uint256 accumulatedProjectTokens) public accumulatedProjectTokens;
+
+    /// @notice The terminal-token balance currently held for each project as protocol-owned bid-leg liquidity.
+    /// @dev Mirrors `accumulatedProjectTokens` for the terminal side. Credited ONLY from this project's own
+    /// LP-fee collections (the non-cut remainder of the terminal-token fee) and its own unconsumed mint leftovers.
+    /// `_consolidateAndReMint` sizes the bid leg from this ledger plus the project's own burn-recovered terminal — never
+    /// from the hook's raw token balance — so one project can never consume another's terminal or an outside donation.
+    /// @custom:param projectId The ID of the project whose accumulated terminal-token bid liquidity to read.
+    /// @custom:param terminalToken The terminal token paired with the project's token in its pool.
+    mapping(uint256 projectId => mapping(address terminalToken => uint256)) public accumulatedTerminalTokens;
 
     /// @notice The fee-project credits, rather than ERC-20s, currently claimable by each project.
     /// @dev These credits accrue when fee routing reaches `terminal.pay()` while the fee project has no ERC-20.
@@ -721,9 +732,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     }
 
     /// @notice Collect accrued Uniswap LP trading fees for a project (from its single active position) and route them
-    /// back to its terminal balance. The terminal-token portion is deposited (minus an optional fee-project cut); the
-    /// project-token portion is carried into the accumulation ledger to become future liquidity (never burned).
-    /// Callable by anyone.
+    /// into the project's protocol-owned liquidity. A best-effort fee-project cut is taken on EACH side; the remaining
+    /// project-token portion is carried into the ask-leg ledger and the remaining terminal-token portion into the
+    /// bid-leg ledger, both becoming future liquidity (never burned, never deposited to the treasury). Callable by
+    /// anyone.
     /// @param projectId The ID of the project whose LP fees to collect.
     /// @param terminalToken The terminal token paired with the project token in the pool.
     // forge-lint: disable-next-line(mixed-case-function)
@@ -901,9 +913,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         address controller = _controllerOf(projectId);
         (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
 
-        // Collect and route accrued LP trading fees BEFORE recomputing the corridor so the corridor — used for BOTH
-        // the drift-guard comparison and the stored drift basis — reflects the post-fee surplus (routing terminal fees
-        // raises surplus, which raises the true cash-out floor). This makes an immediate second rebalance see no drift.
+        // Collect and route accrued LP trading fees BEFORE the burn so the terminal-fee remainder lands in this
+        // project's bid-leg ledger and is folded into the re-minted position's bid (rather than compounding the burn's
+        // principal read), and the project-fee remainder lands in the ask-leg ledger. The corridor itself is derived
+        // from the project's rates/surplus, which fee routing no longer moves (fees become protocol-owned liquidity in
+        // the hook, not treasury surplus).
         _collectAndRouteFees({
             projectId: projectId, projectToken: projectToken, terminalToken: terminalToken, tokenId: tokenId, key: key
         });
@@ -1084,11 +1098,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     }
 
     /// @notice Carry leftover tokens after an LP add forward, never burning. Project-token dust returns to the
-    /// accumulation ledger (becoming future liquidity); terminal-token dust is deposited into the project's terminal
-    /// balance.
+    /// accumulation ledger and terminal-token dust returns to the terminal ledger — both becoming this project's
+    /// protocol-owned liquidity on the next mint. Neither side is deposited into the project's treasury.
     /// @dev Uses balance-delta measurement so fee-on-transfer behavior and V4 SWEEP dust cannot mis-account leftovers,
-    /// and `+=` on the ledger so a reentrant `processSplitWith` inflow during the (later) terminal deposit is
-    /// preserved.
+    /// and `+=` on each ledger so a reentrant `processSplitWith` inflow is preserved.
     function _carryLeftovers(
         uint256 projectId,
         address projectToken,
@@ -1108,14 +1121,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint256 termLeftover = intendedTerminalAmount > termConsumed ? intendedTerminalAmount - termConsumed : 0;
 
         if (projLeftover > 0) accumulatedProjectTokens[projectId] += projLeftover;
-        if (termLeftover > 0) {
-            _addToProjectBalance({
-                projectId: projectId,
-                token: terminalToken,
-                amount: termLeftover,
-                isNative: _isNativeToken(terminalToken)
-            });
-        }
+        if (termLeftover > 0) accumulatedTerminalTokens[projectId][terminalToken] += termLeftover;
     }
 
     /// @notice Converts this hook's internal project-token credits into the registered ERC-20.
@@ -1157,10 +1163,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     }
 
     /// @notice Collect the active position's accrued Uniswap LP trading fees, then route them.
-    /// @dev Terminal-token fees are added to the project's balance (minus an optional fee-project cut); project-token
-    /// fees are carried back into the accumulation ledger to become future liquidity. The hook never burns. There is at
-    /// most one position per project/terminal-token pair (re-ranging burns the old one and re-mints), so a single
-    /// collection covers all of the project's LP fees.
+    /// @dev Each side takes a best-effort fee-project cut; the terminal-token remainder is carried into the bid-leg
+    /// ledger (`accumulatedTerminalTokens`) and the project-token remainder into the ask-leg ledger
+    /// (`accumulatedProjectTokens`), both becoming future liquidity. The hook never burns. There is at most one
+    /// position per project/terminal-token pair (re-ranging burns the old one and re-mints), so a single collection
+    /// covers all of the project's LP fees.
     /// @param projectId The ID of the Juicebox project whose LP fees to collect.
     /// @param projectToken The project's ERC-20 token address.
     /// @param terminalToken The terminal token (e.g. ETH or USDC) paired with the project token.
@@ -1366,10 +1373,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     )
         internal
     {
-        // Collect and route any accrued LP trading fees BEFORE computing the corridor so the corridor (and the drift
-        // basis stored by `_consolidateAndReMint`) reflect the post-fee surplus — routing terminal fees into the
-        // project's balance raises surplus, which raises the true cash-out floor. Skipped on a first deploy (no
-        // position yet). The burn inside `_consolidateAndReMint` then recovers only principal.
+        // Collect and route any accrued LP trading fees BEFORE the re-mint so the terminal-fee remainder lands in this
+        // project's bid-leg ledger (folded into the re-mint's bid) and the project-fee remainder in the ask-leg ledger.
+        // Skipped on a first deploy (no position yet). The burn inside `_consolidateAndReMint` then recovers only
+        // principal.
         uint256 existingTokenId = tokenIdOf[projectId][terminalToken];
         if (existingTokenId != 0) {
             _collectAndRouteFees({
@@ -1557,9 +1564,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// range spans it — determined purely by `[tickLower, tickUpper]` vs. spot, so the caller controls single vs. two
     /// sided by choosing the range. The burn slippage floor is always contract-derived (a fraction of a pre-burn
     /// principal read at the live spot); callers never supply burn minimums. Before burning an existing position, any
-    /// accrued LP trading fees are collected and routed via `_collectAndRouteFees` (terminal side net of the
-    /// fee-project cut, project side carried into the ledger) so the burn recovers only principal — fees are never
-    /// re-folded into LP as if they were untaxed principal.
+    /// accrued LP trading fees are collected and routed via `_collectAndRouteFees` (each side net of its best-effort
+    /// fee-project cut, the terminal remainder carried into the bid-leg ledger and the project remainder into the
+    /// ask-leg ledger) so the burn recovers only principal — trading fees are never re-folded into LP as untaxed
+    /// principal.
     /// @param projectId The ID of the project.
     /// @param projectToken The project token address.
     /// @param terminalToken The terminal token address.
@@ -1606,11 +1614,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         // Held amounts to re-mint. Project side = ledger + recovered-from-burn + freshly claimed credits (all now in
         // this hook's transferable balance). Terminal side = ONLY the terminal recovered from burning THIS project's
-        // position (0 on a first deploy → asks-only). The shared clone's raw terminal balance may include other
-        // projects' recovered terminal, donations, or another project's tokens set as this one's terminal; spending
-        // that balance would let one project capture another's — so it is never touched.
+        // position PLUS this project's own terminal ledger (its collected terminal-fee remainders and prior mint
+        // leftovers) — both funded exclusively by this project's own inflows. The shared clone's raw terminal balance
+        // may include other projects' recovered terminal, donations, or another project's tokens set as this one's
+        // terminal; spending that balance would let one project capture another's — so it is never read for sizing.
         uint256 projectAmount = accumulatedProjectTokens[projectId] + recoveredProject + claimedCredits;
-        uint256 terminalAmount = recoveredTerminal;
+        uint256 terminalAmount = recoveredTerminal + accumulatedTerminalTokens[projectId][terminalToken];
 
         // Resolve token ordering once; it flips both the economic gate and the adaptive ask/bid geometry.
         (address token0,) = _sortTokens({tokenA: projectToken, tokenB: Currency.unwrap(_toCurrency(terminalToken))});
@@ -1639,11 +1648,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             terminalAmount: terminalAmount
         });
 
-        // The terminal amount paired into the mint (caps + liquidity) is the solved/clamped bid, not the full held
-        // terminal — so a floor-pinned excess is left over and routed to the project balance rather than over-minted.
-        uint256 mintTerminalAmount = bidAmountForMint;
-        uint256 amount0 = projectIsToken0 ? projectAmount : mintTerminalAmount;
-        uint256 amount1 = projectIsToken0 ? mintTerminalAmount : projectAmount;
+        // The terminal amount paired into the mint (caps + liquidity) is the solved/clamped bid `bidAmountForMint`, not
+        // the full held terminal — so a floor-pinned excess is left over and carried back to the terminal ledger rather
+        // than over-minted.
+        uint256 amount0 = projectIsToken0 ? projectAmount : bidAmountForMint;
+        uint256 amount1 = projectIsToken0 ? bidAmountForMint : projectAmount;
 
         // A degenerate range (corridor collapsed to a single spacing) leaves no room to mint.
         if (tickLower >= tickUpper) revert JBUniswapV4LPSplitHook_ZeroLiquidity({amount0: amount0, amount1: amount1});
@@ -1661,9 +1670,14 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         });
         if (liquidity == 0) revert JBUniswapV4LPSplitHook_ZeroLiquidity({amount0: amount0, amount1: amount1});
 
-        // CEI: clear the ledger before the external mint; any unconsumed remainder is carried back below (never
-        // burned).
+        // CEI: clear BOTH ledgers before the external mint; any unconsumed remainder on either side is carried back
+        // below (never burned, never deposited to the treasury). Record the corridor this position is ranged against
+        // (drift-guard basis; independent of the adaptive bounds) here too — it does not depend on the mint result, and
+        // writing it pre-mint keeps `corridorLower`/`corridorUpper` off the stack across the (inlined) mint.
         accumulatedProjectTokens[projectId] = 0;
+        accumulatedTerminalTokens[projectId][terminalToken] = 0;
+        rangedCorridorLowerOf[projectId][terminalToken] = corridorLower;
+        rangedCorridorUpperOf[projectId][terminalToken] = corridorUpper;
 
         uint256 projBalBeforeMint = IERC20(projectToken).balanceOf(address(this));
         uint256 termBalBeforeMint = _getTerminalTokenBalance(terminalToken);
@@ -1682,13 +1696,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         tokenIdOf[projectId][terminalToken] = _nextTokenId() - 1;
         activeTickLowerOf[projectId][terminalToken] = tickLower;
         activeTickUpperOf[projectId][terminalToken] = tickUpper;
-        // Record the corridor this position was ranged against (drift guard basis; independent of the adaptive bounds).
-        rangedCorridorLowerOf[projectId][terminalToken] = corridorLower;
-        rangedCorridorUpperOf[projectId][terminalToken] = corridorUpper;
 
-        // Carry leftovers against the FULL held terminal (not the paired `mintTerminalAmount`): the floor-pinned excess
-        // terminal, plus any alignment dust, is routed to the project's terminal balance — never stranded, never
-        // burned. Project-token dust returns to the accumulation ledger.
+        // Carry leftovers against the FULL held terminal (not the paired `bidAmountForMint`): the floor-pinned excess
+        // terminal, plus any alignment dust, is carried back to the terminal bid-leg ledger — never stranded, never
+        // burned, never deposited to the treasury. Project-token dust returns to the accumulation ledger.
         _carryLeftovers({
             projectId: projectId,
             projectToken: projectToken,
@@ -1894,9 +1905,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
     }
 
-    /// @notice Split collected LP fees into their terminal-token and project-token sides: route the terminal-token side
-    /// to the project (minus an optional fee-project cut), and carry the project-token side into the accumulation
-    /// ledger to become future liquidity. The hook never burns.
+    /// @notice Split collected LP fees into their terminal-token and project-token sides, take a best-effort
+    /// fee-project cut on EACH side, and route every non-cut token into the originating project's protocol-owned
+    /// liquidity: the project-token remainder into `accumulatedProjectTokens` (ask leg) and the terminal-token
+    /// remainder into `accumulatedTerminalTokens` (bid leg). The hook never burns and never deposits fee tokens into
+    /// the project's treasury.
     function _routeCollectedFees(
         uint256 projectId,
         address projectToken,
@@ -1915,167 +1928,183 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint256 terminalFee = terminalIsToken0 ? amount0 : amount1;
         uint256 projectFee = terminalIsToken0 ? amount1 : amount0;
 
-        // Carry the project-token side back to the accumulation ledger (a pure state write, done BEFORE the external
-        // terminal route below for CEI safety) so it is added as liquidity by the next `addLiquidity` instead of
-        // burned.
-        if (projectFee > 0) accumulatedProjectTokens[projectId] += projectFee;
+        // Attempt the fee-project cut on the project-token side, then carry the remainder into the ask-leg ledger.
+        if (projectFee > 0) {
+            accumulatedProjectTokens[projectId] +=
+                _attemptFeeProjectCut({projectId: projectId, feeToken: projectToken, amount: projectFee});
+        }
 
-        // Route the terminal-token side to the project's balance.
+        // Attempt the fee-project cut on the terminal-token side, then carry the remainder into the bid-leg ledger
+        // (protocol-owned liquidity), NOT into the project's treasury.
         if (terminalFee > 0) {
-            _routeFeesToProject({projectId: projectId, terminalToken: terminalToken, amount: terminalFee});
+            accumulatedTerminalTokens[projectId][terminalToken] +=
+                _attemptFeeProjectCut({projectId: projectId, feeToken: terminalToken, amount: terminalFee});
         }
     }
 
-    /// @notice Route fees back to the project.
-    /// @dev Fee routing uses zero slippage (minReturnedTokens = 0) by design. Slippage protection
-    /// is the responsibility of the fee project's pay hook (e.g., its buyback hook). An alternative
-    /// approach — calling `previewPayFor` and using the result as a minimum — was considered but
-    /// deemed unnecessary given the existing hook-level protection. Fees are small amounts routed
-    /// to the protocol fee project; MEV extraction is economically insignificant relative to gas costs.
-    function _routeFeesToProject(uint256 projectId, address terminalToken, uint256 amount) internal {
-        if (amount == 0) return;
+    /// @notice Take a best-effort protocol fee cut of `amount` (in `feeToken`) for `projectId` by paying it to the
+    /// configured fee project, and return the non-cut remainder. Symmetric across the terminal-token and project-token
+    /// sides. The cut is forgiven — the full `amount` is returned — when there is no cut to take, when the fee project
+    /// has no terminal accepting `feeToken`, or when the fee terminal's `pay` reverts; a forgiven cut never blocks the
+    /// surrounding fee collection.
+    /// @dev Fee routing uses zero slippage (minReturnedTokens = 0) by design: slippage protection is the fee project's
+    /// responsibility (via its own data hook / buyback hook), not this contract's. The reentrancy-safe reserve dance
+    /// (pre-increment `_totalOutstandingFeeTokenClaims`/`_inflightFeeRoutingCount` before the external pay, reconcile
+    /// after) is preserved, and fully rolled back on the forgive (catch) path.
+    /// @param projectId The project whose LP fees are being cut.
+    /// @param feeToken The token the fee is denominated in (the terminal token or the project token).
+    /// @param amount The pre-cut fee amount to split.
+    /// @return remainder The portion of `amount` left after the cut (== `amount` when the cut is forgiven).
+    function _attemptFeeProjectCut(
+        uint256 projectId,
+        address feeToken,
+        uint256 amount
+    )
+        internal
+        returns (uint256 remainder)
+    {
+        uint256 cut = (amount * feePercent) / BPS;
+        address feeTerminal = cut == 0 ? address(0) : _primaryTerminalOf({projectId: feeProjectId, token: feeToken});
 
-        uint256 feeAmount = (amount * feePercent) / BPS;
-        uint256 remainingAmount = amount - feeAmount;
-
-        uint256 beneficiaryTokenCount = 0;
-        if (feeAmount > 0) {
-            address feeTerminal = _primaryTerminalOf({projectId: feeProjectId, token: terminalToken});
-            if (feeTerminal == address(0)) {
-                // If no fee terminal is configured, the fee project simply misses this collection and the full amount
-                // stays in the project's normal split-hook flow.
-                feeAmount = 0;
-                remainingAmount = amount;
-            } else {
-                // Look up the fee project's ERC-20 BEFORE the pay() call so we can pre-increment
-                // _totalOutstandingFeeTokenClaims. This prevents a reentrancy through terminal.pay()
-                // → pay hooks → collectAndRouteLPFees() from seeing stale claims and double-counting
-                // fee tokens in the accumulation / leftover-handling paths.
-                address feeProjectToken = _tokenOf(feeProjectId);
-
-                // If this project already has unclaimed ERC-20 fee tokens, keep using that snapshotted token address.
-                // Otherwise a fee-project token migration could strand the earlier claim behind a new token contract.
-                address claimToken = claimableFeeTokenOf[projectId];
-                // Reject mixing outstanding claims across different fee-project ERC-20s in the same project bucket.
-                if (claimToken != address(0) && claimToken != feeProjectToken) {
-                    revert JBUniswapV4LPSplitHook_UnclaimedFeeTokenChanged({
-                        previousToken: claimToken, nextToken: feeProjectToken
-                    });
-                }
-
-                // Only ERC-20 fee projects need a token-balance snapshot. Credit-only fee projects use the
-                // terminal's returned credit count and skip the balance reconciliation below.
-                uint256 feeProjectTokenBalanceBefore;
-
-                // Pre-increment with feeAmount as a conservative estimate. The actual token count
-                // may differ, but any re-entrant call during pay() will see an inflated reserve,
-                // which safely prevents over-spending. We reconcile after pay() returns.
-                if (feeProjectToken != address(0)) {
-                    // Snapshot before `pay()` so the post-pay delta measures only newly minted fee-project ERC-20s.
-                    feeProjectTokenBalanceBefore = IERC20(feeProjectToken).balanceOf(address(this));
-
-                    // Reserve conservatively during the external call. This prevents reentrant LP-fee collection or
-                    // accumulation paths from treating in-flight fee tokens as free project-token balance.
-                    _totalOutstandingFeeTokenClaims[feeProjectToken] += feeAmount;
-                    _inflightFeeRoutingCount[feeProjectToken] += 1;
-                }
-
-                // Fee terminal revert blocks fee collection — accepted since the fee project is
-                // protocol-controlled and expected to maintain a functioning terminal.
-                // minReturnedTokens is 0 by design: slippage protection is the fee project's
-                // responsibility (via its own data hook / buyback hook), not this contract's.
-                // Setting a floor here would risk reverting on small fee amounts where
-                // mulDiv rounding yields 0 tokens, and any non-trivial floor would require
-                // an oracle dependency that doesn't belong in the LP split hook.
-                //
-                // Use the ERC-20 balance actually received by this hook instead of trusting pay()'s return value.
-                // If the terminal token is also the fee-project token, subtract the fee payment from the pre-call
-                // balance before measuring freshly received tokens.
-                if (_isNativeToken(terminalToken)) {
-                    beneficiaryTokenCount = IJBMultiTerminal(feeTerminal).pay{value: feeAmount}({
-                        projectId: feeProjectId,
-                        token: terminalToken,
-                        amount: feeAmount,
-                        beneficiary: address(this),
-                        minReturnedTokens: 0,
-                        memo: "LP Fee",
-                        metadata: ""
-                    });
-                } else {
-                    IERC20(terminalToken).forceApprove({spender: feeTerminal, value: feeAmount});
-                    beneficiaryTokenCount = IJBMultiTerminal(feeTerminal)
-                        .pay({
-                        projectId: feeProjectId,
-                        token: terminalToken,
-                        amount: feeAmount,
-                        beneficiary: address(this),
-                        minReturnedTokens: 0,
-                        memo: "LP Fee",
-                        metadata: ""
-                    });
-
-                    _requireTemporaryAllowanceConsumed({token: terminalToken, spender: feeTerminal});
-                }
-
-                // Reconcile the pre-incremented reserve with the actual ERC-20s received by this hook.
-                if (feeProjectToken != address(0)) {
-                    // Start from the pre-pay balance. Any increase above this baseline is newly claimable fee tokens.
-                    uint256 expectedBalanceWithoutFeeTokens = feeProjectTokenBalanceBefore;
-
-                    // If fees are paid in the fee-project ERC-20 itself, the `pay()` call first transfers `feeAmount`
-                    // out of this hook. Subtract it from the baseline so the later balance delta does not hide freshly
-                    // minted fee-project tokens. A successful pay implies the pre-pay balance covered `feeAmount`.
-                    if (terminalToken == feeProjectToken) expectedBalanceWithoutFeeTokens -= feeAmount;
-
-                    // Prefer the observed balance delta over the terminal return value so fee-on-transfer or
-                    // nonstandard token behavior cannot overstate what this hook actually received.
-                    uint256 feeProjectTokenBalanceAfter = IERC20(feeProjectToken).balanceOf(address(this));
-                    beneficiaryTokenCount = feeProjectTokenBalanceAfter > expectedBalanceWithoutFeeTokens
-                        ? feeProjectTokenBalanceAfter - expectedBalanceWithoutFeeTokens
-                        : 0;
-
-                    // Remove the conservative estimate and reserve the reconciled token amount for later claiming.
-                    _totalOutstandingFeeTokenClaims[feeProjectToken] =
-                        _totalOutstandingFeeTokenClaims[feeProjectToken] - feeAmount + beneficiaryTokenCount;
-                    _inflightFeeRoutingCount[feeProjectToken] -= 1;
-                }
-
-                // Track fee tokens for later claiming. Route to the correct tracker based on
-                // whether the fee project has an ERC-20 deployed (claimable via safeTransfer)
-                // or uses internal credits only (claimable via controller.transferCreditsFrom).
-                if (beneficiaryTokenCount > 0) {
-                    if (feeProjectToken != address(0)) {
-                        // ERC-20 exists: track as claimable ERC-20 tokens.
-                        claimableFeeTokenOf[projectId] = feeProjectToken;
-                        claimableFeeTokens[projectId] += beneficiaryTokenCount;
-                    } else {
-                        // No ERC-20: track as claimable credits and reserve those fee-project credits from any later LP
-                        // principal normalization on this clone.
-                        claimableFeeCredits[projectId] += beneficiaryTokenCount;
-                        _totalOutstandingFeeCreditClaims[feeProjectId] += beneficiaryTokenCount;
-                    }
-                }
-            }
+        // Forgive when there is nothing to cut or no fee terminal accepts `feeToken`: the whole amount flows to LP.
+        if (feeTerminal == address(0)) {
+            emit LPFeesRouted({
+                projectId: projectId,
+                terminalToken: feeToken,
+                totalAmount: amount,
+                feeAmount: 0,
+                remainingAmount: amount,
+                feeTokensMinted: 0,
+                caller: msg.sender
+            });
+            return amount;
         }
 
-        if (remainingAmount > 0) {
-            _addToProjectBalance({
-                projectId: projectId,
-                token: terminalToken,
-                amount: remainingAmount,
-                isNative: _isNativeToken(terminalToken)
-            });
+        // Look up the fee project's ERC-20 BEFORE the pay so the reserve can be pre-incremented, keeping any reentrant
+        // collection/accumulation from treating in-flight fee tokens as free balance.
+        address feeProjectToken = _tokenOf(feeProjectId);
+
+        // If this project already has unclaimed ERC-20 fee tokens, keep using that snapshotted token address; a
+        // fee-project token migration must not strand the earlier claim behind a new token contract.
+        address claimToken = claimableFeeTokenOf[projectId];
+        if (claimToken != address(0) && claimToken != feeProjectToken) {
+            revert JBUniswapV4LPSplitHook_UnclaimedFeeTokenChanged({previousToken: claimToken, nextToken: feeProjectToken});
+        }
+
+        // Pre-increment with `cut` as a conservative estimate; reconciled to the actual received amount after the pay.
+        uint256 feeProjectTokenBalanceBefore;
+        if (feeProjectToken != address(0)) {
+            feeProjectTokenBalanceBefore = IERC20(feeProjectToken).balanceOf(address(this));
+            _totalOutstandingFeeTokenClaims[feeProjectToken] += cut;
+            _inflightFeeRoutingCount[feeProjectToken] += 1;
+        }
+
+        uint256 received;
+        // Pay the cut best-effort. The pay (plus its ERC-20 approve + allowance-consumption check) runs inside an
+        // external self-call so a revert on ANY of them is caught here and forgiven rather than bubbling up and
+        // blocking the collection. The self-call target is unguarded (so the surrounding `nonReentrant` guard is not
+        // self-tripped) and restricted to `address(this)`.
+        try this.payFeeProjectCut({feeTerminal: feeTerminal, feeToken: feeToken, amount: cut}) returns (
+            uint256 payReturn
+        ) {
+            if (feeProjectToken != address(0)) {
+                // Prefer the observed balance delta over the terminal return value so fee-on-transfer or nonstandard
+                // token behavior cannot overstate what this hook actually received.
+                uint256 expectedBalanceWithoutFeeTokens = feeProjectTokenBalanceBefore;
+                // If the cut is paid in the fee-project ERC-20 itself, the pay first transfers `cut` out of this hook;
+                // subtract it from the baseline so the later balance delta does not hide freshly minted fee tokens.
+                if (feeToken == feeProjectToken) expectedBalanceWithoutFeeTokens -= cut;
+                uint256 feeProjectTokenBalanceAfter = IERC20(feeProjectToken).balanceOf(address(this));
+                received = feeProjectTokenBalanceAfter > expectedBalanceWithoutFeeTokens
+                    ? feeProjectTokenBalanceAfter - expectedBalanceWithoutFeeTokens
+                    : 0;
+                // Remove the conservative estimate and reserve the reconciled token amount for later claiming.
+                _totalOutstandingFeeTokenClaims[feeProjectToken] =
+                    _totalOutstandingFeeTokenClaims[feeProjectToken] - cut + received;
+                _inflightFeeRoutingCount[feeProjectToken] -= 1;
+            } else {
+                received = payReturn;
+            }
+
+            // Track fee proceeds for later claiming: ERC-20s via `claimableFeeTokens`, else fee-project credits.
+            if (received > 0) {
+                if (feeProjectToken != address(0)) {
+                    claimableFeeTokenOf[projectId] = feeProjectToken;
+                    claimableFeeTokens[projectId] += received;
+                } else {
+                    claimableFeeCredits[projectId] += received;
+                    _totalOutstandingFeeCreditClaims[feeProjectId] += received;
+                }
+            }
+
+            remainder = amount - cut;
+        } catch {
+            // Forgive the cut: fully roll back the pre-incremented reserve and return the whole amount to LP.
+            if (feeProjectToken != address(0)) {
+                _totalOutstandingFeeTokenClaims[feeProjectToken] -= cut;
+                _inflightFeeRoutingCount[feeProjectToken] -= 1;
+            }
+            cut = 0;
+            remainder = amount;
         }
 
         emit LPFeesRouted({
             projectId: projectId,
-            terminalToken: terminalToken,
+            terminalToken: feeToken,
             totalAmount: amount,
-            feeAmount: feeAmount,
-            remainingAmount: remainingAmount,
-            feeTokensMinted: beneficiaryTokenCount,
+            feeAmount: cut,
+            remainingAmount: remainder,
+            feeTokensMinted: received,
             caller: msg.sender
         });
+    }
+
+    /// @notice Pay a fee-project cut of `amount` in `feeToken` to `feeTerminal`, returning the terminal's reported
+    /// beneficiary token count. Callable only via this contract's own best-effort `_attemptFeeProjectCut` so its revert
+    /// (from the terminal `pay` or the ERC-20 allowance-consumption check) can be caught and forgiven.
+    /// @dev This target is intentionally NOT `nonReentrant`: it is reached through an internal `this.` self-call while
+    /// the surrounding entry point still holds the reentrancy lock, so guarding it would self-revert. A genuine
+    /// reentrant call into any guarded entry point during the fee `pay` is still rejected by that outer lock, and the
+    /// `msg.sender == address(this)` gate blocks any direct external call.
+    /// @param feeTerminal The fee project's terminal accepting `feeToken`.
+    /// @param feeToken The token to pay the cut in (native sentinel or ERC-20).
+    /// @param amount The cut amount to pay.
+    /// @return beneficiaryTokenCount The fee-project token/credit count the terminal reports minting to this hook.
+    function payFeeProjectCut(
+        address feeTerminal,
+        address feeToken,
+        uint256 amount
+    )
+        external
+        returns (uint256 beneficiaryTokenCount)
+    {
+        if (msg.sender != address(this)) revert JBUniswapV4LPSplitHook_Unauthorized();
+
+        // Native ETH is forwarded as value; ERC-20 is pulled by the terminal via an exact-use approval that must be
+        // fully consumed (a leftover allowance is live spend authority and reverts — caught upstream as a forgive).
+        if (_isNativeToken(feeToken)) {
+            beneficiaryTokenCount = IJBMultiTerminal(feeTerminal).pay{value: amount}({
+                projectId: feeProjectId,
+                token: feeToken,
+                amount: amount,
+                beneficiary: address(this),
+                minReturnedTokens: 0,
+                memo: "LP Fee",
+                metadata: ""
+            });
+        } else {
+            IERC20(feeToken).forceApprove({spender: feeTerminal, value: amount});
+            beneficiaryTokenCount = IJBMultiTerminal(feeTerminal).pay({
+                projectId: feeProjectId,
+                token: feeToken,
+                amount: amount,
+                beneficiary: address(this),
+                minReturnedTokens: 0,
+                memo: "LP Fee",
+                metadata: ""
+            });
+            _requireTemporaryAllowanceConsumed({token: feeToken, spender: feeTerminal});
+        }
     }
 
     /// @notice Sort two token addresses into the canonical Uniswap V4 ordering (lower address = token0).

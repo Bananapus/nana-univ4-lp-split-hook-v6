@@ -94,12 +94,12 @@ contract PullingFeeTerminal {
 /// `OverreportingCashOutTerminal` inflating a reported cash-out reclaim to drain another project's reserved fee
 /// tokens) no longer exists — there is no cash-out call anywhere in `deployPool`/`addLiquidity`/`rebalanceLiquidity`
 /// to overreport through. The underlying invariant this regression protects still matters, though:
-/// `_consolidateAndReMint` sizes every mint's terminal-token side from `_spendableTerminalTokenBalance`, which must
-/// always exclude
-/// `_totalOutstandingFeeTokenClaims` — otherwise one project's deploy/add could size its LP mint using ERC-20 balance
-/// that is actually owed to a DIFFERENT project's fee-token claim. This test re-expresses that invariant directly
-/// against the current consolidate + fee-routing flow, with a non-trivial "free" balance sitting alongside the
-/// reserved claim so the exclusion boundary is actually exercised (not a trivial all-reserved case).
+/// `_consolidateAndReMint` sizes every mint's terminal-token side ONLY from that project's own burn-recovered terminal
+/// plus its own `accumulatedTerminalTokens` ledger — never from the hook's raw ERC-20 balance. Even when the shared
+/// clone's balance holds another project's reserved fee-token claim (and its terminal ledger, and unrelated free
+/// balance), a deploy/add cannot spend any of it. This test re-expresses that invariant directly against the current
+/// consolidate + fee-routing flow, with a reserved fee claim, a per-project terminal ledger, and a non-trivial "free"
+/// balance all sitting on the shared clone so the isolation boundary is actually exercised.
 contract FeeClaimReserveCaptureRegression is LPSplitHookV4TestBase {
     uint256 internal constant PROJECT_B = 3;
 
@@ -177,10 +177,14 @@ contract FeeClaimReserveCaptureRegression is LPSplitHookV4TestBase {
 
         uint256 claimableFeeTokens = hook.claimableFeeTokens(PROJECT_ID);
         assertGt(claimableFeeTokens, 0, "precondition: project A should have claimable fee tokens");
+        // The terminal token here IS the fee-project token, so the non-cut remainder is carried into project A's
+        // terminal ledger. The hook therefore holds A's reserved fee claim PLUS A's terminal ledger.
+        uint256 ledgerA = hook.accumulatedTerminalTokens(PROJECT_ID, address(feeProjectToken));
+        assertGt(ledgerA, 0, "precondition: project A's terminal ledger holds the fee remainder");
         assertEq(
             feeProjectToken.balanceOf(address(hook)),
-            claimableFeeTokens,
-            "hook should currently hold exactly project A's reserved fee tokens"
+            claimableFeeTokens + ledgerA,
+            "hook holds exactly project A's reserved fee claim plus A's terminal ledger"
         );
 
         // 3. Fund the hook with SOME independent, non-reserved feeProjectToken balance (e.g. dust unrelated to
@@ -201,13 +205,18 @@ contract FeeClaimReserveCaptureRegression is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_B);
 
-        // 5. The core invariant: project B's deployment must never touch project A's reserved fee-token balance.
-        // `_spendableTerminalTokenBalance` must always exclude `_totalOutstandingFeeTokenClaims`, so the hook must
-        // still hold at least project A's full claimable amount after project B's mint.
+        // 5. The core invariant: project B's deployment must never touch project A's reserved fee-token balance NOR
+        // project A's terminal ledger. B sizes its mint only from its own recovered terminal (0 on a first deploy) and
+        // its own ledger (0), so it consumes none of the shared-clone balance.
         assertGe(
             feeProjectToken.balanceOf(address(hook)),
-            claimableFeeTokens,
-            "project B's deployment must not consume project A's reserved fee-claim balance"
+            claimableFeeTokens + ledgerA,
+            "project B's deployment must not consume project A's reserved fee claim or terminal ledger"
+        );
+        assertEq(
+            hook.accumulatedTerminalTokens(PROJECT_ID, address(feeProjectToken)),
+            ledgerA,
+            "project A's terminal ledger is untouched by project B's deployment"
         );
 
         // 6. Project A can still claim its FULL reserved balance afterward — proving the reserve was never

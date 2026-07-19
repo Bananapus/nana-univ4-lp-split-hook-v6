@@ -15,13 +15,12 @@ import {MockJBController} from "./mock/MockJBContracts.sol";
 // Malicious Contracts
 // ═══════════════════════════════════════════════════════════════════════
 
-/// @notice Combined controller + terminal that re-enters `processSplitWith` during `addToBalanceOf`.
+/// @notice Combined controller + terminal that arms a re-entry into `processSplitWith` on any `addToBalanceOf` call.
 /// @dev Registered as BOTH the project's controller and its terminal, so the `msg.sender == controller` check in
-///      `processSplitWith` passes on the nested call. The reentry point is `addToBalanceOf`: the hook's
-///      single-sided (asks-only) mint always leaves the full terminal-token side uninvested, so
-///      `_consolidateAndReMint` -> `_carryLeftovers` -> `_addToProjectBalance` always calls back into whatever
-///      terminal is registered — a genuine, reachable external call inside `deployPool`'s own call graph (unlike
-///      the removed cash-out path, which no longer exists in the single-sided design).
+///      `processSplitWith` would pass on a nested call. Under the single-sided design, `_carryLeftovers` routes the
+///      unconsumed terminal-token side into this project's `accumulatedTerminalTokens` ledger via a PURE state write
+///      (no `addToBalanceOf`), and an asks-only deploy never pairs terminal at all — so `deployPool` makes no external
+///      terminal call, and this armed re-entry is never even reached.
 contract ReentrantControllerTerminal is MockJBController {
     JBUniswapV4LPSplitHook public hook;
     MockERC20 public _projectToken;
@@ -318,8 +317,8 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
 
         // 4. Fund the hook with real terminal-token dust, and configure the mock PositionManager to only use 80% of
         // the amounts offered to MINT_POSITION (matching the pattern other tests use to exercise leftover-carry
-        // behavior). The unconsumed 20% is carried forward through `_addToProjectBalance` -> `addToBalanceOf` — a
-        // genuine external call reachable inside `deployPool`.
+        // behavior). The unconsumed project-token side is carried into the accumulation ledger via a pure state write;
+        // the terminal side, when any, is carried into the terminal ledger — neither makes an external call.
         terminalToken.mint(address(hook), 10e18);
         positionManager.setUsagePercent(8000);
 

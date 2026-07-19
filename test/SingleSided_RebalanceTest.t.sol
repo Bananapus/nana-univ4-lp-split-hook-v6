@@ -140,14 +140,15 @@ contract SingleSided_RebalanceTest is LPSplitHookV4TestBase {
         vm.prank(STRANGER);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
-        // The accrued fee was routed BEFORE the burn: fee-project cut via `pay`, remainder via `addToBalanceOf`.
+        // The accrued fee was routed BEFORE the burn: fee-project cut via `pay`, remainder into the terminal bid-leg
+        // ledger (protocol-owned liquidity), never deposited into the project's treasury.
         assertGt(terminal.payCallCount(), payCountBefore, "the fee-project cut must be paid via terminal.pay");
         assertEq(terminal.lastPayProjectId(), FEE_PROJECT_ID, "the fee cut must be paid to the fee project");
         assertEq(terminal.lastPayAmount(), expectedFeeCut, "the fee cut must be feePercent of the accrued fee");
-        assertGt(
+        assertEq(
             terminal.addToBalanceCallCount(),
             addToBalanceCountBefore,
-            "the fee remainder must be routed to the project's terminal balance"
+            "the fee remainder is no longer deposited into the project's treasury"
         );
 
         // Exactly one live position: the old id is burned, a fresh id is tracked.
@@ -163,11 +164,14 @@ contract SingleSided_RebalanceTest is LPSplitHookV4TestBase {
         );
 
         // Adaptive two-sided re-mint: asks anchored to the recovered 0.5e18 project principal, a nonzero terminal bid
-        // seeded by the accrued 1e18 (NOT 1e18 + accruedFee — the fee was routed away before the burn).
+        // seeded by the recovered 1e18 PLUS the non-cut fee remainder (now folded into the bid-leg ledger rather than
+        // paid out to the treasury).
         (uint256 projectSide, uint256 terminalSide) = _lockedSides(newTokenId);
         assertEq(projectSide, 0.5e18, "the recovered project tokens must be re-minted as the ask side");
         assertGt(terminalSide, 0, "the accrued terminal must seed a bid side");
-        assertLe(terminalSide, 1e18, "the bid side never exceeds the pre-existing terminal (fee never compounded)");
+        assertLe(
+            terminalSide, 1e18 + expectedRemainder, "the bid side never exceeds the recovered terminal plus the ledger"
+        );
 
         assertEq(terminal.cashOutCallCount(), 0, "rebalance must never call cashOutTokensOf");
     }
