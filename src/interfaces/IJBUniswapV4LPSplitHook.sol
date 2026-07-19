@@ -87,9 +87,8 @@ interface IJBUniswapV4LPSplitHook {
     function poolKeyOf(uint256 projectId, address terminalToken) external view returns (PoolKey memory key);
 
     /// @notice Convert the project's post-deployment accumulated reserved tokens into additional liquidity, minted as
-    /// a single-sided ask position (no funding cash-out) spanning from the pool's live price out to the project's
-    /// issuance/cash-out corridor. Permissionless once the ruleset weight has decayed 10x from accumulation;
-    /// otherwise requires `SET_BUYBACK_POOL` from the project owner.
+    /// a single-sided ask position spanning from the pool's live price out to the project's issuance/cash-out corridor.
+    /// Permissionless: anyone may call it, gated only by the economic ceiling and the oracle-TWAP deviation guards.
     /// @param projectId The Juicebox project ID.
     /// @param terminalToken The terminal token paired with the project token in the deployed pool.
     function addLiquidity(uint256 projectId, address terminalToken) external;
@@ -107,7 +106,7 @@ interface IJBUniswapV4LPSplitHook {
 
     /// @notice Deploy a Uniswap V4 pool using accumulated project tokens.
     /// @dev Auto-selects the terminal token with the highest ETH-denominated value across all terminals. Mints a
-    /// single-sided ask position from the accumulated project tokens — no funding cash-out.
+    /// single-sided ask position from the accumulated project tokens. Permissionless: anyone may seed the pool.
     /// @param projectId The Juicebox project ID.
     function deployPool(uint256 projectId) external;
 
@@ -125,7 +124,7 @@ interface IJBUniswapV4LPSplitHook {
     /// @param newPoolManager The Uniswap V4 PoolManager on this chain.
     /// @param newPositionManager The Uniswap V4 PositionManager on this chain.
     /// @param newOracleHook The Uniswap V4 oracle hook deployed against `newPoolManager` on this chain.
-    /// @param newBuybackHook The buyback-hook registry this clone targets for force-direct cash-outs (may be zero).
+    /// @param newBuybackHook The buyback-hook registry to configure for this clone (may be zero).
     function initialize(
         uint256 initialFeeProjectId,
         uint256 initialFeePercent,

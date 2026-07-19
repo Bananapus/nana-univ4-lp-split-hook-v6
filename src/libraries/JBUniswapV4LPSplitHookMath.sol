@@ -279,6 +279,9 @@ library JBUniswapV4LPSplitHookMath {
     }
 
     /// @notice Compute optimal cash-out amount based on LP position geometry.
+    /// @dev A standalone pricing primitive: given a target terminal/project pairing ratio, it returns how many project
+    /// tokens a cash-out at the bonding-curve rate would need to surrender. The hook's current single-sided flow does
+    /// not invoke it — the hook never cashes out — so it exists purely as a reusable valuation helper.
     /// @param directory The JBDirectory used to resolve the project's primary terminal.
     /// @param suckerRegistry The sucker registry for cross-chain surplus/supply queries.
     /// @param projectId The ID of the project.
@@ -311,8 +314,9 @@ library JBUniswapV4LPSplitHookMath {
         view
         returns (uint256 cashOutAmount)
     {
-        // The cash-out rate (terminal tokens received per project token burned, 18-decimal) is the "exchange rate" the
-        // funding cash-out runs at. Without it there is no way to value the terminal side, so no cash-out can be sized.
+        // The cash-out rate (terminal tokens received per project token burned, 18-decimal) is the "exchange rate" a
+        // cash-out would run at. Without it there is no way to value the terminal side, so no cash-out amount can be
+        // sized.
         uint256 cashOutRate = getCashOutRate({
             directory: directory,
             suckerRegistry: suckerRegistry,

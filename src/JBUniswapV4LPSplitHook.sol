@@ -41,15 +41,14 @@ import {JBUniswapV4LPSplitHookMath} from "./libraries/JBUniswapV4LPSplitHookMath
 /// @notice A split hook that builds and manages a Uniswap V4 liquidity position for a Juicebox project, using the
 /// project's reserved-token distributions as the seed capital. The lifecycle has two stages:
 ///
-/// 1. Accumulation — Each time the project distributes reserved tokens, the hook's share is held in escrow. Once the
-/// project owner (or anyone, after sufficient weight decay) triggers `deployPool`, the accumulated tokens are minted as
-/// a single-sided ask position (no funding cash-out) spanning from the pool's live price out to the project's
+/// 1. Accumulation — Each time the project distributes reserved tokens, the hook's share is held in escrow. Anyone can
+/// trigger `deployPool`, which mints the accumulated tokens as a single-sided ask position — seeded purely from those
+/// accumulated tokens, never from a cash-out — spanning from the pool's live price out to the project's
 /// issuance/cash-out corridor.
 ///
 /// 2. Grow-and-route — After the pool exists, further reserved tokens sent to the hook keep accumulating in escrow.
-/// Anyone can later call `addLiquidity` (permissionless once the weight has decayed 10x, otherwise owner-gated) to
-/// convert the accumulated tokens into more protocol-owned liquidity: it checks the pool's spot price against the
-/// oracle TWAP to reject sandwiched adds, then mints another single-sided ask position (no funding cash-out)
+/// Anyone can later call `addLiquidity` to convert the accumulated tokens into more protocol-owned liquidity: it checks
+/// the pool's spot price against the oracle TWAP to reject sandwiched adds, then mints another single-sided ask position
 /// spanning from the pool's live price out to the project's issuance/cash-out corridor. LP trading fees are collected
 /// periodically from the project's currently tracked position and routed back to the project's terminal balance,
 /// with an optional protocol fee split to a configurable fee project. The hook never burns project tokens:
@@ -59,9 +58,10 @@ import {JBUniswapV4LPSplitHookMath} from "./libraries/JBUniswapV4LPSplitHookMath
 /// The hook also supports `rebalanceLiquidity`, which re-centers the LP tick range around the project's current
 /// issuance and cash-out prices when they drift from the original deployment parameters.
 ///
-/// @dev Each clone manages exactly one Uniswap V4 pool per project (one terminal-token pairing). Pool deployment
-/// requires `SET_BUYBACK_POOL` permission. The pool uses a 1% fee tier, 200-tick spacing, and a shared oracle hook
-/// for TWAP observations.
+/// @dev Each clone manages exactly one Uniswap V4 pool per project (one terminal-token pairing). `deployPool`,
+/// `addLiquidity`, `rebalanceLiquidity`, and `collectAndRouteLPFees` are permissionless — anyone may call them — with
+/// abuse bounded by economic gates (a seed/add reverts once spot reaches the issuance ceiling) and an oracle-TWAP
+/// deviation guard. The pool uses a 1% fee tier, 200-tick spacing, and a shared oracle hook for TWAP observations.
 /// @dev Every state-changing external entry point that can reach an external call (terminal `pay`/`addToBalanceOf`,
 /// controller `claimTokensFor`/`transferCreditsFrom`, or the Uniswap V4 PositionManager) is guarded with
 /// solady's `ReentrancyGuard.nonReentrant`. Guarded functions never call each other externally (via `this.`) —
@@ -228,12 +228,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     // --------------------- public stored properties -------------------- //
     //*********************************************************************//
 
-    /// @notice The buyback-hook registry this clone targets for force-direct cash-outs.
-    /// @dev When a funding cash-out runs, the hook attaches the buyback hook's `cashOut` skip metadata keyed to this
-    /// registry so the cash-out is routed DIRECTLY through the bonding curve (never through an AMM). Held as per-clone
-    /// storage (set once via `initialize`) rather than an implementation immutable so different projects' clones can
-    /// target different buyback registries. May be the zero address, in which case no force-direct metadata is attached
-    /// and the terminal's own `minTokensReclaimed` floor still applies.
+    /// @notice The buyback-hook registry configured for this clone.
+    /// @dev Held as per-clone storage (set once via `initialize`) rather than an implementation immutable so different
+    /// projects' clones can target different buyback registries and this implementation's CREATE2 inputs stay
+    /// byte-identical on every chain. May be the zero address.
     IJBBuybackHookRegistry public buybackHook;
 
     /// @notice The oracle hook used for configured Uniswap V4 pools (provides TWAP via observe()).
@@ -292,8 +290,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     mapping(uint256 projectId => bool hasDeployedPool) public hasDeployedPool;
 
     /// @notice The ruleset weight recorded when the hook first starts accumulating project tokens for each project.
-    /// @dev This snapshot is later used to decide whether permissionless deployment is allowed after sufficient weight
-    /// decay from the original accumulation-era ruleset.
+    /// @dev Snapshotted on first accumulation as an accumulation-era reference. `deployPool` and `addLiquidity` are
+    /// permissionless and gated only by economic + oracle-TWAP guards, not by this weight.
     /// @custom:param projectId The ID of the project to get the initial accumulation-era ruleset weight of.
     mapping(uint256 projectId => uint256 weight) public initialWeightOf;
 
@@ -396,8 +394,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param newPoolManager The Uniswap V4 PoolManager on this chain.
     /// @param newPositionManager The Uniswap V4 PositionManager on this chain.
     /// @param newOracleHook The Uniswap V4 oracle hook deployed against `newPoolManager` on this chain.
-    /// @param newBuybackHook The buyback-hook registry this clone targets for force-direct cash-outs. May be the zero
-    /// address, in which case no force-direct metadata is attached.
+    /// @param newBuybackHook The buyback-hook registry to configure for this clone. May be the zero address.
     function initialize(
         uint256 initialFeeProjectId,
         uint256 initialFeePercent,
@@ -451,7 +448,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         buybackHook = newBuybackHook;
     }
 
-    /// @notice Accept ETH transfers (needed for cashOut with native ETH and V4 TAKE operations).
+    /// @notice Accept ETH transfers (needed for V4 TAKE operations that return native ETH, and native-ETH terminal
+    /// interactions).
     receive() external payable {}
 
     //*********************************************************************//
@@ -589,11 +587,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     //*********************************************************************//
 
     /// @notice Convert the project's post-deployment accumulated reserved tokens into additional protocol-owned
-    /// liquidity, minted as a single-sided ask position (no funding cash-out) spanning from the pool's live price out
-    /// to the project's issuance/cash-out corridor — the same executor `deployPool` uses. The add is rejected if the
-    /// pool's spot price has deviated from the oracle TWAP, bounding sandwich/JIT manipulation of the mint range.
-    /// Permissionless once the ruleset weight has decayed 10x from when accumulation began; otherwise requires
-    /// `SET_BUYBACK_POOL` from the project owner. Safe for anyone to call.
+    /// liquidity, minted as a single-sided ask position spanning from the pool's live price out to the project's
+    /// issuance/cash-out corridor — the same executor `deployPool` uses. The add is rejected if the pool's spot price
+    /// has deviated from the oracle TWAP, bounding sandwich/JIT manipulation of the mint range. Permissionless: anyone
+    /// may call it. Abuse is bounded by the economic gate (the mint reverts once spot reaches the issuance ceiling) and
+    /// the oracle-TWAP deviation guard.
     /// @param projectId The ID of the project whose accumulated tokens should be added as liquidity.
     /// @param terminalToken The terminal token paired with the project token in the deployed pool.
     function addLiquidity(uint256 projectId, address terminalToken) external nonReentrant {
@@ -749,9 +747,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     }
 
     /// @notice Create the Uniswap V4 pool and mint the initial LP position as a single-sided ask of the project's
-    /// accumulated reserved tokens — no funding cash-out. Permissionless once the ruleset weight has decayed to 10%
-    /// of
-    /// what it was when accumulation began; otherwise requires `SET_BUYBACK_POOL` permission from the project owner.
+    /// accumulated reserved tokens. Permissionless: anyone may seed the pool. Abuse is bounded by the economic gate
+    /// (the seed reverts once spot reaches the issuance ceiling) and, for an already-initialized pool, the oracle-TWAP
+    /// deviation guard.
     /// @param projectId The ID of the project whose accumulated tokens should be deployed as LP.
     function deployPool(uint256 projectId) external nonReentrant {
         // `deployPool` is fully permissionless: anyone may seed the pool. The only gate is the economic one applied
@@ -853,8 +851,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             received = IERC20(projectToken).balanceOf(address(this)) - balanceBefore;
         }
 
-        // Record the initial weight on first accumulation. Used later to gate permissionless deploy/add after the
-        // weight has decayed 10x. Post-deployment this is already set, so the branch is a no-op.
+        // Record the accumulation-era ruleset weight on first accumulation as a reference snapshot. Post-deployment
+        // this is already set, so the branch is a no-op.
         if (initialWeightOf[context.projectId] == 0) {
             (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(context.projectId);
             initialWeightOf[context.projectId] = ruleset.weight;
