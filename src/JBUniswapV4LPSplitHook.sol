@@ -78,46 +78,18 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     // --------------------------- custom errors ------------------------- //
     //*********************************************************************//
 
+    /// @notice Thrown when `addLiquidity` is called with less accumulated project-token balance than
+    /// `_MIN_ADD_ACCUMULATION`, so a trivial (dust) accumulation cannot force a full fee-collect+burn+remint churn.
+    error JBUniswapV4LPSplitHook_AccumulationBelowThreshold(uint256 projectId, uint256 accumulated, uint256 threshold);
+
     /// @notice Thrown when `initialize` is called on a clone whose chain-specific properties have already been set.
     error JBUniswapV4LPSplitHook_AlreadyInitialized();
+
     /// @notice Thrown when a token amount that must fit a Uniswap V4 `uint128` field exceeds `type(uint128).max`, so a
     /// silent truncation (which could disable a mint or shrink a burn slippage floor to near-zero) is rejected
     /// outright.
     error JBUniswapV4LPSplitHook_AmountExceedsUint128(uint256 amount);
-    /// @notice Thrown when `addLiquidity` is called with less accumulated project-token balance than
-    /// `_MIN_ADD_ACCUMULATION`, so a trivial (dust) accumulation cannot force a full fee-collect+burn+remint churn.
-    error JBUniswapV4LPSplitHook_AccumulationBelowThreshold(uint256 projectId, uint256 accumulated, uint256 threshold);
-    /// @notice Thrown when a pre-initialized pool's price falls outside the project's economic tick range.
-    /// @dev This prevents frontrunning attacks where an attacker initializes the pool at an extreme price.
-    error JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds(
-        uint160 existingPrice, uint160 lowerBound, uint160 upperBound
-    );
-    /// @notice Thrown when a non-zero fee percent is configured without a fee project to route the fee to.
-    error JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject(uint256 feePercent, uint256 feeProjectId);
-    /// @notice Thrown when the hook's held balance of a token is less than the amount an operation requires.
-    error JBUniswapV4LPSplitHook_InsufficientBalance(uint256 available, uint256 required);
-    /// @notice Thrown when the liquidity computed for a position is too low to mint a valid LP position.
-    error JBUniswapV4LPSplitHook_InsufficientLiquidity(uint128 liquidity);
-    /// @notice Thrown when the configured fee percent exceeds the maximum the hook allows.
-    error JBUniswapV4LPSplitHook_InvalidFeePercent(uint256 feePercent, uint256 maxFeePercent);
-    /// @notice Thrown when a project's controller or token cannot be resolved, so the project is not usable by the
-    /// hook.
-    error JBUniswapV4LPSplitHook_InvalidProjectId(uint256 projectId, address controller, address projectToken);
-    /// @notice Thrown when an action is attempted in a lifecycle stage that does not permit it (e.g. growing a pool
-    /// that does not exist yet).
-    error JBUniswapV4LPSplitHook_InvalidStageForAction(uint256 projectId, address terminalToken, uint256 tokenId);
-    /// @notice Thrown when the terminal token supplied for an operation is not the one this clone's pool is paired
-    /// against.
-    error JBUniswapV4LPSplitHook_InvalidTerminalToken(uint256 projectId, address terminalToken);
-    /// @notice Thrown when an operation that requires accumulated project tokens finds none held for the project.
-    error JBUniswapV4LPSplitHook_NoTokensAccumulated(uint256 projectId);
-    /// @notice Thrown when the split hook context names a hook other than this one, so the split was not routed here.
-    error JBUniswapV4LPSplitHook_NotHookSpecifiedInContext(address expectedHook, address actualHook);
-    /// @notice Thrown when a project routes more than one terminal token to the hook, which it cannot pair into a
-    /// single pool.
-    error JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported(uint256 projectId, address terminalToken);
-    /// @notice Thrown when an amount to approve through Permit2 exceeds the maximum a Permit2 allowance can hold.
-    error JBUniswapV4LPSplitHook_Permit2AmountOverflow(address token, uint256 amount, uint256 maxAmount);
+
     /// @notice Thrown when a permissionless rebalance is attempted but the freshly computed issuance/cash-out corridor
     /// is within `_MIN_REBALANCE_DRIFT_TICKS` of the corridor the live position was ranged against on BOTH bounds, so
     /// re-centering would churn the position for no meaningful re-ranging. The drift is measured on CORRIDOR movement
@@ -125,37 +97,91 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     error JBUniswapV4LPSplitHook_DriftBelowThreshold(
         int24 currentTickLower, int24 currentTickUpper, int24 newTickLower, int24 newTickUpper
     );
+
+    /// @notice Thrown when a pre-initialized pool's price falls outside the project's economic tick range.
+    /// @dev This prevents frontrunning attacks where an attacker initializes the pool at an extreme price.
+    error JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds(
+        uint160 existingPrice, uint160 lowerBound, uint160 upperBound
+    );
+
+    /// @notice Thrown when a non-zero fee percent is configured without a fee project to route the fee to.
+    error JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject(uint256 feePercent, uint256 feeProjectId);
+
+    /// @notice Thrown when the hook's held balance of a token is less than the amount an operation requires.
+    error JBUniswapV4LPSplitHook_InsufficientBalance(uint256 available, uint256 required);
+
+    /// @notice Thrown when the liquidity computed for a position is too low to mint a valid LP position.
+    error JBUniswapV4LPSplitHook_InsufficientLiquidity(uint128 liquidity);
+
+    /// @notice Thrown when the configured fee percent exceeds the maximum the hook allows.
+    error JBUniswapV4LPSplitHook_InvalidFeePercent(uint256 feePercent, uint256 maxFeePercent);
+
+    /// @notice Thrown when a project's controller or token cannot be resolved, so the project is not usable by the
+    /// hook.
+    error JBUniswapV4LPSplitHook_InvalidProjectId(uint256 projectId, address controller, address projectToken);
+
+    /// @notice Thrown when an action is attempted in a lifecycle stage that does not permit it (e.g. growing a pool
+    /// that does not exist yet).
+    error JBUniswapV4LPSplitHook_InvalidStageForAction(uint256 projectId, address terminalToken, uint256 tokenId);
+
+    /// @notice Thrown when the terminal token supplied for an operation is not the one this clone's pool is paired
+    /// against.
+    error JBUniswapV4LPSplitHook_InvalidTerminalToken(uint256 projectId, address terminalToken);
+
+    /// @notice Thrown when the split hook context names a hook other than this one, so the split was not routed here.
+    error JBUniswapV4LPSplitHook_NotHookSpecifiedInContext(address expectedHook, address actualHook);
+
+    /// @notice Thrown when an operation that requires accumulated project tokens finds none held for the project.
+    error JBUniswapV4LPSplitHook_NoTokensAccumulated(uint256 projectId);
+
+    /// @notice Thrown when a project routes more than one terminal token to the hook, which it cannot pair into a
+    /// single pool.
+    error JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported(uint256 projectId, address terminalToken);
+
+    /// @notice Thrown when an amount to approve through Permit2 exceeds the maximum a Permit2 allowance can hold.
+    error JBUniswapV4LPSplitHook_Permit2AmountOverflow(address token, uint256 amount, uint256 maxAmount);
+
+    /// @notice Thrown when pool deployment is attempted for a project that already has a deployed pool.
+    error JBUniswapV4LPSplitHook_PoolAlreadyDeployed(uint256 projectId, address terminalToken, uint256 tokenId);
+
+    /// @notice Thrown when the pool's current price has deviated too far from the oracle TWAP, which would let a
+    /// sandwich/JIT attacker make the hook add liquidity at a manipulated ratio.
+    error JBUniswapV4LPSplitHook_PriceDeviationTooHigh(int24 spotTick, int24 twapTick, int24 maxDeviationTicks);
+
+    /// @notice Thrown when a reserved-token split is sent from an address that is neither the project's controller nor
+    /// a valid terminal, so it cannot be trusted as a genuine distribution.
+    error JBUniswapV4LPSplitHook_SplitSenderNotValidControllerOrTerminal(
+        uint256 projectId, address sender, address controller
+    );
+
     /// @notice Thrown when a seed/extend (deploy or add) — or a rebalance — is attempted while the pool's live spot
     /// has
     /// already reached or passed the project's issuance-price (ceiling) tick, so there is no live corridor below the
     /// ceiling for asks to fill and the adaptive ask range would be empty/inverted. Only seed/extend when asks below
     /// the ceiling are fillable.
     error JBUniswapV4LPSplitHook_SpotAboveCeilingAtSeed(int24 spotTick, int24 ceilingTick);
-    /// @notice Thrown when pool deployment is attempted for a project that already has a deployed pool.
-    error JBUniswapV4LPSplitHook_PoolAlreadyDeployed(uint256 projectId, address terminalToken, uint256 tokenId);
-    /// @notice Thrown when the pool's current price has deviated too far from the oracle TWAP, which would let a
-    /// sandwich/JIT attacker make the hook add liquidity at a manipulated ratio.
-    error JBUniswapV4LPSplitHook_PriceDeviationTooHigh(int24 spotTick, int24 twapTick, int24 maxDeviationTicks);
-    /// @notice Thrown when a reserved-token split is sent from an address that is neither the project's controller nor
-    /// a valid terminal, so it cannot be trusted as a genuine distribution.
-    error JBUniswapV4LPSplitHook_SplitSenderNotValidControllerOrTerminal(
-        uint256 projectId, address sender, address controller
-    );
+
     /// @notice Thrown when a temporary Permit2 allowance granted for an operation is not fully consumed by it.
     error JBUniswapV4LPSplitHook_TemporaryAllowanceNotConsumed(address token, address spender, uint256 allowance);
-    /// @notice Thrown when the best-effort fee-cut payment helper is called by anyone other than this contract itself.
-    error JBUniswapV4LPSplitHook_Unauthorized();
+
     /// @notice Thrown when no terminal accepting the given token can be found for the project.
     error JBUniswapV4LPSplitHook_TerminalNotFound(uint256 projectId, address token);
+
     /// @notice Thrown when a split is routed to the hook under a group ID other than the one reserved for terminal
     /// tokens.
     error JBUniswapV4LPSplitHook_TerminalTokensNotAllowed(uint256 groupId, uint256 requiredGroupId);
+
     /// @notice Thrown when the oracle TWAP cannot be read (e.g. the pool oracle has not warmed up yet), so the pool
     /// price cannot be validated and liquidity must not be added.
     error JBUniswapV4LPSplitHook_TwapUnavailable(uint256 projectId, address terminalToken);
+
+    /// @notice Thrown when the best-effort fee-cut payment helper is called by anyone other than this contract itself.
+    error JBUniswapV4LPSplitHook_Unauthorized();
+
     /// @notice Thrown when the token backing a project's unclaimed fee balance changes, so the prior balance can no
     /// longer be safely settled in the new token.
     error JBUniswapV4LPSplitHook_UnclaimedFeeTokenChanged(address previousToken, address nextToken);
+
     /// @notice Thrown when the token amounts paired for a position yield zero liquidity.
     error JBUniswapV4LPSplitHook_ZeroLiquidity(uint256 amount0, uint256 amount1);
 
