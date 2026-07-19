@@ -33,7 +33,7 @@ This file focuses on the lifecycle, pricing, and fee-accounting risks in `JBUnis
 - **Extreme weight scenarios.** Very low or zero effective issuance rates can make deployment invalid; very high weights can push tick bounds toward the edges.
 - **Zero-surplus fallback.** If cash-out rate is effectively zero, the hook falls back to a minimal issuance-centered range.
 - **Dust handling.** Very small token balances can produce inert or effectively zero-liquidity outcomes.
-- **Rebalance value conservation.** Rebalance conserves value only within rounding and leftover handling; extra leftover project tokens are carried back into the accumulation ledger and leftover terminal tokens are returned to the project terminal — never burned.
+- **Rebalance value conservation.** Rebalance conserves value only within rounding and leftover handling; extra leftover project tokens are carried back into the accumulation ledger and leftover terminal tokens are carried into the per-project terminal-token ledger (`accumulatedTerminalTokens`) — never burned, never deposited into the project's terminal.
 - **Impermanent loss amplification.** This is concentrated liquidity. If price exits the range, the position becomes single-sided.
 - **Accumulation-period idle capital.** Before deployment, accumulated reserved tokens are idle.
 
@@ -48,8 +48,8 @@ This file focuses on the lifecycle, pricing, and fee-accounting risks in `JBUnis
 
 - **Rebalance is permissionless.** It is bounded by a corridor-drift threshold (rejects churn that would not meaningfully re-range) and the oracle-TWAP deviation guard, so a third party cannot force-rebalance at an adversarial spot.
 - **Consecutive rebalance safety matters.** New position IDs must only be stored after successful remint.
-- **Leftover token handling matters.** Leftover project tokens are carried back into the accumulation ledger; leftover terminal tokens are returned to project balance. Nothing is burned.
-- **Fee collection order matters.** Collected fees should be separated before reminting principal; the project-token fee side is carried into the accumulation ledger (not burned).
+- **Leftover token handling matters.** Leftover project tokens are carried back into the accumulation ledger; leftover terminal tokens are carried into the per-project terminal-token ledger (`accumulatedTerminalTokens`). Nothing is burned and nothing is deposited into the project's terminal.
+- **Fee collection order matters.** Collected fees should be separated before reminting principal; each side (project-token and terminal-token) takes a best-effort fee-project cut, and the non-cut remainder of each is carried into this project's own ledger — the ask-leg `accumulatedProjectTokens` or the bid-leg `accumulatedTerminalTokens` — rather than being re-read as burn principal.
 - **Spot price is used during rebalance.** Operators should treat rebalance timing as economically sensitive.
 
 ## 5. Access control risks
@@ -84,7 +84,7 @@ The design assumes trusted Juicebox and Uniswap components on the critical exter
 
 Fee routing into the fee project intentionally does not set a local slippage floor. The fee project's own terminal and hook logic are expected to own that behavior.
 
-If the fee project has no primary terminal for the collected token, the fee project simply misses that collection and the full amount stays in the project's normal split-hook flow. This is accepted because fee-project terminal configuration is owned by the fee project, not by this LP split hook.
+If the fee project has no primary terminal for the collected token, the fee project simply misses that collection and the full amount is carried into the originating project's own ledger instead (the ask-leg `accumulatedProjectTokens` or the bid-leg `accumulatedTerminalTokens`, depending on which side was being cut). This is accepted because fee-project terminal configuration is owned by the fee project, not by this LP split hook.
 
 ### 7.3 Permit2 approval bounds and cleanup
 
@@ -100,11 +100,13 @@ When `deployPool` encounters an already-initialized pool (e.g. by an attacker or
 - A reverted `deployPool` does not mark the pool as deployed, so the project can retry once the pool is re-initialized at a valid price (e.g. via a different pool key or after pool state is corrected).
 - If the existing price is within the tick bounds, the hook accepts it and proceeds normally.
 
-### 7.5 Project-token LP fees compound with no fee-project cut
+### 7.5 Fee-project cut is best-effort on both sides
 
-LP trading fees accrue in both tokens. When fees are collected and routed, the terminal-token side is deposited to the project's terminal minus the configured `feeProjectId` protocol cut. The project-token side is instead carried back into the accumulation ledger and compounds into the project's own LP on the next mint, with **no** `feeProjectId` cut applied.
+LP trading fees accrue in both tokens. When fees are collected and routed, the `feeProjectId` protocol cut is attempted symmetrically on both the terminal-token side and the project-token side: for each side, the hook checks whether the fee project has a primary terminal that accepts that token, and if so pays the cut there so it becomes claimable by the fee project as fee tokens or fee-project credits. The payment is wrapped so a missing fee-project terminal or a reverting payment is forgiven — fee collection never fails because of the fee project's own configuration or state.
 
-This is accepted: there is no clean destination to pay a project-token-denominated protocol cut, and the project-token fees stay working for the project as future liquidity. The `feeProjectId` cut applies to terminal-token fees only.
+Whatever is not taken as a cut becomes the originating project's own protocol-owned liquidity, never the project's terminal balance: the project-token remainder is carried into `accumulatedProjectTokens` (the ask-side ledger), and the terminal-token remainder is carried into `accumulatedTerminalTokens[projectId][terminalToken]` (the per-project bid-side ledger). Both ledgers fold into the next mint.
+
+In practice, the project-token cut is usually forgiven, because the fee project rarely has a terminal configured to accept an arbitrary project's token — so project-token fees typically stay entirely as the project's own liquidity. The mechanism captures the cut whenever such a fee-project terminal does exist; nothing in the design privileges one side over the other.
 
 ### 7.6 `deployPool` auto-selects and permanently locks the terminal token
 

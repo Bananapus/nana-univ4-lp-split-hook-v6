@@ -57,7 +57,8 @@ It does not own the project's issuance logic itself.
 - fee claiming (`claimFeeTokensFor`) is an operational power gated to the project owner or `SET_BUYBACK_POOL` delegate; deploy, add, rebalance, and fee collection are permissionless but bounded by economic and oracle-TWAP guards, so projects should understand who can trigger them and how new ranges are chosen before treating the hook as hands-off infrastructure
 - newly received reserved tokens keep accumulating after deployment and are converted into additional liquidity via `addLiquidity` (the hook never burns project tokens; supply-reducing burns are a protocol-layer split-routing decision)
 - the normal reserved-token path requires a deployed project ERC-20; if the hook also holds internal project credits, deploy/add liquidity claims them into that ERC-20 before minting so accounting remains tied to transferable tokens
-- the hook never cashes out: any terminal-token (bid) side of a position is funded only from the terminal tokens the hook recovers by burning its own prior V4 position, never by redeeming project tokens against the terminal
+- the hook never cashes out: any terminal-token (bid) side of a position is funded only from the terminal tokens the hook recovers by burning its own prior V4 position plus this project's own accumulated terminal-token fee ledger, never by redeeming project tokens against the terminal
+- LP-fee collection takes a best-effort `feeProjectId` cut symmetrically on both the project-token and terminal-token sides (each paid to the fee project's primary terminal for that token when one exists, forgiven otherwise); every non-cut remainder becomes the project's own protocol-owned liquidity, never a deposit into the project's terminal
 - fee-project credits owed to claimants are reserved from that credit normalization, so a fee project cannot consume other projects' claimable fee credits as its own LP principal
 
 ## Where state lives
