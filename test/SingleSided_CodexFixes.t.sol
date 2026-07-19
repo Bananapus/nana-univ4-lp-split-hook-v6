@@ -19,6 +19,7 @@ import {PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {LibClone} from "solady/src/utils/LibClone.sol";
+import {MockGeomeanOracle} from "./mock/MockGeomeanOracle.sol";
 
 /// @notice Subclass exposing internals so unit tests can drive them directly.
 contract CodexExposedHook is JBUniswapV4LPSplitHook {
@@ -221,5 +222,59 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
 
     function TICK_SPACING() internal view returns (int24) {
         return hook.TICK_SPACING();
+    }
+
+    // ─── Finding 2: deployPool validates spot against the oracle TWAP on a pre-initialized pool ───
+
+    function _preInitAtMid() internal returns (int24 midTick) {
+        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
+        (int24 corridorLower, int24 corridorUpper) = _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
+        midTick = corridorLower + (corridorUpper - corridorLower) / 2;
+        positionManager.initializePool(_poolKey(), TickMath.getSqrtPriceAtTick(midTick));
+    }
+
+    /// @notice Deploying onto a pre-initialized pool whose spot has been shoved off the oracle TWAP reverts, so a
+    /// deploy cannot be sandwiched into minting at a manipulated price (parity with addLiquidity/rebalance).
+    function test_Finding2_DeployOnPreInitPool_RevertsWhenSpotOffTwap() public {
+        // The pool key includes the oracle hook, so install the fixed oracle BEFORE pre-initializing so the pre-init
+        // pool and the hook's computed key match.
+        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
+        (int24 corridorLower, int24 corridorUpper) = _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
+        int24 midTick = corridorLower + (corridorUpper - corridorLower) / 2;
+
+        MockGeomeanOracle fixedOracle = new MockGeomeanOracle();
+        fixedOracle.setTwapTick(midTick + 1000);
+        vm.store(address(hook), bytes32(uint256(1)), bytes32(uint256(uint160(address(fixedOracle)))));
+
+        positionManager.initializePool(_poolKey(), TickMath.getSqrtPriceAtTick(midTick));
+
+        _accumulateTokens(PROJECT_ID, 0.5e18);
+        vm.prank(owner);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PriceDeviationTooHigh.selector);
+        hook.deployPool(PROJECT_ID);
+    }
+
+    /// @notice A deploy onto a pre-initialized pool whose spot is near the TWAP succeeds (guard passes).
+    function test_Finding2_DeployOnPreInitPool_SucceedsWhenSpotNearTwap() public {
+        _preInitAtMid(); // base oracle tracks spot → TWAP == spot → guard passes.
+        _accumulateTokens(PROJECT_ID, 0.5e18);
+        vm.prank(owner);
+        hook.deployPool(PROJECT_ID);
+        assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "near-TWAP deploy must succeed");
+    }
+
+    /// @notice A fresh pool the hook initializes itself has no TWAP history, so the guard is skipped and the cold-start
+    /// deploy still succeeds even when the oracle would revert.
+    function test_Finding2_FreshPoolColdStart_SkipsTwapGuard() public {
+        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
+
+        MockGeomeanOracle revertingOracle = new MockGeomeanOracle();
+        revertingOracle.setShouldRevert(true);
+        vm.store(address(hook), bytes32(uint256(1)), bytes32(uint256(uint160(address(revertingOracle)))));
+
+        _accumulateTokens(PROJECT_ID, 0.5e18);
+        vm.prank(owner);
+        hook.deployPool(PROJECT_ID);
+        assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "cold-start deploy must skip the TWAP guard");
     }
 }

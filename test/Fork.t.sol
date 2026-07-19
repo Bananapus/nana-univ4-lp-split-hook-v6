@@ -356,6 +356,9 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         PoolId poolId = key.toId();
         (uint160 sqrtPriceBefore,,,) = V4_POOL_MANAGER.getSlot0(poolId);
         assertEq(sqrtPriceBefore, externalSqrtPrice, "pool should be at external price");
+        // Deploying onto an already-initialized pool now validates spot against the oracle TWAP; force TWAP == spot so
+        // the guard passes deterministically and this test keeps exercising the in-band price-reuse path.
+        _mockOracleTwapEqualsSpot(hook.oracleHook(), V4_POOL_MANAGER, key);
         vm.prank(multisig);
         hook.deployPool(projectId);
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should deploy successfully");

@@ -1208,6 +1208,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param controller The project's controller address (pre-fetched to avoid redundant lookups).
     /// @param ruleset The project's current ruleset (pre-fetched to avoid redundant lookups).
     /// @return key The pool key identifying the newly created Uniswap V4 pool.
+    /// @return wasAlreadyInitialized Whether the pool already had a live price before this call (i.e. someone else
+    /// initialized it), as opposed to being initialized here for the first time.
     function _createAndInitializePool(
         uint256 projectId,
         address projectToken,
@@ -1216,7 +1218,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         JBRuleset memory ruleset
     )
         internal
-        returns (PoolKey memory key)
+        returns (PoolKey memory key, bool wasAlreadyInitialized)
     {
         Currency terminalCurrency = _toCurrency(terminalToken);
         Currency projectCurrency = Currency.wrap(projectToken);
@@ -1247,6 +1249,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // price, which would cause either a DoS (zero liquidity) or value extraction (single-sided
         // position at a manipulated price).
         uint160 existingSqrtPriceX96 = _getSqrtPriceX96(key);
+        wasAlreadyInitialized = existingSqrtPriceX96 != 0;
         if (existingSqrtPriceX96 != 0) {
             // Compute the project's economic tick bounds (cashout floor to issuance ceiling).
             (int24 tickLower, int24 tickUpper) = JBUniswapV4LPSplitHookMath.calculateTickBounds({
@@ -1312,13 +1315,21 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     {
         // Initialize the pool if it hasn't been created yet.
         if (tokenIdOf[projectId][terminalToken] == 0) {
-            _createAndInitializePool({
+            (PoolKey memory key, bool wasAlreadyInitialized) = _createAndInitializePool({
                 projectId: projectId,
                 projectToken: projectToken,
                 terminalToken: terminalToken,
                 controller: controller,
                 ruleset: ruleset
             });
+
+            // For a pool that was ALREADY initialized before this deploy (the revnet norm — a buyback pool already
+            // exists), validate the live spot against the oracle TWAP before minting, mirroring `addLiquidity`, so a
+            // deploy cannot be sandwiched into minting at a manipulated price. A pool this hook initializes itself in
+            // the same transaction has no TWAP history, so the guard is skipped (it would revert on cold start).
+            if (wasAlreadyInitialized) {
+                _requireSpotNearTwap({projectId: projectId, terminalToken: terminalToken, key: key});
+            }
         }
 
         // Mint a single-sided ask position from the accumulated project tokens — no funding cash-out.
