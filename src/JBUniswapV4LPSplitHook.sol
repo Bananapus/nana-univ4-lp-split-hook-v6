@@ -78,6 +78,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Thrown when `initialize` is called on a clone whose chain-specific properties have already been set.
     error JBUniswapV4LPSplitHook_AlreadyInitialized();
+    /// @notice Thrown when a token amount that must fit a Uniswap V4 `uint128` field exceeds `type(uint128).max`, so a
+    /// silent truncation (which could disable a mint or shrink a burn slippage floor to near-zero) is rejected outright.
+    error JBUniswapV4LPSplitHook_AmountExceedsUint128(uint256 amount);
     /// @notice Thrown when a pre-initialized pool's price falls outside the project's economic tick range.
     /// @dev This prevents frontrunning attacks where an attacker initializes the pool at an extreme price.
     error JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds(
@@ -972,6 +975,15 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         return a >= b ? a - b : b - a;
     }
 
+    /// @notice Narrow a `uint256` token amount to the `uint128` Uniswap V4 uses for settle caps and burn floors,
+    /// reverting instead of silently truncating when the amount exceeds `type(uint128).max`.
+    /// @param value The amount to narrow.
+    /// @return The amount as a `uint128`.
+    function _toUint128(uint256 value) internal pure returns (uint128) {
+        if (value > type(uint128).max) revert JBUniswapV4LPSplitHook_AmountExceedsUint128({amount: value});
+        return uint128(value);
+    }
+
     /// @notice Record incoming project tokens in the accumulation ledger (the hook's single inflow sink).
     /// @param projectId The ID of the project to credit.
     /// @param amount The project-token amount to add to the ledger.
@@ -1690,11 +1702,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             sqrtPriceX96: _getSqrtPriceX96(key), tickLower: tickLower, tickUpper: tickUpper, liquidity: liquidity
         });
 
-        // Position principal is bounded by pooled token balances, so the discounted floor fits in uint128.
-        // forge-lint: disable-next-line(unsafe-typecast)
-        min0 = uint128((amount0 * _BURN_SLIPPAGE_BPS) / BPS);
-        // forge-lint: disable-next-line(unsafe-typecast)
-        min1 = uint128((amount1 * _BURN_SLIPPAGE_BPS) / BPS);
+        // Position principal is bounded by pooled token balances, so the discounted floor normally fits in uint128;
+        // reject the pathological case rather than let a wraparound shrink the floor and accept a bad unwind.
+        min0 = _toUint128((amount0 * _BURN_SLIPPAGE_BPS) / BPS);
+        min1 = _toUint128((amount1 * _BURN_SLIPPAGE_BPS) / BPS);
     }
 
     /// @notice The token0/token1 amounts a position of `liquidity` across `[tickLower, tickUpper]` holds at
@@ -1783,11 +1794,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             tickLower,
             tickUpper,
             uint256(liquidity),
-            // Safe: amount0/amount1 are bounded by token balances which fit in uint128.
-            // forge-lint: disable-next-line(unsafe-typecast)
-            uint128(amount0),
-            // forge-lint: disable-next-line(unsafe-typecast)
-            uint128(amount1),
+            // Settle caps must fit Uniswap V4's uint128 fields; reject rather than truncate an out-of-range amount.
+            _toUint128(amount0),
+            _toUint128(amount1),
             address(this),
             ""
         );
