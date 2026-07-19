@@ -202,25 +202,20 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     // ----------------------- internal constants ------------------------ //
     //*********************************************************************//
 
+    /// @notice The slippage floor, out of `BPS`, applied to a burned position's contract-derived principal read.
+    /// @dev When consolidating, the hook computes the position's current token amounts from its on-chain liquidity and
+    /// the live pool price, then requires the BURN to return at least this fraction of that read. The floor is always
+    /// contract-derived — callers never supply burn minimums — so a sandwiched spot cannot make the hook accept an
+    /// arbitrarily bad unwind.
+    uint256 internal constant _BURN_SLIPPAGE_BPS = 9500;
+
     /// @notice Deadline window (in seconds) for PositionManager and Permit2 operations.
     uint256 internal constant _DEADLINE_SECONDS = 60;
-
-    /// @notice The TWAP observation window (in seconds) used to validate the pool's spot price before adding liquidity.
-    /// @dev Matches the buyback hook's expected oracle warmup. `addLiquidity` reverts until the pool oracle has at
-    /// least this much history; accumulation continues safely in the meantime.
-    uint32 internal constant _TWAP_WINDOW = 30 minutes;
 
     /// @notice The maximum allowed deviation (in ticks) between the pool's spot price and the oracle TWAP when adding
     /// liquidity. ~200 ticks ≈ 2.0% on the 1% fee tier; an add whose spot is further than this from the TWAP reverts,
     /// bounding how badly a sandwich/JIT attacker can skew the mint ratio.
     int24 internal constant _MAX_TWAP_DEVIATION_TICKS = 200;
-
-    /// @notice The minimum corridor drift (in ticks) a permissionless rebalance must clear on at least one bound.
-    /// @dev Defaults to one pool `tickSpacing`. If the freshly recomputed `[floor, ceiling]` sits within this distance
-    /// of the live position on BOTH bounds, `rebalanceLiquidity` reverts — cheap churn that would burn and re-mint
-    /// the
-    /// same effective range (paying gas + realizing burn slippage) for no re-centering benefit is rejected.
-    int24 internal constant _MIN_REBALANCE_DRIFT_TICKS = TICK_SPACING;
 
     /// @notice The minimum accumulated project-token balance `addLiquidity` requires before it will churn the position.
     /// @dev Below this, LP-fee dust (down to 1 wei of project-token fee carried into the accumulation ledger) would
@@ -229,12 +224,17 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// unaffected.
     uint256 internal constant _MIN_ADD_ACCUMULATION = 1e15;
 
-    /// @notice The slippage floor, out of `BPS`, applied to a burned position's contract-derived principal read.
-    /// @dev When consolidating, the hook computes the position's current token amounts from its on-chain liquidity and
-    /// the live pool price, then requires the BURN to return at least this fraction of that read. The floor is always
-    /// contract-derived — callers never supply burn minimums — so a sandwiched spot cannot make the hook accept an
-    /// arbitrarily bad unwind.
-    uint256 internal constant _BURN_SLIPPAGE_BPS = 9500;
+    /// @notice The minimum corridor drift (in ticks) a permissionless rebalance must clear on at least one bound.
+    /// @dev Defaults to one pool `tickSpacing`. If the freshly recomputed `[floor, ceiling]` sits within this distance
+    /// of the live position on BOTH bounds, `rebalanceLiquidity` reverts — cheap churn that would burn and re-mint
+    /// the
+    /// same effective range (paying gas + realizing burn slippage) for no re-centering benefit is rejected.
+    int24 internal constant _MIN_REBALANCE_DRIFT_TICKS = TICK_SPACING;
+
+    /// @notice The TWAP observation window (in seconds) used to validate the pool's spot price before adding liquidity.
+    /// @dev Matches the buyback hook's expected oracle warmup. `addLiquidity` reverts until the pool oracle has at
+    /// least this much history; accumulation continues safely in the meantime.
+    uint32 internal constant _TWAP_WINDOW = 30 minutes;
 
     //*********************************************************************//
     // --------------- public immutable stored properties ---------------- //
@@ -259,35 +259,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     // --------------------- public stored properties -------------------- //
     //*********************************************************************//
 
-    /// @notice The buyback-hook registry configured for this clone.
-    /// @dev Held as per-clone storage (set once via `initialize`) rather than an implementation immutable so different
-    /// projects' clones can target different buyback registries and this implementation's CREATE2 inputs stay
-    /// byte-identical on every chain. May be the zero address.
-    IJBBuybackHookRegistry public buybackHook;
-
-    /// @notice The oracle hook used for configured Uniswap V4 pools (provides TWAP via observe()).
-    /// @dev Set once per clone via `initialize` (alongside `feeProjectId` + `feePercent`). Held as storage rather
-    /// than immutable because `JBUniswapV4Hook` is chain-different by design (inherits Uniswap's
-    /// `BaseHook → ImmutableState`). Keeping it out of the constructor lets this implementation's CREATE2 inputs be
-    /// byte-identical on every chain.
-    IHooks public oracleHook;
-
-    /// @notice The Uniswap V4 pool manager contract that coordinates all pool operations.
-    /// @dev Set once per clone via `initialize`. Held as storage rather than immutable so the implementation's
-    /// constructor inputs are byte-identical on every chain (the V4 PoolManager varies per chain).
-    IPoolManager public poolManager;
-
-    /// @notice The Uniswap V4 position manager contract that handles liquidity position NFTs.
-    /// @dev Set once per clone via `initialize`. Held as storage rather than immutable so the implementation's
-    /// constructor inputs are byte-identical on every chain (the V4 PositionManager varies per chain).
-    IPositionManager public positionManager;
-
-    /// @notice The project ID that receives the LP-fee cut.
-    uint256 public feeProjectId;
-
-    /// @notice The percentage of LP fees routed to the fee project, in basis points (e.g. 3800 = 38%).
-    uint256 public feePercent;
-
     /// @notice The accumulated project-token balance currently held for each project before its first pool deployment.
     /// @dev `processSplitWith` accumulates project tokens here while the project is still in pre-deployment mode.
     /// Once a pool is deployed for a project, the project permanently transitions out of this accumulation path.
@@ -304,6 +275,24 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @custom:param projectId The ID of the project whose accumulated terminal-token bid liquidity to read.
     /// @custom:param terminalToken The terminal token paired with the project's token in its pool.
     mapping(uint256 projectId => mapping(address terminalToken => uint256)) public accumulatedTerminalTokens;
+
+    /// @notice The lower tick of the currently active LP position for each project and terminal-token pair.
+    /// @dev Recorded when a position is minted. `addLiquidity` compares the live corridor against these stored ticks to
+    /// decide whether to top up the active position or re-range into a new one.
+    /// @custom:param projectId The ID of the project.
+    /// @custom:param terminalToken The terminal token paired with the project's token in the deployed pool.
+    mapping(uint256 projectId => mapping(address terminalToken => int24 tickLower)) public activeTickLowerOf;
+
+    /// @notice The upper tick of the currently active LP position for each project and terminal-token pair.
+    /// @custom:param projectId The ID of the project.
+    /// @custom:param terminalToken The terminal token paired with the project's token in the deployed pool.
+    mapping(uint256 projectId => mapping(address terminalToken => int24 tickUpper)) public activeTickUpperOf;
+
+    /// @notice The buyback-hook registry configured for this clone.
+    /// @dev Held as per-clone storage (set once via `initialize`) rather than an implementation immutable so different
+    /// projects' clones can target different buyback registries and this implementation's CREATE2 inputs stay
+    /// byte-identical on every chain. May be the zero address.
+    IJBBuybackHookRegistry public buybackHook;
 
     /// @notice The fee-project credits, rather than ERC-20s, currently claimable by each project.
     /// @dev These credits accrue when fee routing reaches `terminal.pay()` while the fee project has no ERC-20.
@@ -323,6 +312,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @custom:param projectId The ID of the project to get the currently claimable fee-token balance of.
     mapping(uint256 projectId => uint256 claimableFeeTokens) public claimableFeeTokens;
 
+    /// @notice The percentage of LP fees routed to the fee project, in basis points (e.g. 3800 = 38%).
+    uint256 public feePercent;
+
+    /// @notice The project ID that receives the LP-fee cut.
+    uint256 public feeProjectId;
+
     /// @notice Whether each project has already deployed its single supported Uniswap V4 pool.
     /// @dev This is a boolean because the hook intentionally supports only one deployed terminal-token pool per
     /// project. It marks the one-way transition from "deployPool consumes the accumulation" to "addLiquidity grows the
@@ -336,6 +331,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @custom:param projectId The ID of the project to get the initial accumulation-era ruleset weight of.
     mapping(uint256 projectId => uint256 weight) public initialWeightOf;
 
+    /// @notice The oracle hook used for configured Uniswap V4 pools (provides TWAP via observe()).
+    /// @dev Set once per clone via `initialize` (alongside `feeProjectId` + `feePercent`). Held as storage rather
+    /// than immutable because `JBUniswapV4Hook` is chain-different by design (inherits Uniswap's
+    /// `BaseHook → ImmutableState`). Keeping it out of the constructor lets this implementation's CREATE2 inputs be
+    /// byte-identical on every chain.
+    IHooks public oracleHook;
+
     /// @notice The Uniswap V4 pool key configured for each project and terminal-token pair.
     /// @dev A project can only deploy one terminal-token pool, but the pool key still needs the terminal token as part
     /// of the lookup because deployment-time and fee-routing logic are keyed by that pair.
@@ -343,23 +345,15 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @custom:param terminalToken The terminal token paired with the project's token in the configured pool.
     mapping(uint256 projectId => mapping(address terminalToken => PoolKey)) public poolKeysOf;
 
-    /// @notice The Uniswap V4 PositionManager token ID for each deployed project and terminal-token pair.
-    /// @dev This is zero before deployment and nonzero after the first successful position mint.
-    /// @custom:param projectId The ID of the project to get an LP position token ID for.
-    /// @custom:param terminalToken The terminal token paired with the project's token in the deployed pool.
-    mapping(uint256 projectId => mapping(address terminalToken => uint256 tokenId)) public tokenIdOf;
+    /// @notice The Uniswap V4 pool manager contract that coordinates all pool operations.
+    /// @dev Set once per clone via `initialize`. Held as storage rather than immutable so the implementation's
+    /// constructor inputs are byte-identical on every chain (the V4 PoolManager varies per chain).
+    IPoolManager public poolManager;
 
-    /// @notice The lower tick of the currently active LP position for each project and terminal-token pair.
-    /// @dev Recorded when a position is minted. `addLiquidity` compares the live corridor against these stored ticks to
-    /// decide whether to top up the active position or re-range into a new one.
-    /// @custom:param projectId The ID of the project.
-    /// @custom:param terminalToken The terminal token paired with the project's token in the deployed pool.
-    mapping(uint256 projectId => mapping(address terminalToken => int24 tickLower)) public activeTickLowerOf;
-
-    /// @notice The upper tick of the currently active LP position for each project and terminal-token pair.
-    /// @custom:param projectId The ID of the project.
-    /// @custom:param terminalToken The terminal token paired with the project's token in the deployed pool.
-    mapping(uint256 projectId => mapping(address terminalToken => int24 tickUpper)) public activeTickUpperOf;
+    /// @notice The Uniswap V4 position manager contract that handles liquidity position NFTs.
+    /// @dev Set once per clone via `initialize`. Held as storage rather than immutable so the implementation's
+    /// constructor inputs are byte-identical on every chain (the V4 PositionManager varies per chain).
+    IPositionManager public positionManager;
 
     /// @notice The lower tick of the issuance/cash-out CORRIDOR the currently active position was ranged against.
     /// @dev Distinct from `activeTickLowerOf`: the active position's bounds include the ADAPTIVE bid bound (which moves
@@ -376,6 +370,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @custom:param projectId The ID of the project.
     /// @custom:param terminalToken The terminal token paired with the project's token in the deployed pool.
     mapping(uint256 projectId => mapping(address terminalToken => int24 corridorUpper)) public rangedCorridorUpperOf;
+
+    /// @notice The Uniswap V4 PositionManager token ID for each deployed project and terminal-token pair.
+    /// @dev This is zero before deployment and nonzero after the first successful position mint.
+    /// @custom:param projectId The ID of the project to get an LP position token ID for.
+    /// @custom:param terminalToken The terminal token paired with the project's token in the deployed pool.
+    mapping(uint256 projectId => mapping(address terminalToken => uint256 tokenId)) public tokenIdOf;
 
     //*********************************************************************//
     // -------------------- internal stored properties ------------------- //

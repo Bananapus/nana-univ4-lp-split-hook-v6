@@ -207,10 +207,10 @@ contract SingleSided_RebalanceTest is LPSplitHookV4TestBase {
         _deploySingleSidedWithBid({projectAmount: 0.5e18, bidAmount: 1e18});
         _moveCorridor();
 
-        // Pin a fixed-tick oracle far from the live spot (slot 1 == oracleHook).
+        // Pin a fixed-tick oracle far from the live spot.
         MockGeomeanOracle fixedOracle = new MockGeomeanOracle();
         fixedOracle.setTwapTick(_spotTick() + 1000);
-        vm.store(address(hook), bytes32(uint256(1)), bytes32(uint256(uint160(address(fixedOracle)))));
+        _overrideOracleHook(address(fixedOracle));
 
         vm.prank(STRANGER);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PriceDeviationTooHigh.selector);

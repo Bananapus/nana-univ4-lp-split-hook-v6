@@ -49,10 +49,6 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
 
-    /// @dev Slots from `forge inspect ... storage-layout`.
-    uint256 internal constant _SLOT_INFLIGHT_COUNT = 19;
-    uint256 internal constant _SLOT_OUTSTANDING_TOKEN_CLAIMS = 21;
-
     uint256 internal constant PROJECT_B = 7;
     MockERC20 internal projectTokenB;
 
@@ -147,11 +143,11 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
     }
 
     function _outstandingTokenClaims(address token) internal view returns (uint256) {
-        return uint256(vm.load(address(hook), keccak256(abi.encode(token, _SLOT_OUTSTANDING_TOKEN_CLAIMS))));
+        return uint256(vm.load(address(hook), keccak256(abi.encode(token, SLOT_OUTSTANDING_FEE_TOKEN_CLAIMS))));
     }
 
     function _inflightCount(address token) internal view returns (uint256) {
-        return uint256(vm.load(address(hook), keccak256(abi.encode(token, _SLOT_INFLIGHT_COUNT))));
+        return uint256(vm.load(address(hook), keccak256(abi.encode(token, SLOT_INFLIGHT_FEE_ROUTING_COUNT))));
     }
 
     function _setupProjectB() internal {

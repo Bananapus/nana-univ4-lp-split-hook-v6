@@ -259,7 +259,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
 
         MockGeomeanOracle fixedOracle = new MockGeomeanOracle();
         fixedOracle.setTwapTick(midTick + 1000);
-        vm.store(address(hook), bytes32(uint256(1)), bytes32(uint256(uint160(address(fixedOracle)))));
+        _overrideOracleHook(address(fixedOracle));
 
         positionManager.initializePool(_poolKey(), TickMath.getSqrtPriceAtTick(midTick));
 
@@ -285,7 +285,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
 
         MockGeomeanOracle revertingOracle = new MockGeomeanOracle();
         revertingOracle.setShouldRevert(true);
-        vm.store(address(hook), bytes32(uint256(1)), bytes32(uint256(uint160(address(revertingOracle)))));
+        _overrideOracleHook(address(revertingOracle));
 
         _accumulateTokens(PROJECT_ID, 0.5e18);
         vm.prank(owner);

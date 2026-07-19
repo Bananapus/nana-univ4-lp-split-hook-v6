@@ -86,6 +86,30 @@ contract LPSplitHookV4TestBase is Test {
     /// @notice Stand-in buyback-hook registry the hook holds as `buybackHook` (force-direct cash-out target).
     address public constant BUYBACK_REGISTRY = address(0xB0B);
 
+    // ─── Hook Storage Slots
+    // `JBUniswapV4LPSplitHook` declares its stored properties alphabetically (STYLE_GUIDE) and none of them pack, so
+    // each occupies one slot in declaration order. Verified against `forge inspect ... storageLayout`:
+    //   0 accumulatedProjectTokens    6 claimableFeeTokenOf   12 oracleHook
+    //   1 accumulatedTerminalTokens   7 claimableFeeTokens    13 poolKeysOf
+    //   2 activeTickLowerOf           8 feePercent            14 poolManager
+    //   3 activeTickUpperOf           9 feeProjectId          15 positionManager
+    //   4 buybackHook                10 hasDeployedPool       16 rangedCorridorLowerOf
+    //   5 claimableFeeCredits        11 initialWeightOf       17 rangedCorridorUpperOf
+    //  18 tokenIdOf                  19 _inflightFeeRoutingCount
+    //  20 _totalOutstandingFeeCreditClaims                    21 _totalOutstandingFeeTokenClaims
+
+    /// @notice Storage slot of the hook's `oracleHook`.
+    uint256 internal constant SLOT_ORACLE_HOOK = 12;
+
+    /// @notice Storage slot of the hook's `tokenIdOf` mapping.
+    uint256 internal constant SLOT_TOKEN_ID_OF = 18;
+
+    /// @notice Storage slot of the hook's `_inflightFeeRoutingCount` mapping.
+    uint256 internal constant SLOT_INFLIGHT_FEE_ROUTING_COUNT = 19;
+
+    /// @notice Storage slot of the hook's `_totalOutstandingFeeTokenClaims` mapping.
+    uint256 internal constant SLOT_OUTSTANDING_FEE_TOKEN_CLAIMS = 21;
+
     address public owner;
     address public user;
 
@@ -183,7 +207,8 @@ contract LPSplitHookV4TestBase is Test {
 
         // Wire a spot-tracking oracle so the hook's spot-vs-TWAP guard (on addLiquidity AND rebalanceLiquidity) passes
         // by default: it reports a TWAP equal to the pool's live spot tick. Tests that exercise TWAP deviation or an
-        // un-warmed oracle override `oracleHook` (slot 0) with their own fixed-tick MockGeomeanOracle.
+        // un-warmed oracle override `oracleHook` (see `_overrideOracleHook`) with their own fixed-tick
+        // MockGeomeanOracle.
         //
         // Etch it at a fixed address via deployCodeTo (NOT `new`): a fresh CREATE here would advance the deployment
         // nonce and shift every contract address that subclasses deploy after super.setUp(), flipping token0/token1
@@ -201,6 +226,15 @@ contract LPSplitHookV4TestBase is Test {
             newOracleHook: IHooks(address(baseOracleHook)),
             newBuybackHook: IJBBuybackHookRegistry(BUYBACK_REGISTRY)
         });
+    }
+
+    // ─── Hook Storage Helpers
+
+    /// @notice Repoint the hook's `oracleHook` at a test-controlled oracle.
+    /// @dev `initialize` is one-shot, so tests that need a fixed-tick or reverting oracle write the slot directly.
+    /// @param newOracle The oracle to install as the hook's `oracleHook`.
+    function _overrideOracleHook(address newOracle) internal {
+        vm.store(address(hook), bytes32(SLOT_ORACLE_HOOK), bytes32(uint256(uint160(newOracle))));
     }
 
     // ─── Directory Helpers (write to fallback-based mock) ───────────────

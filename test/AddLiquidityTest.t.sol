@@ -25,10 +25,10 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
     function setUp() public override {
         super.setUp();
         // Override the base's spot-tracking oracle with a fixed-tick one so these tests can drive the TWAP explicitly
-        // (deviation / unavailable cases). `oracleHook` is storage slot 1 (slot 0 is `buybackHook`); overwrite it
-        // before any pool is deployed so the pool key embeds this oracle.
+        // (deviation / unavailable cases). Overwrite it before any pool is deployed so the pool key embeds this
+        // oracle.
         oracle = new MockGeomeanOracle();
-        vm.store(address(hook), bytes32(uint256(1)), bytes32(uint256(uint160(address(oracle)))));
+        _overrideOracleHook(address(oracle));
     }
 
     // ─── Helpers
