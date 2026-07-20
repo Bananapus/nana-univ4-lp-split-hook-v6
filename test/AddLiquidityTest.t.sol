@@ -6,7 +6,6 @@ import {MockGeomeanOracle} from "./mock/MockGeomeanOracle.sol";
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
-import {JBMetadataResolver} from "@bananapus/core-v6/src/libraries/JBMetadataResolver.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
@@ -15,7 +14,8 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 
 /// @notice Tests for the post-deployment `addLiquidity` entrypoint: continuous LP growth from accumulated reserved
-/// tokens, force-direct funding cash-out, TWAP-deviation guard, re-ranging, dust carry, auth, and value safety.
+/// tokens (consolidated as a single adaptive position, never a funding cash-out), the TWAP-deviation guard,
+/// re-ranging, dust carry, permissionless access, and value safety.
 contract AddLiquidityTest is LPSplitHookV4TestBase {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
@@ -25,10 +25,10 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
     function setUp() public override {
         super.setUp();
         // Override the base's spot-tracking oracle with a fixed-tick one so these tests can drive the TWAP explicitly
-        // (deviation / unavailable cases). `oracleHook` is storage slot 1 (slot 0 is `buybackHook`); overwrite it
-        // before any pool is deployed so the pool key embeds this oracle.
+        // (deviation / unavailable cases). Overwrite it before any pool is deployed so the pool key embeds this
+        // oracle.
         oracle = new MockGeomeanOracle();
-        vm.store(address(hook), bytes32(uint256(1)), bytes32(uint256(uint160(address(oracle)))));
+        _overrideOracleHook(address(oracle));
     }
 
     // ─── Helpers
@@ -47,63 +47,33 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, extra);
     }
 
-    // ─── Top-up (grow) path
-    // ──────────────────────────────────────────────
+    // ─── Grow path: consolidate (burn + re-mint), never funding cash-out
+    // ──────────────────────────────
 
-    function test_AddLiquidity_TopsUpActivePosition_NoBurn() public {
+    /// @notice `addLiquidity` consolidates: it burns the live position and re-mints ONE adaptive position that folds
+    /// the recovered principal plus the newly accumulated tokens — it never tops up in place, and it never funds the
+    /// add with a cash-out (no `cashOutTokensOf`, no project-token burn).
+    function test_AddLiquidity_Consolidates_BurnsAndReMints_NoCashOut() public {
         _deployAndAccumulateMore(40e18);
 
         uint256 activeTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         uint256 mintsBefore = positionManager.mintCallCount();
-        uint256 increasesBefore = positionManager.increaseCallCount();
         uint256 positionBurnsBefore = positionManager.burnCallCount();
         uint256 tokenBurnsBefore = controller.burnCallCount();
+        uint256 cashOutsBefore = terminal.cashOutCallCount();
 
         vm.prank(owner);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
-        // Same position topped up via INCREASE_LIQUIDITY — no new position minted, no position burned (no re-range).
-        assertEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), activeTokenId, "active position id unchanged");
-        assertEq(positionManager.mintCallCount(), mintsBefore, "no new position minted on top-up");
-        assertEq(positionManager.increaseCallCount(), increasesBefore + 1, "active position increased once");
-        assertEq(positionManager.burnCallCount(), positionBurnsBefore, "no position burned on a top-up");
+        // The live position is burned and a single fresh position is minted (consolidation), not topped up in place.
+        assertEq(positionManager.burnCallCount(), positionBurnsBefore + 1, "the live position must be burned");
+        assertEq(positionManager.mintCallCount(), mintsBefore + 1, "a single fresh position must be minted");
+        assertNotEq(
+            hook.tokenIdOf(PROJECT_ID, address(terminalToken)), activeTokenId, "the tracked position id must change"
+        );
+        // The hook never burns project tokens and never funds the add via a cash-out.
         assertEq(controller.burnCallCount(), tokenBurnsBefore, "addLiquidity never burns project tokens");
-    }
-
-    // ─── Force-direct funding cash-out
-    // ───────────────────────────────────
-
-    function test_AddLiquidity_ForcesDirectCashOut_ViaBuybackRegistryMetadata() public {
-        _deployAndAccumulateMore(40e18);
-
-        vm.prank(owner);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
-
-        // The funding cash-out carried the buyback "skip" metadata keyed to the hook's `buybackHook` registry,
-        // forcing a direct bonding-curve cash-out (never the AMM).
-        bytes memory metadata = terminal.lastCashOutMetadata();
-        (bool exists, bytes memory data) = JBMetadataResolver.getDataFor({
-            id: JBMetadataResolver.getId({purpose: "cashOut", target: address(hook.buybackHook())}), metadata: metadata
-        });
-        assertTrue(exists, "force-direct metadata should be keyed to the buyback registry");
-        (uint256 minSwapOut, bool skip) = abi.decode(data, (uint256, bool));
-        assertEq(minSwapOut, 0, "no hook-level minimum; terminal min enforces the floor");
-        assertTrue(skip, "skip flag must be set to force the direct cash-out");
-    }
-
-    function test_AddLiquidity_NoBuybackRegistry_SendsEmptyMetadata() public {
-        // When the hook holds no buyback registry (`buybackHook == address(0)`), no force-direct metadata is attached;
-        // the terminal's own `minTokensReclaimed` floor still applies. The base wires a non-zero registry, so this
-        // path is exercised by sanity-checking the metadata builder is gated on a set registry.
-        assertTrue(address(hook.buybackHook()) != address(0), "base wires a buyback registry");
-
-        _deployAndAccumulateMore(40e18);
-
-        vm.prank(owner);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
-
-        // With a registry set, the force-direct metadata is non-empty (the inverse of the zero-registry fallback).
-        assertGt(terminal.lastCashOutMetadata().length, 0, "force-direct metadata attached when a registry is set");
+        assertEq(terminal.cashOutCallCount(), cashOutsBefore, "addLiquidity never calls cashOutTokensOf");
     }
 
     // ─── TWAP-deviation guard
@@ -118,7 +88,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PriceDeviationTooHigh.selector);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
     }
 
     function test_AddLiquidity_RevertsWhenTwapUnavailable() public {
@@ -129,7 +99,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_TwapUnavailable.selector);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
     }
 
     // ─── Re-range path
@@ -152,7 +122,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         uint256 tokenBurnsBefore = controller.burnCallCount();
 
         vm.prank(owner);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
         // The stale position is BURNED and a single fresh position is re-minted at the live corridor — funds
         // consolidate into one position (no retired set), and no project tokens are burned.
@@ -198,7 +168,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         uint256 burnsBefore = controller.burnCallCount();
 
         vm.prank(owner);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
         assertEq(controller.burnCallCount(), burnsBefore, "dust is carried, never burned");
         assertGt(hook.accumulatedProjectTokens(PROJECT_ID), 0, "project-token dust carried back to the ledger");
@@ -211,7 +181,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         _deployAndAccumulateMore(40e18);
 
         vm.prank(owner);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
         // Every project token the hook still holds is exactly the accounted accumulation ledger — nothing stranded.
         assertEq(
@@ -230,7 +200,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         jbTokens.setCreditBalance(address(hook), PROJECT_ID, 100e18);
 
         vm.prank(owner);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
         // Every project token the hook still holds is exactly the accounted accumulation ledger — nothing stranded.
         assertEq(
@@ -247,7 +217,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, extra);
 
         vm.prank(owner);
-        try hook.addLiquidity(PROJECT_ID, address(terminalToken), 0) {
+        try hook.addLiquidity(PROJECT_ID, address(terminalToken)) {
             // Invariant: the hook never leaves project tokens unaccounted (everything is either in the LP or in the
             // accumulation ledger). An interacting EOA cannot extract value beyond the carried ledger.
             assertEq(
@@ -264,32 +234,18 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
     // ─── Access control
     // ──────────────────────────────────────────────────
 
-    function test_AddLiquidity_RevertsWhenUnauthorized() public {
+    /// @notice `addLiquidity` is fully permissionless: a random caller (no owner permission, no weight decay) can
+    /// extend the pool. The old owner gate is gone.
+    function test_AddLiquidity_Permissionless_AnyCallerCanExtend() public {
         _deployAndAccumulateMore(40e18);
 
+        uint256 firstId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         vm.prank(makeAddr("randomUser"));
-        vm.expectRevert();
-        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
-    }
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
-    function test_AddLiquidity_PermissionlessAfterWeightDecay() public {
-        // Record a HIGH initial weight at first accumulation so the 10x-decay gate opens without later moving the
-        // corridor: the deploy and add both run at the default weight, so the add is a plain top-up.
-        controller.setWeight(PROJECT_ID, DEFAULT_WEIGHT * 10);
-        _accumulateTokens(PROJECT_ID, 100e18); // records initialWeightOf = DEFAULT_WEIGHT * 10
-
-        controller.setWeight(PROJECT_ID, DEFAULT_WEIGHT); // weight*10 == initialWeight → permissionless, corridor
-        // stable
-        vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
-
-        oracle.setTwapTick(_spotTick());
-        _accumulateTokens(PROJECT_ID, 40e18);
-
-        uint256 increasesBefore = positionManager.increaseCallCount();
-        vm.prank(makeAddr("anyone"));
-        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
-        assertEq(positionManager.increaseCallCount(), increasesBefore + 1, "anyone can add after weight decay");
+        assertNotEq(
+            hook.tokenIdOf(PROJECT_ID, address(terminalToken)), firstId, "a permissionless caller consolidates the add"
+        );
     }
 
     // ─── Stage / input guards
@@ -300,16 +256,18 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidStageForAction.selector);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
     }
 
     function test_AddLiquidity_RevertsWhenNothingAccumulated() public {
         _accumulateAndDeploy(PROJECT_ID, 100e18); // deploy consumes the accumulation (no dust at 100% usage)
         oracle.setTwapTick(_spotTick());
 
+        // With nothing (or only dust) accumulated, addLiquidity reverts on the dust-churn threshold guard rather than
+        // forcing a re-mint. Zero accumulation is below the threshold too.
         vm.prank(owner);
-        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoTokensAccumulated.selector);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_AccumulationBelowThreshold.selector);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
     }
 
     // ─── Gas
@@ -320,7 +278,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         uint256 gasBefore = gasleft();
-        hook.addLiquidity(PROJECT_ID, address(terminalToken), 0);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
         uint256 gasUsed = gasBefore - gasleft();
 
         // Batched top-up should stay well under a generous ceiling (sanity bound, not a tight target).

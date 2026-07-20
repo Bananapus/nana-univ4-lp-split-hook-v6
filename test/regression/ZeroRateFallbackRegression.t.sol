@@ -301,8 +301,10 @@ contract ZeroRateFallbackRegression is LPSplitHookV4TestBase {
     // 7. Tick bounds: zero cashout rate with both orderings → valid ranges
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice When cashOutRate=0, _calculateTickBounds centers around the issuance tick.
-    ///         Both token orderings should produce valid, non-collapsed ranges within bounds.
+    /// @notice When cashOutRate=0, `calculateTickBounds` pins the ceiling-side bound EXACTLY on the issuance tick and
+    ///         places the floor-side bound one spacing away (no redemption floor), for a one-spacing corridor in both
+    ///         orderings — so a spot at the issuance tick is correctly rejected rather than passing a fabricated
+    /// bound.
     function test_tickBounds_zeroRates_bothOrderings() public {
         store.setSurplus(PROJECT_ID, 0);
 
@@ -312,8 +314,9 @@ contract ZeroRateFallbackRegression is LPSplitHookV4TestBase {
         assertLt(tickLower_A, tickUpper_A, "A: tickLower < tickUpper");
         assertGe(tickLower_A, TickMath.MIN_TICK, "A: tickLower >= MIN_TICK");
         assertLe(tickUpper_A, TickMath.MAX_TICK, "A: tickUpper <= MAX_TICK");
-        // Range should span at least 2 * TICK_SPACING (not collapsed)
-        assertGe(tickUpper_A - tickLower_A, 2 * int24(200), "A: range >= 2 * TICK_SPACING");
+        // The corridor is exactly two spacings wide: the ceiling is pinned on the issuance tick, the floor-side bound
+        // sits two spacings away (leaving room for an ask leg below the ceiling), no redemption floor beyond it.
+        assertEq(tickUpper_A - tickLower_A, int24(400), "A: corridor is two spacings (ceiling pinned on issuance)");
 
         // ── Ordering B: terminalToken is token1 ──
         (int24 tickLower_B, int24 tickUpper_B) =
@@ -321,15 +324,17 @@ contract ZeroRateFallbackRegression is LPSplitHookV4TestBase {
         assertLt(tickLower_B, tickUpper_B, "B: tickLower < tickUpper");
         assertGe(tickLower_B, TickMath.MIN_TICK, "B: tickLower >= MIN_TICK");
         assertLe(tickUpper_B, TickMath.MAX_TICK, "B: tickUpper <= MAX_TICK");
-        assertGe(tickUpper_B - tickLower_B, 2 * int24(200), "B: range >= 2 * TICK_SPACING");
+        assertEq(tickUpper_B - tickLower_B, int24(400), "B: corridor is two spacings (ceiling pinned on issuance)");
     }
 
     // ═══════════════════════════════════════════════════════════════════════
     // 8. Initial price: zero cashout rate with both orderings → sane values
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice When cashOutRate=0, _computeInitialSqrtPrice falls back to the issuance rate
-    ///         sqrtPrice. Both orderings should produce a valid price strictly within (MIN, MAX).
+    /// @notice When cashOutRate=0, _computeInitialSqrtPrice seeds strictly inside the economic corridor (one aligned
+    ///         spacing off the floor), NOT on the issuance ceiling — so the hook's own zero-cash-out pool remains
+    ///         deployable. Both orderings should produce a valid price strictly within (MIN, MAX) and inside the
+    /// corridor.
     function test_initialPrice_zeroCashOut_bothOrderings() public {
         store.setSurplus(PROJECT_ID, 0);
 
@@ -339,10 +344,11 @@ contract ZeroRateFallbackRegression is LPSplitHookV4TestBase {
         assertGt(initPrice_A, TickMath.MIN_SQRT_PRICE, "A: initial price > MIN");
         assertLt(initPrice_A, TickMath.MAX_SQRT_PRICE, "A: initial price < MAX");
 
-        // Should equal the issuance rate sqrtPrice (fallback behavior).
-        uint160 issuance_A =
-            harness.exposed_getIssuanceRateSqrtPriceX96(PROJECT_ID, address(terminalToken), highProjectToken);
-        assertEq(initPrice_A, issuance_A, "A: initial price == issuance sqrtPrice");
+        (int24 lowerA, int24 upperA) =
+            harness.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), highProjectToken);
+        int24 seedA = TickMath.getTickAtSqrtPrice(initPrice_A);
+        assertGt(seedA, lowerA, "A: seed sits strictly inside the corridor floor");
+        assertLt(seedA, upperA, "A: seed sits strictly below the corridor ceiling");
 
         // ── Ordering B: terminalToken is token1 ──
         uint160 initPrice_B =
@@ -350,8 +356,10 @@ contract ZeroRateFallbackRegression is LPSplitHookV4TestBase {
         assertGt(initPrice_B, TickMath.MIN_SQRT_PRICE, "B: initial price > MIN");
         assertLt(initPrice_B, TickMath.MAX_SQRT_PRICE, "B: initial price < MAX");
 
-        uint160 issuance_B =
-            harness.exposed_getIssuanceRateSqrtPriceX96(PROJECT_ID, address(terminalToken), lowProjectToken);
-        assertEq(initPrice_B, issuance_B, "B: initial price == issuance sqrtPrice");
+        (int24 lowerB, int24 upperB) =
+            harness.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), lowProjectToken);
+        int24 seedB = TickMath.getTickAtSqrtPrice(initPrice_B);
+        assertGt(seedB, lowerB, "B: seed sits strictly inside the corridor floor");
+        assertLt(seedB, upperB, "B: seed sits strictly below the corridor ceiling");
     }
 }

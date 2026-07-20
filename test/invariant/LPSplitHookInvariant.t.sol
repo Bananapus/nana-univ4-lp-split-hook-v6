@@ -229,18 +229,15 @@ contract LPSplitHookHandler is Test {
         uint256 tokenId = hook.tokenIdOf(projectId, address(terminalToken));
         if (tokenId == 0) return;
 
-        // Use zero for slippage mins (most permissive) to maximize successful calls.
-        // Bound seeds to [0, 0] — effectively always zero. This avoids slippage reverts
-        // in the mock environment where exact amounts are hard to predict.
-        uint256 amount0Min = bound(amount0MinSeed, 0, 0);
-        uint256 amount1Min = bound(amount1MinSeed, 0, 0);
+        // Burn slippage is now contract-derived; the fuzzed min seeds are unused.
+        amount0MinSeed;
+        amount1MinSeed;
 
         // Snapshot claimableFeeTokens before to track fee collection during rebalance.
         uint256 claimableBefore = hook.claimableFeeTokens(projectId);
 
-        // Rebalance requires SET_BUYBACK_POOL permission — prank as project owner.
-        vm.prank(owner);
-        try hook.rebalanceLiquidity(projectId, address(terminalToken), amount0Min, amount1Min) {
+        // Rebalance is permissionless; any caller may trigger it.
+        try hook.rebalanceLiquidity(projectId, address(terminalToken)) {
             // Track fee token credit delta (rebalance collects fees in step 1).
             uint256 claimableAfter = hook.claimableFeeTokens(projectId);
             if (claimableAfter > claimableBefore) {

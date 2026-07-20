@@ -187,7 +187,7 @@ contract NativeETHTest is LPSplitHookV4TestBase {
         // Deploy pool with NATIVE_TOKEN (owner required)
         // In V4, the hook uses Currency.wrap(address(0)) for native ETH
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         // Verify pool was created (tokenId is nonzero)
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, NATIVE_TOKEN);

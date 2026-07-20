@@ -258,7 +258,7 @@ contract FeeProjectSelfBurnRegression is LPSplitHookV4TestBase {
         _accumulateTokensFor(FEE_PROJECT_ID, feeProjectToken, feeProjectAccumulation);
 
         vm.prank(owner);
-        hook.deployPool(FEE_PROJECT_ID, 0);
+        hook.deployPool(FEE_PROJECT_ID);
 
         // _totalOutstandingFeeTokenClaims prevents the fee project deployment from touching
         // project 1's reserved fee tokens. The position manager should receive at most what
@@ -353,7 +353,7 @@ contract FeeProjectSelfBurnRegression is LPSplitHookV4TestBase {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
         _accumulateTokens(PROJECT_B, 100e18);
         vm.prank(owner);
-        hook.deployPool(PROJECT_B, 0);
+        hook.deployPool(PROJECT_B);
 
         bool terminalIsToken0 = address(terminalToken) < address(projectToken);
 
@@ -452,7 +452,7 @@ contract FeeProjectSelfBurnRegression is LPSplitHookV4TestBase {
         _accumulateTokensFor(PROJECT_B, projectToken, 100e18);
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_B, 0);
+        hook.deployPool(PROJECT_B);
 
         // Hook must still fully back project A's claimable fee tokens.
         assertGe(

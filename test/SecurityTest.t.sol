@@ -299,18 +299,22 @@ contract SecurityTest is LPSplitHookV4TestBase {
     // 10. deployPool -- requires owner or SET_BUYBACK_POOL permission
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice deployPool reverts when called by a random address without permission.
-    function test_DeployPool_UnauthorizedReverts() public {
+    /// @notice deployPool is permissionless: any caller can deploy once tokens are accumulated.
+    function test_DeployPool_Permissionless_AnyCaller() public {
         uint256 amount = 500e18;
 
         // Accumulate tokens as the controller
         _accumulateTokens(PROJECT_ID, amount);
 
-        // Call deployPool from a random user address -- should revert
+        // A random user with no permission can deploy the pool.
         address randomUser = makeAddr("randomUser");
         vm.prank(randomUser);
-        vm.expectRevert();
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
+
+        // The deploy succeeds and mints a position NFT.
+        assertNotEq(
+            hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "a permissionless caller can deploy the pool"
+        );
     }
 
     /// @notice deployPool succeeds when called by the project owner.
@@ -328,7 +332,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
 
         // Call deployPool as the project owner -- should succeed
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         // Verify pool was deployed
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));

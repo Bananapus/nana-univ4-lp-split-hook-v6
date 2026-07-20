@@ -5,8 +5,8 @@ import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/
 import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
-import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 
 /// @notice Manages a two-stage Uniswap V4 pool deployment process for Juicebox projects, routing LP fees back to the
 /// project.
@@ -34,7 +34,7 @@ interface IJBUniswapV4LPSplitHook {
 
     /// @notice Emitted when LP fees are routed back to the project.
     /// @param projectId The Juicebox project ID.
-    /// @param terminalToken The terminal token address.
+    /// @param token The token that was routed (the project token or the terminal token).
     /// @param totalAmount The total amount of fees collected.
     /// @param feeAmount The amount sent to the fee project.
     /// @param remainingAmount The amount sent to the original project.
@@ -42,12 +42,23 @@ interface IJBUniswapV4LPSplitHook {
     /// @param caller The address that routed the LP fees.
     event LPFeesRouted(
         uint256 indexed projectId,
-        address indexed terminalToken,
+        address indexed token,
         uint256 totalAmount,
         uint256 feeAmount,
         uint256 remainingAmount,
         uint256 feeTokensMinted,
         address caller
+    );
+
+    /// @notice Emitted when a project's single LP position is permissionlessly re-centered onto a freshly computed
+    /// issuance/cash-out corridor.
+    /// @param projectId The Juicebox project ID.
+    /// @param terminalToken The terminal token address.
+    /// @param tickLower The lower tick of the re-centered position.
+    /// @param tickUpper The upper tick of the re-centered position.
+    /// @param caller The address that triggered the rebalance.
+    event PermissionlessRebalanced(
+        uint256 indexed projectId, address indexed terminalToken, int24 tickLower, int24 tickUpper, address caller
     );
 
     /// @notice Emitted when a project transitions from Stage 1 to Stage 2 by deploying a pool.
@@ -75,14 +86,12 @@ interface IJBUniswapV4LPSplitHook {
     /// @return key The Uniswap V4 PoolKey.
     function poolKeyOf(uint256 projectId, address terminalToken) external view returns (PoolKey memory key);
 
-    /// @notice Convert the project's post-deployment accumulated reserved tokens into additional liquidity. Tops up the
-    /// active position, or remints a fresh position once the live corridor has drifted. Permissionless once the
-    /// ruleset weight has decayed 10x from accumulation;
-    /// otherwise requires `SET_BUYBACK_POOL` from the project owner.
+    /// @notice Convert the project's post-deployment accumulated reserved tokens into additional liquidity, minted as
+    /// a single-sided ask position spanning from the pool's live price out to the project's issuance/cash-out corridor.
+    /// Permissionless: anyone may call it, gated only by the economic ceiling and the oracle-TWAP deviation guards.
     /// @param projectId The Juicebox project ID.
     /// @param terminalToken The terminal token paired with the project token in the deployed pool.
-    /// @param minCashOutReturn Minimum terminal tokens from the funding cash-out (slippage protection, 0 = auto 3%).
-    function addLiquidity(uint256 projectId, address terminalToken, uint256 minCashOutReturn) external;
+    function addLiquidity(uint256 projectId, address terminalToken) external;
 
     /// @notice Claim fee tokens for a beneficiary.
     /// @param projectId The Juicebox project ID.
@@ -96,10 +105,10 @@ interface IJBUniswapV4LPSplitHook {
     function collectAndRouteLPFees(uint256 projectId, address terminalToken) external;
 
     /// @notice Deploy a Uniswap V4 pool using accumulated project tokens.
-    /// @dev Auto-selects the terminal token with the highest ETH-denominated value across all terminals.
+    /// @dev Auto-selects the terminal token with the highest ETH-denominated value across all terminals. Mints a
+    /// single-sided ask position from the accumulated project tokens. Permissionless: anyone may seed the pool.
     /// @param projectId The Juicebox project ID.
-    /// @param minCashOutReturn Minimum terminal tokens from cash-out (slippage protection, 0 = auto 3% tolerance).
-    function deployPool(uint256 projectId, uint256 minCashOutReturn) external;
+    function deployPool(uint256 projectId) external;
 
     /// @notice Initialize per-instance config + chain-specific Uniswap V4 addresses on a clone. Callable once.
     /// @param initialFeeProjectId Project ID to receive LP fees.
@@ -107,7 +116,7 @@ interface IJBUniswapV4LPSplitHook {
     /// @param newPoolManager The Uniswap V4 PoolManager on this chain.
     /// @param newPositionManager The Uniswap V4 PositionManager on this chain.
     /// @param newOracleHook The Uniswap V4 oracle hook deployed against `newPoolManager` on this chain.
-    /// @param newBuybackHook The buyback-hook registry this clone targets for force-direct cash-outs (may be zero).
+    /// @param newBuybackHook The buyback-hook registry to configure for this clone (may be zero).
     function initialize(
         uint256 initialFeeProjectId,
         uint256 initialFeePercent,
@@ -117,4 +126,12 @@ interface IJBUniswapV4LPSplitHook {
         IJBBuybackHookRegistry newBuybackHook
     )
         external;
+
+    /// @notice Burn the project's single LP position and re-mint it, re-centered on the project's freshly recomputed
+    /// issuance/cash-out corridor. Permissionless: anyone may call it, but the fresh corridor must have drifted at
+    /// least one tick spacing from the live position on at least one bound, and the pool's spot must be near the oracle
+    /// TWAP.
+    /// @param projectId The Juicebox project ID.
+    /// @param terminalToken The terminal token paired with the project token in the deployed pool.
+    function rebalanceLiquidity(uint256 projectId, address terminalToken) external;
 }

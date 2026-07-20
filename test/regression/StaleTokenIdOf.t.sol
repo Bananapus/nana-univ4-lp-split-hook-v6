@@ -19,10 +19,13 @@ contract StaleTokenIdOfTest is LPSplitHookV4TestBase {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
         poolTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(poolTokenId, 0, "Initial tokenId should be nonzero");
+
+        // Move the economic corridor (drop issuance ~10%) so every rebalance below clears its corridor-drift guard.
+        controller.setWeight(PROJECT_ID, 900e18);
     }
 
-    /// @notice When rebalance would yield zero liquidity, it now reverts with InsufficientLiquidity.
-    ///         This prevents the state inconsistency that would brick the project.
+    /// @notice When the project holds nothing to deploy on either leg, rebalance reverts with
+    ///         NoDeployableLiquidityAtSpot. This prevents the state inconsistency that would brick the project.
     function test_rebalance_zeroLiquidity_reverts() public {
         // Drain all tokens from the mock PositionManager so burn's TAKE_PAIR sends 0
         uint256 pmProjectBal = projectToken.balanceOf(address(positionManager));
@@ -46,8 +49,8 @@ contract StaleTokenIdOfTest is LPSplitHookV4TestBase {
 
         // Rebalance now reverts instead of zeroing tokenIdOf
         vm.prank(owner);
-        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientLiquidity.selector);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot.selector);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         // tokenIdOf should remain unchanged (revert rolled back state)
         uint256 tokenIdAfter = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
@@ -63,7 +66,7 @@ contract StaleTokenIdOfTest is LPSplitHookV4TestBase {
         uint256 originalTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
 
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(newTokenId, 0, "tokenIdOf should be nonzero after normal rebalance");

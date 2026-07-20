@@ -168,7 +168,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
 
     function test_fork_deployPool_createsRealV4Pool() public {
         vm.prank(multisig);
-        hook.deployPool(projectId, 0);
+        hook.deployPool(projectId);
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "project should be deployed");
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should be deployed");
         uint256 tokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
@@ -185,7 +185,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
 
     function test_fork_accumulatesAfterDeploy() public {
         vm.prank(multisig);
-        hook.deployPool(projectId, 0);
+        hook.deployPool(projectId);
         vm.prank(multisig);
         jbController.mintTokensOf({
             projectId: projectId,
@@ -238,7 +238,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
             "hook should have no allowance to Permit2 before deploy"
         );
         vm.prank(multisig);
-        hook.deployPool(projectId, 0);
+        hook.deployPool(projectId);
         assertEq(
             IERC20(token).allowance(address(hook), address(V4_POSITION_MANAGER)),
             0,
@@ -306,6 +306,9 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         });
     }
 
+    /// @notice A pool pre-initialized past the CASH-OUT FLOOR side of the band is rejected outright: an LP sited there
+    /// would sell the project's tokens into the manipulated price. The terminal is native ETH, so the project sorts as
+    /// currency1 and the floor is the band's upper tick.
     function test_fork_deployPool_existingPoolOutsideBand_reverts() public {
         address projToken = address(projectToken);
         Currency termCurrency = Currency.wrap(address(0)); // native ETH
@@ -319,14 +322,14 @@ contract LPSplitHookForkTest is ForkDeployHelper {
             tickSpacing: hook.TICK_SPACING(),
             hooks: hook.oracleHook()
         });
-        uint160 externalSqrtPrice = TickMath.getSqrtPriceAtTick(int24(88_000));
+        uint160 externalSqrtPrice = TickMath.getSqrtPriceAtTick(int24(800_000));
         V4_POSITION_MANAGER.initializePool(key, externalSqrtPrice);
         PoolId poolId = key.toId();
         (uint160 sqrtPriceBefore,,,) = V4_POOL_MANAGER.getSlot0(poolId);
         assertEq(sqrtPriceBefore, externalSqrtPrice, "pool should be at external price");
         vm.prank(multisig);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
-        hook.deployPool(projectId, 0);
+        hook.deployPool(projectId);
     }
 
     function test_fork_deployPool_existingPoolWithinBand_succeeds() public {
@@ -356,8 +359,11 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         PoolId poolId = key.toId();
         (uint160 sqrtPriceBefore,,,) = V4_POOL_MANAGER.getSlot0(poolId);
         assertEq(sqrtPriceBefore, externalSqrtPrice, "pool should be at external price");
+        // Deploying onto an already-initialized pool now validates spot against the oracle TWAP; force TWAP == spot so
+        // the guard passes deterministically and this test keeps exercising the in-band price-reuse path.
+        _mockOracleTwapEqualsSpot(hook.oracleHook(), V4_POOL_MANAGER, key);
         vm.prank(multisig);
-        hook.deployPool(projectId, 0);
+        hook.deployPool(projectId);
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should deploy successfully");
         assertGt(hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN), 0, "position NFT should be minted");
         // Only unpaired dust (carried forward, never burned) may remain after the optimal-cashout add.
@@ -406,16 +412,22 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         assertTrue(currentRuleset.weight * 10 <= initialWeight, "weight should have decayed >= 10x");
         address randomUser = makeAddr("randomDeployer");
         vm.prank(randomUser);
-        hook.deployPool(projectId, 0);
+        hook.deployPool(projectId);
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should be deployed by random user");
         uint256 tokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         assertTrue(tokenId != 0, "should hold a position NFT");
     }
 
-    function test_fork_deployPool_requiresPermissionBeforeDecay() public {
+    function test_fork_deployPool_permissionlessBeforeDecay() public {
+        // deployPool is permissionless: a random caller can deploy even before any weight decay, using the tokens
+        // accumulated in setUp.
         address randomUser = makeAddr("randomDeployer");
         vm.prank(randomUser);
-        vm.expectRevert();
-        hook.deployPool(projectId, 0);
+        hook.deployPool(projectId);
+        assertTrue(
+            hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should be deployed by a random caller"
+        );
+        uint256 tokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+        assertTrue(tokenId != 0, "should hold a position NFT");
     }
 }

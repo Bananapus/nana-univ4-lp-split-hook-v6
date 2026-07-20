@@ -119,7 +119,7 @@ contract RegressionFixM4Test is LPSplitHookV4TestBase {
 
         // deployPool should succeed — the pre-initialized price is within bounds.
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         // Verify deployment succeeded.
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "project should have a deployed pool");
@@ -175,7 +175,7 @@ contract RegressionFixM4Test is LPSplitHookV4TestBase {
 
         // deployPool should still succeed.
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "project should have a deployed pool");
         assertGt(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "LP position should be created");
@@ -185,10 +185,10 @@ contract RegressionFixM4Test is LPSplitHookV4TestBase {
     // 3. Out-of-range liquidity is added correctly when price is outside tick bounds
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice When the pool is pre-initialized at a price outside the LP tick bounds,
-    ///         deployment now reverts with ExistingPoolPriceOutOfBounds instead of adding
-    ///         single-sided liquidity at a manipulated price.
-    function test_M4_OutOfRangeLiquidity_RevertsOutOfBounds() public {
+    /// @notice When the pool is pre-initialized at a price past the issuance ceiling, the hook has no room to offer
+    ///         asks and no terminal to offer as bids, so deployment reverts with NoDeployableLiquidityAtSpot instead
+    ///         of adding single-sided liquidity at a manipulated price.
+    function test_M4_OutOfRangeLiquidity_RefusesLegibly() public {
         uint256 totalProjectTokens = 100e18;
         _accumulateTokens(PROJECT_ID, totalProjectTokens);
 
@@ -214,8 +214,8 @@ contract RegressionFixM4Test is LPSplitHookV4TestBase {
         positionManager.initializePool(key, extremeSqrtPrice);
 
         vm.prank(owner);
-        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
-        hook.deployPool(PROJECT_ID, 0);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot.selector);
+        hook.deployPool(PROJECT_ID);
     }
 }
 

@@ -12,7 +12,7 @@
 
 - The LP range should stay inside the project's economic envelope rather than float arbitrarily.
 - The hook has materially different pre-deployment and post-deployment behavior.
-- Fee routing must distinguish project-token fees from terminal-token fees.
+- Fee routing takes a best-effort `feeProjectId` cut symmetrically on both the project-token and terminal-token fee sides, then carries each side's non-cut remainder into the project's own ask/bid ledgers — never into the project's treasury.
 - A project's accumulation ledger is the single sink for reserved-token inflows both before AND after pool deployment; the hook never burns. Pre-deploy, `deployPool` consumes the accumulation; post-deploy, `addLiquidity` does.
 - A hook instance should map a project and terminal-token pair to one pool path.
 
@@ -36,25 +36,26 @@
 ```text
 reserved-token split distributions
   -> accumulate project tokens before pool deployment
-authorized deploy call
-  -> computes price bounds from issuance and cash-out economics
-  -> cashes out the optimal fraction for terminal tokens
-  -> deploys or uses the target pool and mints the concentrated LP position
+permissionless deploy call
+  -> computes price bounds from issuance and cash-out economics (floor tick = cash-out/redemption price)
+  -> deploys or uses the target pool and mints a single-sided ask position from the accumulated project tokens (no cash-out)
 post-deployment
-  -> new reserved tokens keep accumulating; `addLiquidity` converts them into more liquidity (top-up while the live corridor matches the active position, else re-range into a new position), validating the pool spot price against the oracle TWAP and cashing out the optimal fraction directly through the bonding curve
-  -> on re-range the stale position is burned and a single fresh position is re-minted at the live corridor (funds consolidate, no fragmentation)
-  -> fees can be collected from the single active position and the position can be rebalanced
+  -> new reserved tokens keep accumulating; `addLiquidity` folds them into the single position by burning the prior position and re-minting one adaptive position, after validating the pool spot price against the oracle TWAP; any bid side is funded only from the terminal recovered by burning the hook's own prior position plus this project's own accumulated terminal-token fee ledger (never a cash-out)
+  -> funds always consolidate into exactly one position per pair — no fragmentation
+  -> fees can be collected from the single active position and the position can be rebalanced (both permissionless, drift/TWAP-guarded); each side (project-token and terminal-token) takes a best-effort `feeProjectId` cut, and every non-cut remainder becomes the project's own protocol-owned liquidity — project-token into `accumulatedProjectTokens`, terminal-token into `accumulatedTerminalTokens[projectId][terminalToken]` — never the project's treasury
 ```
 
 ## Accounting model
 
 The hook owns local staging and LP-management state. It does not own reserved-token issuance or terminal accounting.
 
-It also owns claim segregation for routed LP fees. Outstanding ERC-20 fee-token claims and credit-only fee claims are tracked separately so the hook's accumulation and LP-funding paths do not consume fee assets being held for beneficiaries.
+It owns two per-project ledgers that hold protocol-owned liquidity outside any Uniswap V4 position: `accumulatedProjectTokens` (the ask-side ledger) and `accumulatedTerminalTokens[projectId][terminalToken]` (the per-terminal-token bid-side ledger). Both accrue from split distributions, mint leftovers, and the non-cut remainder of collected LP fees, and both fold into the next mint — neither is ever deposited into the project's terminal.
+
+It also owns claim segregation for routed LP-fee cuts. Outstanding ERC-20 fee-token claims and credit-only fee claims owed to the fee project are tracked separately so the hook's accumulation and LP-funding paths do not consume fee assets being held for that beneficiary.
 
 ## Security model
 
-- The main risks are price-bound math, optimal cash-out math, and staged behavior drift.
+- The main risks are price-bound math (including the cash-out-price floor), adaptive-range sizing, and staged behavior drift.
 - Rebalance is effectively a remove-collect-recompute-mint pipeline and should be reviewed as one unit.
 - Pool initialization race conditions matter on first deployment.
 - Accumulation/LP-funding logic, fee routing, and outstanding-claim accounting are coupled.
@@ -62,7 +63,7 @@ It also owns claim segregation for routed LP fees. Outstanding ERC-20 fee-token 
 ## Safe change guide
 
 - Review pre-deployment and post-deployment behavior together whenever state layout changes.
-- Keep price-bound math, optimal cash-out math, and rebalance logic synchronized.
+- Keep price-bound math, the cash-out-price floor derivation, adaptive-range sizing, and rebalance logic synchronized.
 - If you change fee routing or accumulation/leftover-carry behavior, re-check outstanding fee-token and fee-credit claim segregation and in-flight fee routing assumptions.
 - If fee routing changes, inspect downstream fee-project behavior and claim paths.
 - Keep deployer assumptions aligned with the address registry, deployment scripts, immutable implementation address, and one-shot V4 constants used to preserve the deployer address across chains.

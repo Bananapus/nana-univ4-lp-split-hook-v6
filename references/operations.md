@@ -9,10 +9,9 @@
 ## Change checklist
 
 - If you edit deployment behavior, verify fee-project and fee-percent initialization, the immutable implementation address, one-shot V4 constants, same-address CREATE2 assumptions, and address-registry registration.
-- If you edit deployPool or rebalance logic, check permission gates, weight-decay assumptions, and nonzero-tax cash-out
-  fee netting together.
-- If you edit `addLiquidity`, top-up vs. re-range, or the TWAP guard, re-check the decay-gated authorization, the `_MAX_TWAP_DEVIATION_TICKS` / `_RERANGE_THRESHOLD_TICKS` thresholds, the force-direct cash-out metadata, and the re-range burn-and-re-mint (`_retireActivePosition`) together.
-- If you edit fee collection, confirm the project-token fee carry-into-accumulation and terminal-token routing still align; there is only ever one active position per pair (re-range burns + re-mints).
+- If you edit deployPool or rebalance logic, check the economic gate (spot vs. issuance ceiling), the oracle-TWAP guard, the corridor-drift threshold, and the cash-out-price floor derivation together.
+- If you edit `addLiquidity` or the TWAP guard, re-check the permissionless entry, the `_MIN_ADD_ACCUMULATION` threshold, `_MAX_TWAP_DEVIATION_TICKS`, and the consolidate-and-re-mint executor (`_consolidateAndReMint`, which burns the prior position and re-mints one) together.
+- If you edit fee collection, confirm the best-effort `feeProjectId` cut still applies symmetrically to both the project-token and terminal-token sides, and that each side's non-cut remainder still lands in the correct per-project ledger (`accumulatedProjectTokens`, `accumulatedTerminalTokens`) rather than the project's terminal; there is only ever one active position per pair (consolidate-and-re-mint burns the prior position and re-mints one).
 
 ## Common failure modes
 

@@ -229,7 +229,7 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
         // Deploy the pool — this internally calls _getCashOutRate which branches
         // on `ruleset.scopeCashOutsToLocalBalances()`.
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         // The pool should now exist (tokenIdOf != 0).
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
@@ -239,19 +239,6 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
         assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "accumulated tokens should be zero after deploy");
     }
 
-    function test_DeployPool_CallerMinimumCannotLowerDerivedCashOutFloor() public {
-        tsController.setScopeCashOutsToLocalBalances(PROJECT_ID, false);
-        mockRegistry.setRemoteValues({remoteSurplus_: 190e18, remoteSupply_: 100e18});
-        store.setSurplus(PROJECT_ID, 10e18);
-        store.setUseProvidedCashOutInputs(true);
-
-        _accumulateViaController(PROJECT_ID, 100e18);
-
-        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientBalance.selector);
-        vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 1);
-    }
-
     /// @notice Compare behavior: deploy with `scopeCashOutsToLocalBalances = true`
     ///         (local surplus path) and `false` (total surplus path). Both must succeed.
     function test_LocalVsTotalSurplus_BothPathsSucceed() public {
@@ -259,7 +246,7 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
         // Already false by default. Accumulate and deploy.
         _accumulateViaController(PROJECT_ID, 100e18);
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
         uint256 tokenIdLocal = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertGt(tokenIdLocal, 0, "local surplus path should deploy successfully");
 
@@ -299,7 +286,7 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
         vm.stopPrank();
 
         vm.prank(owner);
-        hook.deployPool(projectB, 0);
+        hook.deployPool(projectB);
         uint256 tokenIdTotal = hook.tokenIdOf(projectB, address(terminalToken));
         assertGt(tokenIdTotal, 0, "total surplus path should deploy successfully");
     }
@@ -375,7 +362,7 @@ contract FeeTokensExcludedFromRebalanceTest is LPSplitHookV4TestBase {
         // Step 1: accumulate and deploy a pool.
         _accumulateForProject(PROJECT_ID, 100e18);
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         // Step 2: generate LP fees and collect them.
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
@@ -398,9 +385,12 @@ contract FeeTokensExcludedFromRebalanceTest is LPSplitHookV4TestBase {
         uint256 claimableBefore = hook.claimableFeeTokens(PROJECT_ID);
         assertGt(claimableBefore, 0, "precondition: should have claimable fee tokens");
 
+        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
+        burnController.setWeight(PROJECT_ID, 900e18);
+
         // Step 3: rebalance the LP position.
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         // Step 4: verify fee tokens are intact after rebalance.
         uint256 claimableAfter = hook.claimableFeeTokens(PROJECT_ID);
@@ -489,7 +479,7 @@ contract FeeTokensExcludedFromSplitBalanceCheckTest is LPSplitHookV4TestBase {
         vm.stopPrank();
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         // Generate LP fees for project 1 so that claimableFeeTokens > 0.
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));

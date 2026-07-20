@@ -20,7 +20,7 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         uint256 pmProjectBefore = projectToken.balanceOf(address(positionManager));
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         uint256 hookProjectAfter = projectToken.balanceOf(address(hook));
         uint256 pmProjectAfter = projectToken.balanceOf(address(positionManager));
@@ -31,22 +31,23 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         assertGt(pmProjectAfter, pmProjectBefore, "PM should receive project tokens");
     }
 
-    // ─── Deploy: terminal tokens from cash-out flow to PM ────────────
+    // ─── Deploy: single-sided — no terminal tokens flow to PM ────────
 
-    /// @notice After deployPool, the hook cashes out some project tokens for terminal tokens,
-    ///         then those terminal tokens get sent to PM via SETTLE.
-    function test_Deploy_TerminalTokensFlowToPM() public {
+    /// @notice After deployPool, the hook mints a single-sided ask from accumulated project tokens only: there is
+    /// no funding cash-out, so PM never receives any terminal tokens from the deploy.
+    function test_Deploy_NoTerminalTokensFlowToPM() public {
         _accumulateTokens(PROJECT_ID, 100e18);
 
         uint256 pmTermBefore = terminalToken.balanceOf(address(positionManager));
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         uint256 pmTermAfter = terminalToken.balanceOf(address(positionManager));
 
-        // PM should receive terminal tokens (from the cash-out proceeds).
-        assertGt(pmTermAfter, pmTermBefore, "PM should receive terminal tokens from cash-out");
+        // PM should receive ZERO terminal tokens — the deploy is single-sided (asks-only).
+        assertEq(pmTermAfter, pmTermBefore, "PM should never receive terminal tokens from a single-sided deploy");
+        assertEq(terminal.cashOutCallCount(), 0, "deployPool must never call cashOutTokensOf");
     }
 
     // ─── Rebalance: burn returns tokens, then re-mints ───────────────
@@ -63,8 +64,11 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         projectToken.mint(address(positionManager), 50e18);
         terminalToken.mint(address(positionManager), 50e18);
 
+        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
+        controller.setWeight(PROJECT_ID, 900e18);
+
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(newTokenId, oldTokenId, "tokenId should change after rebalance");
@@ -117,7 +121,7 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
             + terminalToken.balanceOf(address(positionManager)) + terminalToken.balanceOf(address(terminal));
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         uint256 totalProjectAfter = projectToken.balanceOf(address(hook))
             + projectToken.balanceOf(address(positionManager)) + projectToken.balanceOf(address(terminal));
@@ -155,8 +159,11 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         uint256 payBefore = terminal.payCallCount();
         uint256 addBefore = terminal.addToBalanceCallCount();
 
+        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
+        controller.setWeight(PROJECT_ID, 900e18);
+
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         // Verify fees were routed.
         bool feesRouted = (terminal.payCallCount() > payBefore) || (terminal.addToBalanceCallCount() > addBefore);
@@ -178,7 +185,7 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 100e18);
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
 
         // Position should still be created successfully.
         uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));

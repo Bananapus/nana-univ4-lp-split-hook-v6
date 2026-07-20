@@ -181,13 +181,13 @@ contract SquatRepriceFork is ForkDeployHelper {
         });
     }
 
-    /// @notice Squat ABOVE the issuance ceiling, then reprice DOWN into the band; deployPool must then succeed.
-    function test_fork_squatAboveIssuance_repriceDownThenDeploy() public {
+    /// @notice Squat ABOVE the band's upper tick, then reprice DOWN into the band; deployPool must then succeed.
+    function test_fork_squatAboveBand_repriceDownThenDeploy() public {
         _runSquatRepriceCase({squatAbove: true});
     }
 
-    /// @notice Squat BELOW the cash-out floor, then reprice UP into the band; deployPool must then succeed.
-    function test_fork_squatBelowFloor_repriceUpThenDeploy() public {
+    /// @notice Squat BELOW the band's lower tick, then reprice UP into the band; deployPool must then succeed.
+    function test_fork_squatBelowBand_repriceUpThenDeploy() public {
         _runSquatRepriceCase({squatAbove: false});
     }
 
@@ -263,17 +263,28 @@ contract SquatRepriceFork is ForkDeployHelper {
             require(spotBefore <= sqrtPriceLower, "squat not below band");
         }
 
-        // --- deployPool must REVERT now (out-of-band squat).
+        // --- deployPool must REVERT now (out-of-band squat). Which refusal fires depends on WHICH side of the band the
+        // squat sits on. The cash-out-floor side is rejected outright as an out-of-bounds pool price. The
+        // issuance-ceiling side is accepted as a price — the hook would place bids up to the ceiling there — but
+        // the
+        // pool the squatter just created has no oracle history yet, so the TWAP guard is what refuses this deploy.
+        // Ordering-aware: with native ETH as currency0 the project is currency1, so its ceiling is the band's LOWER
+        // tick.
+        bool squatOnFloorSide = squatAbove == ethIsToken0;
         vm.prank(multisig);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector,
-                spotBefore,
-                sqrtPriceLower,
-                sqrtPriceUpper
-            )
-        );
-        hook.deployPool(pid, 0);
+        if (squatOnFloorSide) {
+            vm.expectRevert(
+                abi.encodeWithSelector(
+                    JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector,
+                    spotBefore,
+                    sqrtPriceLower,
+                    sqrtPriceUpper
+                )
+            );
+        } else {
+            vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_TwapUnavailable.selector);
+        }
+        hook.deployPool(pid);
 
         // --- REPRICE: a fresh keeper/attacker performs the toward-band swap with amountOutMin=0 and a sqrtPriceLimit
         // set to a mid-band target. We choose direction so the swap moves price toward the band:
@@ -364,9 +375,11 @@ contract SquatRepriceFork is ForkDeployHelper {
         assertLe(ethSpent, 1, "keeper spent more than dust ETH on reprice");
         assertLe(projSpent, 1, "keeper spent more than dust project tokens on reprice");
 
-        // --- deployPool must now SUCCEED.
+        // --- deployPool must now SUCCEED. Deploying onto a pre-initialized (repriced) pool now validates spot against
+        // the oracle TWAP; force TWAP == spot so the guard passes without seeding 30 minutes of observation history.
+        _mockOracleTwapEqualsSpot(hook.oracleHook(), V4_POOL_MANAGER, key);
         vm.prank(multisig);
-        hook.deployPool(pid, 0);
+        hook.deployPool(pid);
         assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "pool should deploy after reprice");
         uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
         assertTrue(tokenId != 0, "no LP position NFT after reprice + deploy");

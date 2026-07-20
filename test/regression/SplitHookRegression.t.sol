@@ -3,6 +3,7 @@ pragma solidity 0.8.28;
 
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
+import {ReentrancyGuard} from "solady/src/utils/ReentrancyGuard.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
 import {JBSplit} from "@bananapus/core-v6/src/structs/JBSplit.sol";
 import {IJBSplitHook} from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
@@ -121,6 +122,9 @@ contract MintThenReenterFeeTerminal {
     address public immutable terminalToken;
 
     bool internal _entered;
+    bool public reentryAttempted;
+    bool public reentryReverted;
+    bytes4 public reentryRevertSelector;
 
     constructor(
         JBUniswapV4LPSplitHook _hook,
@@ -155,7 +159,24 @@ contract MintThenReenterFeeTerminal {
 
         if (!_entered) {
             _entered = true;
-            hook.collectAndRouteLPFees(reentryProjectId, terminalToken);
+            reentryAttempted = true;
+            // The hook's `nonReentrant` guard now blocks this nested call outright — catch it rather than let it
+            // propagate, so the OUTER `collectAndRouteLPFees` call (which is calling `pay()` in the first place)
+            // still completes normally.
+            try hook.collectAndRouteLPFees(reentryProjectId, terminalToken) {
+            // Should NOT reach here.
+            }
+            catch (bytes memory reason) {
+                reentryReverted = true;
+                if (reason.length >= 4) {
+                    bytes4 selector;
+                    // forge-lint: disable-next-line(unsafe-typecast)
+                    assembly {
+                        selector := mload(add(reason, 32))
+                    }
+                    reentryRevertSelector = selector;
+                }
+            }
             _entered = false;
         }
     }
@@ -217,8 +238,11 @@ contract RegressionRegression is LPSplitHookV4TestBase {
         assertEq(hook.claimableFeeCredits(PROJECT_ID), creditClaim, "credits should remain claimable for retry");
     }
 
-    /// @notice Verifies that the pre-increment pattern in _routeFeesToProject protects freshly minted
-    /// fee tokens from being burned by a re-entrant collectAndRouteLPFees call.
+    /// @notice Verifies that a re-entrant collectAndRouteLPFees call, triggered from inside the fee terminal's
+    /// pay(), is blocked outright by the hook's `nonReentrant` guard — a strictly stronger property than the
+    /// pre-increment pattern in _routeFeesToProject this regression originally covered (which only protected fee
+    /// tokens from being consumed by a reentrant call that was still allowed to run). The outer
+    /// `collectAndRouteLPFees` call still completes normally; only the nested attempt reverts.
     function test_regression_feePayReentrancy_preIncrementProtectsFeeTokens() public {
         BurningController burning = new BurningController();
         burning.setPrices(address(prices));
@@ -252,9 +276,9 @@ contract RegressionRegression is LPSplitHookV4TestBase {
         _accumulateWith(address(burning), FEE_PROJECT_ID, feeProjectToken, 1000e18);
 
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
         vm.prank(owner);
-        hook.deployPool(FEE_PROJECT_ID, 0);
+        hook.deployPool(FEE_PROJECT_ID);
 
         // Set up a re-entering fee terminal that mints fee tokens then re-enters collectAndRouteLPFees.
         MintThenReenterFeeTerminal feeTerminal =
@@ -271,10 +295,18 @@ contract RegressionRegression is LPSplitHookV4TestBase {
         uint256 claimable = hook.claimableFeeTokens(PROJECT_ID);
         assertGt(claimable, 0, "outer call should track fee tokens for claiming");
 
-        // The pre-increment protected fee tokens from being burned by the re-entrant call.
-        assertGt(
-            feeProjectToken.balanceOf(address(hook)), 0, "pre-increment should protect fee tokens from re-entrant burn"
+        // The re-entrant collectAndRouteLPFees attempt was made, and blocked deterministically by the guard —
+        // not merely mitigated by the pre-increment accounting.
+        assertTrue(feeTerminal.reentryAttempted(), "re-entry should have been attempted during pay()");
+        assertTrue(feeTerminal.reentryReverted(), "nested collectAndRouteLPFees must be blocked by the guard");
+        assertEq(
+            feeTerminal.reentryRevertSelector(),
+            ReentrancyGuard.Reentrancy.selector,
+            "blocked re-entry must revert specifically via the nonReentrant guard"
         );
+
+        // Fee tokens remain fully intact — never touched by the (blocked) re-entrant call.
+        assertGt(feeProjectToken.balanceOf(address(hook)), 0, "fee tokens must survive the blocked re-entrant call");
 
         // The user can actually claim the fee tokens.
         vm.prank(owner);

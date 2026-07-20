@@ -38,7 +38,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
 
         vm.prank(attacker);
         vm.expectRevert();
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         // Verify the position was not disturbed
         uint256 tokenIdAfter = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
@@ -50,8 +50,11 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         uint256 originalTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(originalTokenId, 0, "should have an active position");
 
+        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
+        controller.setWeight(PROJECT_ID, 900e18);
+
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(newTokenId, 0, "new tokenId should be nonzero");
@@ -67,17 +70,24 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
 
         uint256 originalTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
 
+        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
+        controller.setWeight(PROJECT_ID, 900e18);
+
         vm.prank(operator);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(newTokenId, 0, "new tokenId should be nonzero");
         assertNotEq(newTokenId, originalTokenId, "tokenId should change after authorized rebalance");
     }
 
-    /// @notice rebalanceLiquidity reverts with InsufficientLiquidity when the new
-    ///         position would have zero liquidity (prevents bricking via tokenIdOf=0).
+    /// @notice rebalanceLiquidity reverts with NoDeployableLiquidityAtSpot when the project holds neither project
+    ///         tokens to offer as asks nor terminal tokens to offer as bids (prevents bricking via tokenIdOf=0).
     function test_H2_rebalance_zeroLiquidity_reverts() public {
+        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard and
+        // reaches the zero-liquidity check.
+        controller.setWeight(PROJECT_ID, 900e18);
+
         // Drain all tokens from PositionManager and hook so burn returns 0
         uint256 pmProjectBal = projectToken.balanceOf(address(positionManager));
         uint256 pmTerminalBal = terminalToken.balanceOf(address(positionManager));
@@ -101,8 +111,8 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
 
         // Should revert instead of zeroing tokenIdOf
         vm.prank(owner);
-        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientLiquidity.selector);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot.selector);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         // tokenIdOf should remain unchanged (revert rolled back state)
         assertEq(
@@ -138,8 +148,11 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         uint256 payCountBefore = terminal.payCallCount();
         uint256 addToBalanceCountBefore = terminal.addToBalanceCallCount();
 
+        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
+        controller.setWeight(PROJECT_ID, 900e18);
+
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         // Verify fees were routed: pay (for fee project) and/or addToBalance (for project)
         bool feesRouted =
@@ -173,8 +186,11 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
 
         uint256 claimableBefore = hook.claimableFeeTokens(PROJECT_ID);
 
+        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
+        controller.setWeight(PROJECT_ID, 900e18);
+
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         uint256 claimableAfter = hook.claimableFeeTokens(PROJECT_ID);
         assertGt(claimableAfter, claimableBefore, "claimableFeeTokens should increase after rebalance with fees");
@@ -300,6 +316,6 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         projectToken.mint(address(hook), 10e18);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PoolAlreadyDeployed.selector);
         vm.prank(owner);
-        hook.deployPool(PROJECT_ID, 0);
+        hook.deployPool(PROJECT_ID);
     }
 }

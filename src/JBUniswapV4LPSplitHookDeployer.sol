@@ -94,8 +94,8 @@ contract JBUniswapV4LPSplitHookDeployer is IJBUniswapV4LPSplitHookDeployer {
     /// @notice Deploy a new `JBUniswapV4LPSplitHook` clone with the caller as its initial owner.
     /// @param feeProjectId The Juicebox project ID that receives a share of LP fees.
     /// @param feePercent The percentage of LP fees routed to the fee project, out of `BPS` (e.g. 3800 = 38%).
-    /// @param buybackHook The buyback-hook registry this clone targets for force-direct cash-outs. Pass the zero
-    /// address for none. Per-deploy so different projects can use different buyback hooks.
+    /// @param buybackHook The buyback-hook registry to store as a configuration reference on this clone. Pass the zero
+    /// address for none. Per-deploy so different projects can record different buyback registries.
     /// @param salt An optional salt for deterministic CREATE2 deployment. Pass `bytes32(0)` for a plain CREATE.
     /// @return hook The newly deployed hook.
     function deployHookFor(
@@ -171,8 +171,8 @@ contract JBUniswapV4LPSplitHookDeployer is IJBUniswapV4LPSplitHookDeployer {
     //*********************************************************************//
 
     /// @notice The implementation contract used as the base for clones.
-    /// @return The hook implementation contract.
-    function hookImplementation() external view override returns (JBUniswapV4LPSplitHook) {
+    /// @return implementation The hook implementation contract.
+    function hookImplementation() external view override returns (JBUniswapV4LPSplitHook implementation) {
         return _HOOK_IMPLEMENTATION;
     }
 }

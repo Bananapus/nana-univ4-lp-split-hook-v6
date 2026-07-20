@@ -72,7 +72,7 @@ contract Integration_RebalanceChangedRuleset is ForkDeployHelper {
         _payProject(pid, 50 ether);
         _accumulateTokens(pid, address(pToken), 100_000e18);
         vm.prank(multisig);
-        hook.deployPool(pid, 0);
+        hook.deployPool(pid);
         assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "Pool deployed");
         uint256 initialTokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
         uint128 initialLiq = V4_POSITION_MANAGER.getPositionLiquidity(initialTokenId);
@@ -112,9 +112,7 @@ contract Integration_RebalanceChangedRuleset is ForkDeployHelper {
         vm.warp(block.timestamp + 1 days + 1);
         _mockOracleTwapEqualsSpot(hook.oracleHook(), V4_POOL_MANAGER, hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN));
         vm.prank(multisig);
-        hook.rebalanceLiquidity({
-            projectId: pid, terminalToken: JBConstants.NATIVE_TOKEN, decreaseAmount0Min: 0, decreaseAmount1Min: 0
-        });
+        hook.rebalanceLiquidity({projectId: pid, terminalToken: JBConstants.NATIVE_TOKEN});
         uint256 newTokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
         assertTrue(newTokenId > 0, "New tokenId exists");
         uint128 newLiq = V4_POSITION_MANAGER.getPositionLiquidity(newTokenId);

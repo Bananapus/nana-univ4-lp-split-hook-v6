@@ -78,6 +78,24 @@ contract MockPositionManager {
         poolManager = pm;
     }
 
+    /// @notice Test helper: grow a live position's locked balance of `token` (simulating buyers filling the position's
+    /// asks and leaving `token` behind as principal), so a subsequent BURN recovers real principal of that token —
+    /// the
+    /// only legitimate way terminal enters an LP position. The caller must have already funded this contract with
+    /// `amount` of `token` (mint an ERC-20 to it, or `vm.deal` for native ETH) so TAKE_PAIR can pay it out on burn.
+    function injectPositionBalance(uint256 tokenId, address token, uint256 amount) external {
+        Position storage pos = _positions[tokenId];
+        require(pos.exists, "Position does not exist");
+        if (token == Currency.unwrap(pos.poolKey.currency0)) {
+            pos.amount0Locked += amount;
+        } else if (token == Currency.unwrap(pos.poolKey.currency1)) {
+            pos.amount1Locked += amount;
+        } else {
+            revert("token not in pool");
+        }
+        poolLocked[token] += amount;
+    }
+
     function setUsagePercent(uint256 percent) external {
         usagePercent = percent;
     }

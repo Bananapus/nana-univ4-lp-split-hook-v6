@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {mulDiv, sqrt} from "@prb/math/src/Common.sol";
-import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
 import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBMultiTerminal} from "@bananapus/core-v6/src/interfaces/IJBMultiTerminal.sol";
@@ -14,6 +11,9 @@ import {JBRulesetMetadataResolver} from "@bananapus/core-v6/src/libraries/JBRule
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
+import {mulDiv, sqrt} from "@prb/math/src/Common.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 
 import {JBLPSplitHookHelpers} from "./JBLPSplitHookHelpers.sol";
 
@@ -40,11 +40,11 @@ library JBUniswapV4LPSplitHookMath {
     // ----------------------- internal constants ------------------------ //
     //*********************************************************************//
 
-    /// @notice Tick spacing for the 1% fee tier (200 ticks). Mirrors `JBUniswapV4LPSplitHook.TICK_SPACING`.
-    int24 internal constant _TICK_SPACING = 200;
-
     /// @notice Uniswap V4 Q96 fixed-point scale factor for sqrtPriceX96 values.
     uint256 internal constant _Q96 = 2 ** 96;
+
+    /// @notice Tick spacing for the 1% fee tier (200 ticks). Mirrors `JBUniswapV4LPSplitHook.TICK_SPACING`.
+    int24 internal constant _TICK_SPACING = 200;
 
     /// @notice 1e18 scale factor used as a unit amount in rate calculations.
     uint256 internal constant _WAD = 10 ** 18;
@@ -106,8 +106,13 @@ library JBUniswapV4LPSplitHookMath {
                 return (tickLower, tickUpper);
             }
 
-            // Cash out rate rounds to 0 due to precision loss (e.g. 6-decimal USDC with large token supply).
-            // Center the LP range around the issuance price with minimal width.
+            // Cash out rate rounds to 0 due to precision loss (e.g. 6-decimal USDC with large token supply). With no
+            // redemption floor, the corridor's ceiling-side bound must land EXACTLY on the issuance tick — matching
+            // the cashOutRate != 0 path, where the issuance-derived bound is aligned onto the issuance tick — so the
+            // ask leg is offered only strictly below the true issuance price and a spot at that price mints no asks.
+            // The opposite bound is the floor side; with no floor it sits one spacing away purely to keep the range
+            // non-empty (bids are empty when there is no terminal). Ordering-aware: the issuance ceiling is the
+            // corridor UPPER when the project is token0 and the corridor LOWER when it is token1.
             int24 issuanceTick = TickMath.getTickAtSqrtPrice(
                 getIssuanceRateSqrtPriceX96({
                     directory: directory,
@@ -118,23 +123,37 @@ library JBUniswapV4LPSplitHookMath {
                     ruleset: ruleset
                 })
             );
-            issuanceTick = JBLPSplitHookHelpers.alignTickToSpacing({tick: issuanceTick, spacing: _TICK_SPACING});
-            tickLower = issuanceTick - _TICK_SPACING;
-            tickUpper = issuanceTick + _TICK_SPACING;
 
-            // The zero-cash-out fallback builds a one-spacing band around the issuance tick. If that
-            // issuance tick is near a TickMath edge, the band can spill outside V4's valid tick range.
-            // Clamp to aligned ticks that stay inside the boundary and still leave room for a non-empty range.
-            int24 zeroCashOutMinUsable = JBLPSplitHookHelpers.alignTickToSpacing({
+            (address token0,) = JBLPSplitHookHelpers.sortTokens({tokenA: terminalToken, tokenB: projectToken});
+
+            // The floor-side bound sits two spacings from the exact-issuance ceiling. Two spacings (not one) leaves
+            // room for a spot strictly below the ceiling to still align an ask leg one spacing deep, so a
+            // pre-initialized
+            // pool below the issuance price remains deployable; there is no redemption floor to place more precisely.
+            int24 floorGap = 2 * _TICK_SPACING;
+
+            int24 zeroMinUsable = JBLPSplitHookHelpers.alignTickToSpacing({
                 tick: TickMath.MIN_TICK, spacing: _TICK_SPACING
             }) + _TICK_SPACING;
-            int24 zeroCashOutMaxUsable = JBLPSplitHookHelpers.alignTickToSpacing({
+            int24 zeroMaxUsable = JBLPSplitHookHelpers.alignTickToSpacing({
                 tick: TickMath.MAX_TICK, spacing: _TICK_SPACING
             }) - _TICK_SPACING;
-            if (tickLower < zeroCashOutMinUsable) tickLower = zeroCashOutMinUsable;
-            if (tickUpper > zeroCashOutMaxUsable) tickUpper = zeroCashOutMaxUsable;
-            // If both sides collapsed to one tick after clamping, widen the upper side by one spacing.
-            if (tickLower >= tickUpper) tickUpper = tickLower + _TICK_SPACING;
+
+            if (projectToken == token0) {
+                // Project is token0: the issuance ceiling is the corridor UPPER bound. Align DOWN (as the cashOut != 0
+                // path aligns tickUpper) and keep the floor-gap below it inside the usable range.
+                tickUpper = JBLPSplitHookHelpers.alignTickToSpacing({tick: issuanceTick, spacing: _TICK_SPACING});
+                if (tickUpper > zeroMaxUsable) tickUpper = zeroMaxUsable;
+                if (tickUpper < zeroMinUsable + floorGap) tickUpper = zeroMinUsable + floorGap;
+                tickLower = tickUpper - floorGap;
+            } else {
+                // Project is token1: the issuance ceiling is the corridor LOWER bound. Align UP (as the cashOut != 0
+                // path aligns tickLower) and keep the floor-gap above it inside the usable range.
+                tickLower = JBLPSplitHookHelpers.alignTickToSpacingCeil({tick: issuanceTick, spacing: _TICK_SPACING});
+                if (tickLower < zeroMinUsable) tickLower = zeroMinUsable;
+                if (tickLower > zeroMaxUsable - floorGap) tickLower = zeroMaxUsable - floorGap;
+                tickUpper = tickLower + floorGap;
+            }
             return (tickLower, tickUpper);
         }
 
@@ -213,7 +232,8 @@ library JBUniswapV4LPSplitHookMath {
     /// @param projectToken The project token address.
     /// @param controller The project's controller address (pre-fetched to avoid redundant lookups).
     /// @param ruleset The project's current ruleset (pre-fetched to avoid redundant lookups).
-    /// @return sqrtPriceX96 The geometric midpoint between cash-out and issuance prices, as sqrtPriceX96.
+    /// @return sqrtPriceX96 The cash-out (floor) price as sqrtPriceX96 (the issuance/ceiling price when there is no
+    /// surplus and thus no floor).
     function computeInitialSqrtPrice(
         IJBDirectory directory,
         IJBSuckerRegistry suckerRegistry,
@@ -227,30 +247,16 @@ library JBUniswapV4LPSplitHookMath {
         view
         returns (uint160 sqrtPriceX96)
     {
-        // Query the cash out rate (price floor) for fallback logic.
-        uint256 cashOutRate = getCashOutRate({
-            directory: directory,
-            suckerRegistry: suckerRegistry,
-            projectId: projectId,
-            terminalToken: terminalToken,
-            controller: controller,
-            ruleset: ruleset
-        });
-
-        // No surplus: initialize at the issuance price (price ceiling) since there's no floor.
-        if (cashOutRate == 0) {
-            return getIssuanceRateSqrtPriceX96({
-                directory: directory,
-                projectId: projectId,
-                terminalToken: terminalToken,
-                projectToken: projectToken,
-                controller: controller,
-                ruleset: ruleset
-            });
-        }
-
-        // Compute both price boundaries as sqrtPriceX96 values.
-        uint160 sqrtPriceCashOut = getCashOutRateSqrtPriceX96({
+        // Seed a hook-initialized pool just inside the cash-out (floor) bound of the economic corridor so nearly the
+        // entire project balance deploys as asks across the [floor, ceiling] corridor rather than wasting the
+        // [floor, midpoint] band. The seed sits ONE spacing inside the floor rather than exactly on it: the exact
+        // economic boundary is the same extreme the pre-init guard treats as manipulation, so keeping the seed
+        // strictly within the band stays consistent with that invariant. This uses the same corridor as every other
+        // path, so a zero-cash-out project (whose corridor pins its ceiling on the exact issuance tick) still seeds
+        // STRICTLY below that ceiling and deploys, rather than seeding at the issuance price and rejecting its own
+        // pool. Ordering-aware: the floor bound is the corridor's LOWER tick when the project is token0 and its UPPER
+        // tick when it is token1 (the ask leg always fills from the floor toward the issuance ceiling).
+        (int24 tickLower, int24 tickUpper) = calculateTickBounds({
             directory: directory,
             suckerRegistry: suckerRegistry,
             projectId: projectId,
@@ -259,47 +265,27 @@ library JBUniswapV4LPSplitHookMath {
             controller: controller,
             ruleset: ruleset
         });
-        uint160 sqrtPriceIssuance = getIssuanceRateSqrtPriceX96({
-            directory: directory,
-            projectId: projectId,
-            terminalToken: terminalToken,
-            projectToken: projectToken,
-            controller: controller,
-            ruleset: ruleset
-        });
-
-        // Convert both prices to tick space for geometric midpoint calculation.
-        int24 tickCashOut = TickMath.getTickAtSqrtPrice(sqrtPriceCashOut);
-        int24 tickIssuance = TickMath.getTickAtSqrtPrice(sqrtPriceIssuance);
-
-        // Sort ticks so tickLower ≤ tickUpper regardless of token ordering.
-        int24 tickLower = tickCashOut < tickIssuance ? tickCashOut : tickIssuance;
-        int24 tickUpper = tickCashOut < tickIssuance ? tickIssuance : tickCashOut;
-
-        // If both ticks are equal, the midpoint is trivial — use the issuance price directly.
-        if (tickLower == tickUpper) {
-            return sqrtPriceIssuance;
+        (address token0,) = JBLPSplitHookHelpers.sortTokens({tokenA: terminalToken, tokenB: projectToken});
+        // Offset one spacing off the floor bound toward the ceiling, then clamp so the seed stays at least one spacing
+        // short of the ceiling. Both bounds are spacing-aligned, so the seed is too — never landing on an unaligned
+        // tick that would collapse the asks-only adaptive range. For a one-spacing corridor the clamp folds the seed
+        // back
+        // onto the floor bound itself (spot == floor), leaving a non-degenerate one-spacing ask leg to the ceiling.
+        int24 seedTick;
+        if (projectToken == token0) {
+            seedTick = tickLower + _TICK_SPACING;
+            if (seedTick > tickUpper - _TICK_SPACING) seedTick = tickUpper - _TICK_SPACING;
+        } else {
+            seedTick = tickUpper - _TICK_SPACING;
+            if (seedTick < tickLower + _TICK_SPACING) seedTick = tickLower + _TICK_SPACING;
         }
-
-        // Place the initial price at the geometric midpoint of the floor and ceiling.
-        int24 tickMid =
-            JBLPSplitHookHelpers.alignTickToSpacing({tick: (tickLower + tickUpper) / 2, spacing: _TICK_SPACING});
-
-        // Keep the midpoint inside TickMath's valid range before converting it back to sqrtPriceX96.
-        int24 minTick = TickMath.MIN_TICK;
-        int24 maxTick = TickMath.MAX_TICK;
-        if (tickMid < minTick) {
-            tickMid = JBLPSplitHookHelpers.alignTickToSpacing({tick: minTick, spacing: _TICK_SPACING}) + _TICK_SPACING;
-        }
-        if (tickMid > maxTick) {
-            tickMid = JBLPSplitHookHelpers.alignTickToSpacing({tick: maxTick, spacing: _TICK_SPACING}) - _TICK_SPACING;
-        }
-
-        // Convert the midpoint tick back to sqrtPriceX96.
-        return TickMath.getSqrtPriceAtTick(tickMid);
+        return TickMath.getSqrtPriceAtTick(seedTick);
     }
 
     /// @notice Compute optimal cash-out amount based on LP position geometry.
+    /// @dev A standalone pricing primitive: given a target terminal/project pairing ratio, it returns how many project
+    /// tokens a cash-out at the bonding-curve rate would need to surrender. The hook's current single-sided flow does
+    /// not invoke it — the hook never cashes out — so it exists purely as a reusable valuation helper.
     /// @param directory The JBDirectory used to resolve the project's primary terminal.
     /// @param suckerRegistry The sucker registry for cross-chain surplus/supply queries.
     /// @param projectId The ID of the project.
@@ -332,8 +318,9 @@ library JBUniswapV4LPSplitHookMath {
         view
         returns (uint256 cashOutAmount)
     {
-        // The cash-out rate (terminal tokens received per project token burned, 18-decimal) is the "exchange rate" the
-        // funding cash-out runs at. Without it there is no way to value the terminal side, so no cash-out can be sized.
+        // The cash-out rate (terminal tokens received per project token burned, 18-decimal) is the "exchange rate" a
+        // cash-out would run at. Without it there is no way to value the terminal side, so no cash-out amount can be
+        // sized.
         uint256 cashOutRate = getCashOutRate({
             directory: directory,
             suckerRegistry: suckerRegistry,
@@ -930,7 +917,7 @@ library JBUniswapV4LPSplitHookMath {
     /// @param directory The JBDirectory to query.
     /// @param projectId The ID of the project.
     /// @param token The token whose primary terminal to resolve.
-    /// @return The project's primary terminal for `token` (address(0) if none is set).
+    /// @return terminal The project's primary terminal for `token` (address(0) if none is set).
     function _primaryTerminalOf(
         IJBDirectory directory,
         uint256 projectId,
@@ -938,7 +925,7 @@ library JBUniswapV4LPSplitHookMath {
     )
         private
         view
-        returns (address)
+        returns (address terminal)
     {
         return address(directory.primaryTerminalOf({projectId: projectId, token: token}));
     }

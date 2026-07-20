@@ -43,3 +43,7 @@ AUDIT_FINDINGS.md
 NEMESIS_SCOPE.md
 run-nemesis-all.sh
 assets/
+
+# Superpowers scaffolding / scratch (never commit)
+.superpowers/
+docs/superpowers/

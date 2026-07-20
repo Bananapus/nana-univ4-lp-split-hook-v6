@@ -74,7 +74,7 @@ contract IssuanceInversionFork is ForkDeployHelper {
         _payProject(pid, 100 ether);
         _accumulateTokens(pid, address(pToken), 1e27);
         vm.prank(multisig);
-        hook.deployPool(pid, 0);
+        hook.deployPool(pid);
         assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "Pool should deploy with extreme weight");
         PoolKey memory key = hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN);
         (uint160 sqrtPriceX96,,,) = V4_POOL_MANAGER.getSlot0(key.toId());

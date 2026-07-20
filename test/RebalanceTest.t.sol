@@ -27,6 +27,11 @@ contract RebalanceTest is LPSplitHookV4TestBase {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
         poolTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
 
+        // Move the economic corridor (drop issuance ~10%) so every rebalance below clears its corridor-drift guard.
+        // The deploy above ranges the position against the weight-1000 corridor; dropping the weight to 900 shifts the
+        // issuance-ceiling tick well past the drift threshold while the cash-out floor and live spot stay put.
+        controller.setWeight(PROJECT_ID, 900e18);
+
         // Ensure PositionManager has tokens so that collect can transfer them to the hook
         // after decreaseLiquidity makes them collectable
         projectToken.mint(address(positionManager), 50e18);
@@ -50,7 +55,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidStageForAction.selector);
-        hook.rebalanceLiquidity(newProjectId, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(newProjectId, address(terminalToken));
     }
 
     // -----------------------------------------------------------------------
@@ -69,7 +74,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidStageForAction.selector);
-        hook.rebalanceLiquidity(PROJECT_ID, address(otherToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(otherToken));
     }
 
     // -----------------------------------------------------------------------
@@ -83,7 +88,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidTerminalToken.selector);
-        hook.rebalanceLiquidity(PROJECT_ID, randomToken, 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, randomToken);
     }
 
     // -----------------------------------------------------------------------
@@ -96,7 +101,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
         uint256 burnCountBefore = positionManager.burnCallCount();
 
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         assertEq(
             positionManager.burnCallCount(),
@@ -115,7 +120,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
         uint256 burnCountBefore = positionManager.burnCallCount();
 
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         assertEq(
             positionManager.burnCallCount(), burnCountBefore + 1, "PositionManager burn should be called exactly once"
@@ -133,7 +138,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
         // mintCountBefore should be 1 (from the initial _accumulateAndDeploy)
 
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         assertEq(
             positionManager.mintCallCount(),
@@ -153,7 +158,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
         assertNotEq(originalTokenId, 0, "original tokenId should be nonzero");
 
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(newTokenId, 0, "new tokenId should be nonzero");
@@ -161,17 +166,21 @@ contract RebalanceTest is LPSplitHookV4TestBase {
     }
 
     // -----------------------------------------------------------------------
-    // 8. rebalanceLiquidity -- requires authorization
+    // 8. rebalanceLiquidity -- permissionless
     // -----------------------------------------------------------------------
 
-    /// @notice rebalanceLiquidity requires SET_BUYBACK_POOL permission. A random user
-    ///         without permission should be rejected.
-    function test_Rebalance_RequiresAuthorization() public {
-        address randomUser = makeAddr("randomRebalancer");
+    /// @notice rebalanceLiquidity is permissionless: with the corridor moved past the drift threshold (see setUp) and
+    ///         the spot near the TWAP, a random user with no permission can re-center the position.
+    function test_Rebalance_Permissionless_AnyCallerCanRebalance() public {
+        uint256 oldTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
 
+        address randomUser = makeAddr("randomRebalancer");
         vm.prank(randomUser);
-        vm.expectRevert();
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
+
+        assertNotEq(
+            hook.tokenIdOf(PROJECT_ID, address(terminalToken)), oldTokenId, "a permissionless caller can rebalance"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -210,7 +219,7 @@ contract RebalanceTest is LPSplitHookV4TestBase {
         uint256 addToBalanceCountBefore = terminal.addToBalanceCallCount();
 
         vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         // Fees should have been routed: either pay (for fee project) or addToBalance (for original project)
         bool feesRouted =
@@ -230,11 +239,11 @@ contract RebalanceTest is LPSplitHookV4TestBase {
         // Replace the base spot-tracking oracle with a fixed-tick one pinned far from the live spot.
         MockGeomeanOracle fixedOracle = new MockGeomeanOracle();
         fixedOracle.setTwapTick(_spotTick() + 1000);
-        vm.store(address(hook), bytes32(uint256(1)), bytes32(uint256(uint160(address(fixedOracle)))));
+        _overrideOracleHook(address(fixedOracle));
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_PriceDeviationTooHigh.selector);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
     }
 
     /// @notice rebalanceLiquidity reverts when the oracle TWAP cannot be read (un-warmed oracle), rather than
@@ -242,11 +251,11 @@ contract RebalanceTest is LPSplitHookV4TestBase {
     function test_Rebalance_RevertsWhenTwapUnavailable() public {
         MockGeomeanOracle fixedOracle = new MockGeomeanOracle();
         fixedOracle.setShouldRevert(true);
-        vm.store(address(hook), bytes32(uint256(1)), bytes32(uint256(uint160(address(fixedOracle)))));
+        _overrideOracleHook(address(fixedOracle));
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_TwapUnavailable.selector);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken), 0, 0);
+        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
     }
 
     // --- Helper ------------------------------------------------------------

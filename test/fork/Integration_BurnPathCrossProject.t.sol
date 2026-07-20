@@ -78,7 +78,7 @@ contract Integration_BurnPathCrossProject is ForkDeployHelper {
         _payProject(pidB, 30 ether);
         _accumulateTokens(pidB, address(pTokenB), 80_000e18);
         vm.prank(multisig);
-        hook.deployPool(pidA, 0);
+        hook.deployPool(pidA);
         assertTrue(hook.isPoolDeployed(pidA, JBConstants.NATIVE_TOKEN), "A deployed");
         uint256 aAccBefore = hook.accumulatedProjectTokens(pidA);
         uint256 bAccBefore = hook.accumulatedProjectTokens(pidB);
@@ -116,7 +116,7 @@ contract Integration_BurnPathCrossProject is ForkDeployHelper {
         assertEq(hook.accumulatedProjectTokens(pidB), bAccBefore, "B accumulated unchanged");
         assertEq(IERC20(address(pTokenB)).balanceOf(address(hook)), bBalBefore, "B token balance unchanged");
         vm.prank(multisig);
-        hook.deployPool(pidB, 0);
+        hook.deployPool(pidB);
         assertTrue(hook.isPoolDeployed(pidB, JBConstants.NATIVE_TOKEN), "B deployed");
         uint256 bTokenId = hook.tokenIdOf(pidB, JBConstants.NATIVE_TOKEN);
         uint128 bLiq = V4_POSITION_MANAGER.getPositionLiquidity(bTokenId);

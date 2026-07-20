@@ -81,7 +81,7 @@ contract Integration_MultiProjectDeploy is ForkDeployHelper {
         uint256 bBalBefore = IERC20(address(pTokenB)).balanceOf(address(hook));
         assertEq(bAccBefore, 80_000e18, "B accumulated before A deploy");
         vm.prank(multisig);
-        hook.deployPool(pidA, 0);
+        hook.deployPool(pidA);
         assertTrue(hook.isPoolDeployed(pidA, JBConstants.NATIVE_TOKEN), "A pool deployed");
         // A's accumulation is consumed by the deploy; only an unpaired remainder is carried forward (never burned).
         assertLt(hook.accumulatedProjectTokens(pidA), 10_000e18, "A bulk consumed; only remainder carried");
@@ -90,7 +90,7 @@ contract Integration_MultiProjectDeploy is ForkDeployHelper {
         uint256 aTokenId = hook.tokenIdOf(pidA, JBConstants.NATIVE_TOKEN);
         uint128 aLiqBefore = V4_POSITION_MANAGER.getPositionLiquidity(aTokenId);
         vm.prank(multisig);
-        hook.deployPool(pidB, 0);
+        hook.deployPool(pidB);
         assertTrue(hook.isPoolDeployed(pidB, JBConstants.NATIVE_TOKEN), "B pool deployed");
         // B's accumulation consumed by its deploy; only an unpaired remainder is carried forward (never burned).
         assertLt(hook.accumulatedProjectTokens(pidB), 8000e18, "B bulk consumed; only remainder carried");

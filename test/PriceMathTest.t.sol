@@ -468,16 +468,19 @@ contract PriceMathTest is LPSplitHookV4TestBase {
     // 17. Geometric mean: falls back to issuance rate when cash-out is 0
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice When cash-out rate is 0, _computeInitialSqrtPrice falls back to issuance rate.
+    /// @notice When cash-out rate is 0, the cold-start seed sits strictly inside the economic corridor (one aligned
+    /// spacing off the floor), NOT on the issuance ceiling — so the hook never rejects its own zero-cash-out pool.
     function test_GeometricMean_FallbackOnZeroCashOut() public {
         store.setSurplus(PROJECT_ID, 0);
 
         uint160 sqrtPriceInit =
             testableHook.exposed_computeInitialSqrtPrice(PROJECT_ID, address(terminalToken), address(projectToken));
-        uint160 sqrtPriceIssuance =
-            testableHook.exposed_getIssuanceRateSqrtPriceX96(PROJECT_ID, address(terminalToken), address(projectToken));
+        (int24 tickLower, int24 tickUpper) =
+            testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
 
-        assertEq(sqrtPriceInit, sqrtPriceIssuance, "Should fall back to issuance rate when cash-out is 0");
+        int24 seedTick = TickMath.getTickAtSqrtPrice(sqrtPriceInit);
+        assertGt(seedTick, tickLower, "zero cash-out seed sits strictly inside the corridor floor");
+        assertLt(seedTick, tickUpper, "zero cash-out seed sits strictly below the issuance ceiling");
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -579,8 +582,10 @@ contract PriceMathTest is LPSplitHookV4TestBase {
 
         (int24 tickLower, int24 tickUpper) =
             testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
-        uint160 sqrtPriceInit =
-            testableHook.exposed_computeInitialSqrtPrice(PROJECT_ID, address(terminalToken), address(projectToken));
+        // Price the position at the corridor midpoint: a genuinely two-sided (balanced) price so the pre-held ratio
+        // math is exercised in range. The hook's own seed sits near the floor (asks-only), which is not the balanced
+        // regime this ratio-preservation invariant is about.
+        uint160 sqrtPriceInit = TickMath.getSqrtPriceAtTick(tickLower + (tickUpper - tickLower) / 2);
         uint256 r = testableHook.exposed_getCashOutRate(PROJECT_ID, address(terminalToken)); // terminal per project,
         // WAD
 
