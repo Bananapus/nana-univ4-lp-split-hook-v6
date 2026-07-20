@@ -40,11 +40,11 @@ library JBUniswapV4LPSplitHookMath {
     // ----------------------- internal constants ------------------------ //
     //*********************************************************************//
 
-    /// @notice Tick spacing for the 1% fee tier (200 ticks). Mirrors `JBUniswapV4LPSplitHook.TICK_SPACING`.
-    int24 internal constant _TICK_SPACING = 200;
-
     /// @notice Uniswap V4 Q96 fixed-point scale factor for sqrtPriceX96 values.
     uint256 internal constant _Q96 = 2 ** 96;
+
+    /// @notice Tick spacing for the 1% fee tier (200 ticks). Mirrors `JBUniswapV4LPSplitHook.TICK_SPACING`.
+    int24 internal constant _TICK_SPACING = 200;
 
     /// @notice 1e18 scale factor used as a unit amount in rate calculations.
     uint256 internal constant _WAD = 10 ** 18;
