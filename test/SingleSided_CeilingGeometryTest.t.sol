@@ -354,6 +354,46 @@ contract SingleSided_CeilingGeometryTest is LPSplitHookV4TestBase {
         assertLe(terminalSide, 2e18, "the bid never exceeds the project's own ledgered terminal");
     }
 
+    /// @notice Deploy with the spot one tick inside the ceiling and BOTH project tokens and terminal held: the solved
+    /// bid bound aligns onto the ceiling, so the range clamps to a one-spacing leg that straddles the spot and draws
+    /// both tokens through the real mint rather than collapsing to zero width.
+    function test_Deploy_NearCeiling_WithBothTokens_KeepsOneSpacingLeg() public {
+        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
+
+        (int24 lower, int24 upper) = _corridor();
+        bool projectIsToken0 = address(projectToken) < address(terminalToken);
+        int24 ceilingTick = projectIsToken0 ? upper : lower;
+        // One tick inside the ceiling: within the top spacing, where the bid bound would otherwise snap onto the
+        // ceiling and collapse the range.
+        int24 spotTick = projectIsToken0 ? ceilingTick - 1 : ceilingTick + 1;
+        positionManager.initializePool(_poolKey(), TickMath.getSqrtPriceAtTick(spotTick));
+
+        _accumulateTokens(PROJECT_ID, 1e18);
+        _creditTerminalLedger(2e18);
+
+        hook.deployPool(PROJECT_ID);
+
+        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        assertNotEq(tokenId, 0, "a spot inside the top spacing must still deploy, not collapse");
+
+        // The clamp keeps a one-spacing ask leg pinned at the ceiling, straddling the spot so both sides are drawn.
+        int24 activeLower = hook.activeTickLowerOf(PROJECT_ID, address(terminalToken));
+        int24 activeUpper = hook.activeTickUpperOf(PROJECT_ID, address(terminalToken));
+        assertEq(activeUpper - activeLower, SPACING, "the clamped leg is exactly one spacing wide");
+        if (projectIsToken0) {
+            assertEq(activeUpper, ceilingTick, "asks stay anchored to the issuance ceiling");
+        } else {
+            assertEq(activeLower, ceilingTick, "asks stay anchored to the issuance ceiling");
+        }
+
+        (,,,, uint256 amount0Locked, uint256 amount1Locked,) = positionManager._positions(tokenId);
+        (uint256 projectSide, uint256 terminalSide) =
+            projectIsToken0 ? (amount0Locked, amount1Locked) : (amount1Locked, amount0Locked);
+        assertGt(projectSide, 0, "the ask leg draws project tokens");
+        assertGt(terminalSide, 0, "the straddle draws the project's own terminal as the bid");
+        assertLe(terminalSide, 2e18, "the bid never exceeds the project's own ledgered terminal");
+    }
+
     /// @notice The same squat with nothing to bid with refuses legibly rather than being permanently rejected as an
     /// out-of-bounds pool price: the accumulated tokens wait until the issuance price rises or the spot falls.
     function test_Deploy_PreInitializedAtIssuanceCeiling_NoTerminal_RevertsNoDeployableLiquidity() public {

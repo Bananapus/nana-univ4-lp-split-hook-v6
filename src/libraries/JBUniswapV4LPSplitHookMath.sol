@@ -108,11 +108,11 @@ library JBUniswapV4LPSplitHookMath {
 
             // Cash out rate rounds to 0 due to precision loss (e.g. 6-decimal USDC with large token supply). With no
             // redemption floor, the corridor's ceiling-side bound must land EXACTLY on the issuance tick — matching
-            // the cashOutRate != 0 path, where the issuance-derived bound is aligned onto the issuance tick — so that
-            // `_requireSpotBelowCeiling` rejects a spot that has reached the true issuance price. The opposite bound
-            // is the floor side; with no floor it sits one spacing away purely to keep the range non-empty (bids are
-            // empty when there is no terminal). Ordering-aware: the issuance ceiling is the corridor UPPER when the
-            // project is token0 and the corridor LOWER when it is token1.
+            // the cashOutRate != 0 path, where the issuance-derived bound is aligned onto the issuance tick — so the
+            // ask leg is offered only strictly below the true issuance price and a spot at that price mints no asks.
+            // The opposite bound is the floor side; with no floor it sits one spacing away purely to keep the range
+            // non-empty (bids are empty when there is no terminal). Ordering-aware: the issuance ceiling is the
+            // corridor UPPER when the project is token0 and the corridor LOWER when it is token1.
             int24 issuanceTick = TickMath.getTickAtSqrtPrice(
                 getIssuanceRateSqrtPriceX96({
                     directory: directory,
