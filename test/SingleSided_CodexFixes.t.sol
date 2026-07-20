@@ -186,9 +186,9 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
     }
 
     /// @notice Default harness ordering. With cashOutRate rounding to 0, the corridor's ceiling-side bound must equal
-    /// the aligned issuance tick, and a pool PRE-INITIALIZED at exactly that issuance price (spot == the ceiling) is
-    /// rejected as out-of-bounds — the cheapest manipulation that would single-side the initial liquidity at the
-    /// ceiling.
+    /// the aligned issuance tick. A pool PRE-INITIALIZED at exactly that issuance price (spot == the ceiling) leaves no
+    /// room to offer asks, and this project holds no terminal to offer as bids, so nothing is deployable — the deploy
+    /// refuses legibly and the accumulated tokens wait rather than being sold at the ceiling.
     function test_Finding3_ZeroCashOut_CeilingIsIssuanceTick_DefaultOrdering() public {
         store.setSurplus(PROJECT_ID, 0);
 
@@ -201,11 +201,11 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         // The ceiling bound sits on the aligned issuance tick (within one alignment step), not one spacing past it.
         assertLt(_absTick(ceilingBound, issuanceTick), TICK_SPACING(), "ceiling anchors on the issuance tick");
 
-        // Pre-initialize the pool at exactly the issuance ceiling; the deploy must reject the boundary spot.
+        // Pre-initialize the pool at exactly the issuance ceiling; with nothing to bid with, nothing is deployable.
         positionManager.initializePool(_poolKey(), TickMath.getSqrtPriceAtTick(ceilingBound));
         _accumulateTokens(PROJECT_ID, 0.5e18);
         vm.prank(owner);
-        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot.selector);
         hook.deployPool(PROJECT_ID);
     }
 

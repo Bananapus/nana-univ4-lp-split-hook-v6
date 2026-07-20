@@ -306,6 +306,9 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         });
     }
 
+    /// @notice A pool pre-initialized past the CASH-OUT FLOOR side of the band is rejected outright: an LP sited there
+    /// would sell the project's tokens into the manipulated price. The terminal is native ETH, so the project sorts as
+    /// currency1 and the floor is the band's upper tick.
     function test_fork_deployPool_existingPoolOutsideBand_reverts() public {
         address projToken = address(projectToken);
         Currency termCurrency = Currency.wrap(address(0)); // native ETH
@@ -319,7 +322,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
             tickSpacing: hook.TICK_SPACING(),
             hooks: hook.oracleHook()
         });
-        uint160 externalSqrtPrice = TickMath.getSqrtPriceAtTick(int24(88_000));
+        uint160 externalSqrtPrice = TickMath.getSqrtPriceAtTick(int24(800_000));
         V4_POSITION_MANAGER.initializePool(key, externalSqrtPrice);
         PoolId poolId = key.toId();
         (uint160 sqrtPriceBefore,,,) = V4_POOL_MANAGER.getSlot0(poolId);

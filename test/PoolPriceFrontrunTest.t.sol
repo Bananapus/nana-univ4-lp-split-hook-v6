@@ -9,8 +9,9 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 
 /// @notice Tests for the pool price frontrunning mitigation.
-/// @dev Validates that `_createAndInitializePool` rejects pre-initialized pools with prices
-///      outside the project's economic tick range (cashout floor to issuance ceiling).
+/// @dev Validates that `_createAndInitializePool` rejects a pre-initialized price past the CASH-OUT FLOOR side of the
+///      project's economic tick range, and that a price past the ISSUANCE CEILING side — which is accepted, since
+///      rejecting it would strand an empty pool forever — still never mints a position at the attacker's price.
 contract PoolPriceFrontrunTest is LPSplitHookV4TestBase {
     /// @notice Build the PoolKey matching what the hook would construct internally.
     function _buildPoolKey() internal view returns (PoolKey memory) {
@@ -36,36 +37,76 @@ contract PoolPriceFrontrunTest is LPSplitHookV4TestBase {
         positionManager.initializePool(key, sqrtPriceX96);
     }
 
+    /// @notice A tick far past the project's CASH-OUT FLOOR. Ordering-aware: the floor is the band's lower bound when
+    /// the project sorts as currency0 and its upper bound when it sorts as currency1.
+    function _beyondFloorTick() internal view returns (int24 tick) {
+        return address(projectToken) < address(terminalToken) ? int24(-400_000) : int24(400_000);
+    }
+
+    /// @notice A tick far past the project's ISSUANCE CEILING (the opposite side of `_beyondFloorTick`).
+    function _beyondCeilingTick() internal view returns (int24 tick) {
+        return address(projectToken) < address(terminalToken) ? int24(400_000) : int24(-400_000);
+    }
+
+    /// @notice The most extreme price on the cash-out-floor side of the band.
+    function _extremeFloorSidePrice() internal view returns (uint160 sqrtPriceX96) {
+        return
+            address(projectToken) < address(terminalToken) ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1;
+    }
+
+    /// @notice The most extreme price on the issuance-ceiling side of the band.
+    function _extremeCeilingSidePrice() internal view returns (uint160 sqrtPriceX96) {
+        return
+            address(projectToken) < address(terminalToken) ? TickMath.MAX_SQRT_PRICE - 1 : TickMath.MIN_SQRT_PRICE + 1;
+    }
+
     // ─────────────────────────────────────────────────────────────────────
-    // 1. Extreme low price (near MIN_SQRT_PRICE) → reverts
+    // 1. Extreme price past the cash-out floor → reverts
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice An attacker front-runs pool creation with MIN_SQRT_PRICE + 1. deployPool must revert.
-    function test_FrontrunWithExtremelyLowPrice_Reverts() public {
+    /// @notice An attacker front-runs pool creation with the most extreme price on the cash-out-floor side, where an
+    /// LP sited at the extreme would sell the project's tokens into the manipulated price. deployPool must revert.
+    function test_FrontrunWithExtremeFloorSidePrice_Reverts() public {
         // Accumulate tokens so deployPool has something to work with.
         _accumulateTokens(PROJECT_ID, 1000e18);
 
-        // Attacker front-runs: initialize pool at near-minimum price.
-        uint160 extremelyLowPrice = TickMath.MIN_SQRT_PRICE + 1;
-        _frontrunPoolInit(extremelyLowPrice);
+        _frontrunPoolInit(_extremeFloorSidePrice());
 
-        // deployPool should revert because the price is outside the tick bounds.
+        // deployPool should revert because the price is past the floor side of the tick bounds.
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
         hook.deployPool(PROJECT_ID);
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 2. Extreme high price (near MAX_SQRT_PRICE) → reverts
+    // 2. Extreme price past the issuance ceiling → accepted, but nothing to deploy
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice An attacker front-runs pool creation with MAX_SQRT_PRICE - 1. deployPool must revert.
-    function test_FrontrunWithExtremelyHighPrice_Reverts() public {
+    /// @notice An attacker front-runs with the most extreme price on the issuance-ceiling side. That side is accepted
+    /// — rejecting it would strand the pair forever, since an empty pool can never trade its price back — but the
+    /// hook
+    /// only ever bids up to the issuance ceiling, and with no terminal held there is nothing to bid with. The deploy
+    /// refuses legibly instead of minting anything at the attacker's price.
+    function test_FrontrunWithExtremeCeilingSidePrice_RefusesLegibly() public {
         _accumulateTokens(PROJECT_ID, 1000e18);
 
-        // Attacker front-runs: initialize pool at near-maximum price.
-        uint160 extremelyHighPrice = TickMath.MAX_SQRT_PRICE - 1;
-        _frontrunPoolInit(extremelyHighPrice);
+        _frontrunPoolInit(_extremeCeilingSidePrice());
+
+        vm.prank(owner);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot.selector);
+        hook.deployPool(PROJECT_ID);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // 3. Price well past the cash-out floor tick → reverts
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// @notice A price well past the project's economic floor tick reverts.
+    function test_FrontrunWithPriceBeyondFloor_Reverts() public {
+        _accumulateTokens(PROJECT_ID, 1000e18);
+
+        // The project has surplus=0.5e18, weight=1000e18, firstWeight=1000e18; this tick sits far outside the band.
+        _frontrunPoolInit(TickMath.getSqrtPriceAtTick(_beyondFloorTick()));
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
@@ -73,38 +114,18 @@ contract PoolPriceFrontrunTest is LPSplitHookV4TestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 3. Price slightly below the tick lower bound → reverts
+    // 4. Price well past the issuance ceiling tick → accepted, but nothing to deploy
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice A price just below the project's economic floor tick reverts.
-    function test_FrontrunWithPriceBelowTickLower_Reverts() public {
+    /// @notice A price well past the project's issuance ceiling leaves no room for asks, and with no terminal held
+    /// there are no bids to place either, so the deploy refuses legibly.
+    function test_FrontrunWithPriceBeyondCeiling_RefusesLegibly() public {
         _accumulateTokens(PROJECT_ID, 1000e18);
 
-        // We need a price that's just outside the project's tick bounds.
-        // The project has surplus=0.5e18, weight=1000e18, firstWeight=1000e18.
-        // Use a very low price (tick far below the cashout floor).
-        uint160 lowPrice = TickMath.getSqrtPriceAtTick(-400_000);
-        _frontrunPoolInit(lowPrice);
+        _frontrunPoolInit(TickMath.getSqrtPriceAtTick(_beyondCeilingTick()));
 
         vm.prank(owner);
-        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
-        hook.deployPool(PROJECT_ID);
-    }
-
-    // ─────────────────────────────────────────────────────────────────────
-    // 4. Price slightly above the tick upper bound → reverts
-    // ─────────────────────────────────────────────────────────────────────
-
-    /// @notice A price just above the project's economic ceiling tick reverts.
-    function test_FrontrunWithPriceAboveTickUpper_Reverts() public {
-        _accumulateTokens(PROJECT_ID, 1000e18);
-
-        // Use a very high price (tick far above the issuance ceiling).
-        uint160 highPrice = TickMath.getSqrtPriceAtTick(400_000);
-        _frontrunPoolInit(highPrice);
-
-        vm.prank(owner);
-        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot.selector);
         hook.deployPool(PROJECT_ID);
     }
 
@@ -178,7 +199,9 @@ contract PoolPriceFrontrunTest is LPSplitHookV4TestBase {
     // 7. Fuzz: random extreme prices are rejected
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice Fuzz test: any price at MIN_SQRT_PRICE (absolute minimum) reverts.
+    /// @notice Fuzz test: no extreme pre-initialized price ever mints a position. A price past the cash-out floor is
+    /// rejected outright; one past the issuance ceiling is accepted but leaves nothing deployable while the hook holds
+    /// no terminal, so either way the deploy refuses and the project can retry later.
     function test_Fuzz_ExtremePricesRevert(uint160 randomPrice) public {
         // Bound to extreme ranges: either very low or very high.
         // Skip the middle range which might be valid.
@@ -191,8 +214,18 @@ contract PoolPriceFrontrunTest is LPSplitHookV4TestBase {
         _frontrunPoolInit(randomPrice);
 
         vm.prank(owner);
-        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
-        hook.deployPool(PROJECT_ID);
+        (bool succeeded, bytes memory returnData) =
+            address(hook).call(abi.encodeCall(JBUniswapV4LPSplitHook.deployPool, (PROJECT_ID)));
+
+        assertFalse(succeeded, "an extreme pre-initialized price must never mint a position");
+        assertEq(
+            bytes4(returnData) == JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector
+                || bytes4(returnData)
+                    == JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot.selector,
+            true,
+            "the refusal must name the floor-side rejection or the nothing-deployable condition"
+        );
+        assertFalse(hook.hasDeployedPool(PROJECT_ID), "the project can retry once the price is back in the band");
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -204,8 +237,8 @@ contract PoolPriceFrontrunTest is LPSplitHookV4TestBase {
     function test_FrontrunRevert_DoesNotMarkAsDeployed() public {
         _accumulateTokens(PROJECT_ID, 1000e18);
 
-        // Attacker front-runs with extreme price.
-        _frontrunPoolInit(TickMath.MIN_SQRT_PRICE + 1);
+        // Attacker front-runs with an extreme price past the cash-out floor.
+        _frontrunPoolInit(_extremeFloorSidePrice());
 
         // deployPool reverts.
         vm.prank(owner);

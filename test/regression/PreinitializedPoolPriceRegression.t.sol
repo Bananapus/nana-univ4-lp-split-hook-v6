@@ -124,8 +124,9 @@ contract RegressionPreinitializedPoolPriceRegression is LPSplitHookV4TestBase {
         });
     }
 
-    /// @notice Pre-initialized pool at an out-of-bounds price now causes a revert,
-    ///         protecting against frontrunning attacks that set extreme prices.
+    /// @notice A pool pre-initialized past the project's issuance ceiling never mints liquidity at the attacker's
+    ///         price: with no terminal tokens to offer as bids there is nothing deployable, so the deploy refuses with
+    ///         NoDeployableLiquidityAtSpot and the accumulated tokens keep waiting.
     function test_preinitializedPoolAtUnexpectedPrice_Reverts() public {
         uint256 totalProjectTokens = 100e18;
         _accumulateTokens(PROJECT_ID, totalProjectTokens);
@@ -153,8 +154,10 @@ contract RegressionPreinitializedPoolPriceRegression is LPSplitHookV4TestBase {
         positionManager.initializePool(key, attackerSqrtPrice);
 
         vm.prank(owner);
-        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot.selector);
         hook.deployPool(PROJECT_ID);
+
+        assertFalse(hook.hasDeployedPool(PROJECT_ID), "no position is minted at the attacker's price");
     }
 
     function test_preinitializedPoolWithinBandAcceptedByDeployment() public {

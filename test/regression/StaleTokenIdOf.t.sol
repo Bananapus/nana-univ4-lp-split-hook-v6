@@ -24,8 +24,8 @@ contract StaleTokenIdOfTest is LPSplitHookV4TestBase {
         controller.setWeight(PROJECT_ID, 900e18);
     }
 
-    /// @notice When rebalance would yield zero liquidity, it now reverts with ZeroLiquidity.
-    ///         This prevents the state inconsistency that would brick the project.
+    /// @notice When the project holds nothing to deploy on either leg, rebalance reverts with
+    ///         NoDeployableLiquidityAtSpot. This prevents the state inconsistency that would brick the project.
     function test_rebalance_zeroLiquidity_reverts() public {
         // Drain all tokens from the mock PositionManager so burn's TAKE_PAIR sends 0
         uint256 pmProjectBal = projectToken.balanceOf(address(positionManager));
@@ -49,7 +49,7 @@ contract StaleTokenIdOfTest is LPSplitHookV4TestBase {
 
         // Rebalance now reverts instead of zeroing tokenIdOf
         vm.prank(owner);
-        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ZeroLiquidity.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot.selector);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         // tokenIdOf should remain unchanged (revert rolled back state)

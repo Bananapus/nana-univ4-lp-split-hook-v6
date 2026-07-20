@@ -14,8 +14,10 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
 /// @notice `deployPool` and `addLiquidity` are fully permissionless — the weight-decay owner gate is gone. The only
-/// gate is economic: seeding/extending reverts `SpotAboveCeilingAtSeed` once the pool's spot has reached the project's
-/// issuance-price (ceiling) tick, since there is then no live corridor for asks to fill.
+/// gate is economic: the hook offers project tokens as asks only between the spot and the project's issuance-price
+/// (ceiling) tick, so once the spot reaches the ceiling the asks have nowhere left to sit. Seeding/extending then
+/// deploys a bid-only position from the project's own terminal, or reverts `NoDeployableLiquidityAtSpot` when there is
+/// no terminal to bid with.
 contract SingleSided_PermissionlessGateTest is LPSplitHookV4TestBase {
     using PoolIdLibrary for PoolKey;
 
@@ -95,9 +97,10 @@ contract SingleSided_PermissionlessGateTest is LPSplitHookV4TestBase {
         assertNotEq(secondId, firstId, "the extend consolidates into a fresh position");
     }
 
-    /// @notice `addLiquidity` reverts `SpotAboveCeilingAtSeed` once the spot has reached the issuance ceiling, even for
-    /// a permissionless caller — there is no live corridor for asks to fill.
-    function test_AddLiquidity_RevertsWhenSpotAtCeiling() public {
+    /// @notice `addLiquidity` reverts `NoDeployableLiquidityAtSpot` once the spot has reached the issuance ceiling and
+    /// the project holds no terminal to offer as bids: there is no corridor left for asks to fill, and nothing to bid
+    /// with. The accumulated project tokens wait until the issuance price rises or the spot falls.
+    function test_AddLiquidity_RevertsWhenSpotAtCeilingWithNothingToBidWith() public {
         store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
         _accumulateTokens(PROJECT_ID, 1e18);
         vm.prank(STRANGER);
@@ -115,7 +118,7 @@ contract SingleSided_PermissionlessGateTest is LPSplitHookV4TestBase {
         _setSpotTick(ceilingTick);
 
         vm.prank(STRANGER);
-        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_SpotAboveCeilingAtSeed.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot.selector);
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
     }
 }

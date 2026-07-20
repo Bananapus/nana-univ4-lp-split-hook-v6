@@ -62,8 +62,9 @@ import {JBUniswapV4LPSplitHookMath} from "./libraries/JBUniswapV4LPSplitHookMath
 /// @dev Each clone manages exactly one Uniswap V4 pool per project (one terminal-token pairing). `deployPool`,
 /// `addLiquidity`, `rebalanceLiquidity`, and `collectAndRouteLPFees` are permissionless — anyone may call them —
 /// with
-/// abuse bounded by economic gates (a seed/add reverts once spot reaches the issuance ceiling) and an oracle-TWAP
-/// deviation guard. The pool uses a 1% fee tier, 200-tick spacing, and a shared oracle hook for TWAP observations.
+/// abuse bounded by economic gates (asks reach no further than the issuance ceiling, bids no further than the
+/// cash-out floor) and an oracle-TWAP deviation guard. The pool uses a 1% fee tier, 200-tick spacing, and a shared
+/// oracle hook for TWAP observations.
 /// @dev Every state-changing external entry point that can reach an external call (terminal `pay`/`addToBalanceOf`,
 /// controller `claimTokensFor`/`transferCreditsFrom`, or the Uniswap V4 PositionManager) is guarded with
 /// solady's `ReentrancyGuard.nonReentrant`. Guarded functions never call each other externally (via `this.`) —
@@ -98,8 +99,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         int24 currentTickLower, int24 currentTickUpper, int24 newTickLower, int24 newTickUpper
     );
 
-    /// @notice Thrown when a pre-initialized pool's price falls outside the project's economic tick range.
-    /// @dev This prevents frontrunning attacks where an attacker initializes the pool at an extreme price.
+    /// @notice Thrown when a pre-initialized pool's price sits at or past the CASH-OUT FLOOR side of the project's
+    /// economic tick range.
+    /// @dev This prevents frontrunning attacks where an attacker initializes the pool at an extreme price and the
+    /// hook's asks would sell the project's tokens into it. The issuance-ceiling side is accepted instead: the
+    /// position minted there is bid-only and capped at the ceiling, and rejecting it would strand the pair forever.
     error JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds(
         uint160 existingPrice, uint160 lowerBound, uint160 upperBound
     );
@@ -128,6 +132,17 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// against.
     error JBUniswapV4LPSplitHook_InvalidTerminalToken(uint256 projectId, address terminalToken);
 
+    /// @notice Thrown when the pool's live spot leaves nothing for the hook to deploy: no aligned ask leg between the
+    /// spot and the issuance ceiling (or no project tokens to fill one), AND no terminal tokens to offer as bids
+    /// between the spot and the cash-out floor (or no aligned bid leg for them).
+    /// @dev This is EXPECTED behavior, not a failure to repair. The hook never offers project tokens below the
+    /// issuance price, so a spot at or past the issuance ceiling correctly leaves the accumulated project tokens
+    /// undeployed. They stay in `accumulatedProjectTokens` and deploy on a later call, once the issuance price rises
+    /// (the ceiling moves up) or the pool's spot falls back into the corridor.
+    error JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot(
+        int24 spotTick, int24 ceilingTick, uint256 projectAmount, uint256 terminalAmount
+    );
+
     /// @notice Thrown when the split hook context names a hook other than this one, so the split was not routed here.
     error JBUniswapV4LPSplitHook_NotHookSpecifiedInContext(address expectedHook, address actualHook);
 
@@ -153,13 +168,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     error JBUniswapV4LPSplitHook_SplitSenderNotValidControllerOrTerminal(
         uint256 projectId, address sender, address controller
     );
-
-    /// @notice Thrown when a seed/extend (deploy or add) — or a rebalance — is attempted while the pool's live spot
-    /// has
-    /// already reached or passed the project's issuance-price (ceiling) tick, so there is no live corridor below the
-    /// ceiling for asks to fill and the adaptive ask range would be empty/inverted. Only seed/extend when asks below
-    /// the ceiling are fillable.
-    error JBUniswapV4LPSplitHook_SpotAboveCeilingAtSeed(int24 spotTick, int24 ceilingTick);
 
     /// @notice Thrown when a temporary Permit2 allowance granted for an operation is not fully consumed by it.
     error JBUniswapV4LPSplitHook_TemporaryAllowanceNotConsumed(address token, address spender, uint256 allowance);
@@ -501,8 +509,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// liquidity, minted as a single-sided ask position spanning from the pool's live price out to the project's
     /// issuance/cash-out corridor — the same executor `deployPool` uses. The add is rejected if the pool's spot price
     /// has deviated from the oracle TWAP, bounding sandwich/JIT manipulation of the mint range. Permissionless: anyone
-    /// may call it. Abuse is bounded by the economic gate (the mint reverts once spot reaches the issuance ceiling) and
-    /// the oracle-TWAP deviation guard.
+    /// may call it. Abuse is bounded by the economic gate (asks only reach up to the issuance ceiling, bids only down
+    /// to the cash-out floor) and the oracle-TWAP deviation guard.
     /// @param projectId The ID of the project whose accumulated tokens should be added as liquidity.
     /// @param terminalToken The terminal token paired with the project token in the deployed pool.
     function addLiquidity(uint256 projectId, address terminalToken) external nonReentrant {
@@ -515,8 +523,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
 
         // Fetch the controller and current ruleset once; both feed the corridor math. `addLiquidity` is fully
-        // permissionless: the only gate is the economic one applied inside the mint executor (revert when the pool's
-        // spot has already reached the issuance ceiling, so there is no live corridor for asks to fill).
+        // permissionless: the only gate is the economic one applied inside the mint executor (asks reach no further
+        // than the issuance ceiling and bids no further than the cash-out floor, so a spot that leaves no room for
+        // asks extends the position as bids alone).
         address controller = _controllerOf(projectId);
         (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
 
@@ -611,13 +620,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Create the Uniswap V4 pool and mint the initial LP position as a single-sided ask of the project's
     /// accumulated reserved tokens. Permissionless: anyone may seed the pool. Abuse is bounded by the economic gate
-    /// (the seed reverts once spot reaches the issuance ceiling) and, for an already-initialized pool, the oracle-TWAP
-    /// deviation guard.
+    /// (asks only reach up to the issuance ceiling, bids only down to the cash-out floor) and, for an
+    /// already-initialized pool, the oracle-TWAP deviation guard.
     /// @param projectId The ID of the project whose accumulated tokens should be deployed as LP.
     function deployPool(uint256 projectId) external nonReentrant {
         // `deployPool` is fully permissionless: anyone may seed the pool. The only gate is the economic one applied
-        // inside the mint executor — the seed reverts if the pool's live spot has already reached the project's
-        // issuance ceiling, so a pool can only be seeded while there is a live corridor for asks to fill.
+        // inside the mint executor — the seeded range never offers project tokens below the issuance price, so a spot
+        // that has already reached the ceiling seeds bids alone.
         address controller = _controllerOf(projectId);
         (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
 
@@ -810,8 +819,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         // Burn the live position and re-mint ONE adaptive position across the fresh corridor, folding in recovered
         // tokens and any hook-held credits. Asks (project) are anchored to the full project balance up to the ceiling;
-        // the bid bound is solved from the recovered/accrued terminal (clamped at the corridor floor). The economic
-        // spot-below-ceiling gate is applied inside `_consolidateAndReMint`, so an inverted corridor reverts here too.
+        // the bid bound is solved from the recovered/accrued terminal (clamped at the corridor floor). A spot that
+        // leaves no room for asks re-mints as bids alone, which is where the position lands once the asks have filled.
         _consolidateAndReMint({
             projectId: projectId,
             projectToken: projectToken,
@@ -884,18 +893,28 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         accumulatedProjectTokens[projectId] += amount;
     }
 
-    /// @notice Compute the adaptive `[tickLower, tickUpper]` range and mintable liquidity for ONE position spanning the
-    /// live spot, given the held project/terminal amounts. The ask leg (project-token-only, from spot out to the
-    /// issuance ceiling) is anchored to the ENTIRE project balance, so asks are never starved by a scarce terminal.
-    /// The bid leg (terminal-token-only, from spot toward the cash-out floor) is sized by solving for the bound at
-    /// which the terminal balance exactly fills the leg at that same liquidity; if the terminal is so abundant that the
-    /// solved bound would fall past the floor, the bound is pinned at the floor and `bidAmountForMint < terminalAmount`
-    /// (the excess is routed to the project balance by the caller as a leftover, never stranded).
+    /// @notice Compute the adaptive `[tickLower, tickUpper]` range and mintable liquidity for ONE position, given the
+    /// held project/terminal amounts. The ask leg (project-token-only, from spot out to the issuance ceiling) is
+    /// anchored to the ENTIRE project balance, so asks are never starved by a scarce terminal. The bid leg
+    /// (terminal-token-only, from spot toward the cash-out floor) is sized by solving for the bound at which the
+    /// terminal balance exactly fills the leg at that same liquidity; if the terminal is so abundant that the solved
+    /// bound would fall past the floor, the bound is pinned at the floor and `bidAmountForMint < terminalAmount` (the
+    /// excess is routed to the project balance by the caller as a leftover, never stranded).
     /// @dev Branches on token ordering — Uniswap's below-range/above-range single-sided rule flips with which
     /// currency
     /// the project token is, so the ask leg is ABOVE spot when the project is token0 and BELOW spot when it is token1.
-    /// The caller MUST have already rejected a spot at/past the issuance ceiling (`_requireSpotBelowCeiling`), which
-    /// guarantees a non-empty ask leg here.
+    /// @dev Three regimes, in order:
+    /// 1. Ask room (project tokens held AND a spot strictly inside the ceiling): the ask-anchored solve above. When
+    /// the solved bid bound aligns onto the ceiling tick — the spot sits within one spacing of it — the range is
+    /// clamped to keep a one-spacing leg rather than collapsing to zero width.
+    /// 2. Bid-only (no project tokens, or a spot at/past the ceiling, or a collapsed leg with no terminal to pair
+    /// across it): liquidity anchors to the TERMINAL amount over the bid leg alone, which is where the position
+    /// naturally lands once the asks have filled and converted the hook's holdings to terminal. The bid leg is capped
+    /// at the issuance ceiling, so the hook never bids above the issuance price. Any project tokens contribute zero
+    /// and are carried back to the accumulation ledger by the caller.
+    /// 3. Neither: revert `JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot` — the holdings wait for the corridor
+    /// or
+    /// the spot to move.
     /// @param projectIsToken0 Whether the project token sorts as Uniswap currency0.
     /// @param corridorLower The lower (raw-ascending) bound of the project's economic corridor.
     /// @param corridorUpper The upper (raw-ascending) bound of the project's economic corridor.
@@ -918,72 +937,107 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         pure
         returns (int24 tickLower, int24 tickUpper, uint256 bidAmountForMint)
     {
+        int24 spotTick = TickMath.getTickAtSqrtPrice(sqrtSpotX96);
+
         if (projectIsToken0) {
             // Project is token0: asks (token0) sit ABOVE spot, up to the issuance ceiling (the corridor's UPPER tick).
             // Bids (token1 = terminal) sit BELOW spot, down toward the cash-out floor (the corridor's LOWER tick).
             int24 ceilingTick = corridorUpper;
             int24 floorTick = corridorLower;
-            uint160 sqrtCeiling = TickMath.getSqrtPriceAtTick(ceilingTick);
-            uint160 sqrtFloor = TickMath.getSqrtPriceAtTick(floorTick);
 
-            // Anchor liquidity to the ask leg so the ENTIRE project balance deploys across [spot, ceiling].
-            uint128 liquidity = LiquidityAmounts.getLiquidityForAmount0({
-                sqrtPriceAX96: sqrtSpotX96, sqrtPriceBX96: sqrtCeiling, amount0: projectAmount
-            });
+            // Ask-anchored geometry, while there are project tokens to offer and a spot strictly inside the ceiling.
+            if (projectAmount != 0 && spotTick < ceilingTick) {
+                uint160 sqrtCeiling = TickMath.getSqrtPriceAtTick(ceilingTick);
 
-            tickUpper = ceilingTick;
-
-            // Terminal the full bid leg [floor, spot] can absorb at that liquidity.
-            uint256 maxBid = liquidity == 0
-                ? 0
-                : SqrtPriceMath.getAmount1Delta({
-                    sqrtPriceAX96: sqrtFloor, sqrtPriceBX96: sqrtSpotX96, liquidity: liquidity, roundUp: false
+                // Anchor liquidity to the ask leg so the ENTIRE project balance deploys across [spot, ceiling].
+                uint128 liquidity = LiquidityAmounts.getLiquidityForAmount0({
+                    sqrtPriceAX96: sqrtSpotX96, sqrtPriceBX96: sqrtCeiling, amount0: projectAmount
                 });
 
-            if (terminalAmount >= maxBid) {
-                // Terminal is abundant: pin the bid bound at the floor; only `maxBid` is paired, the rest is a
-                // leftover.
-                tickLower = floorTick;
-                bidAmountForMint = maxBid;
-            } else {
-                // Solve the bid bound X where the terminal exactly fills [X, spot]: sqrt(X) = sqrt(spot) - T/L.
-                uint160 sqrtBid = SqrtPriceMath.getNextSqrtPriceFromAmount1RoundingDown({
-                    sqrtPX96: sqrtSpotX96, liquidity: liquidity, amount: terminalAmount, add: false
-                });
-                // Align the bid bound INWARD (up) so the paired range never demands more terminal than is held.
-                tickLower = JBLPSplitHookHelpers.alignTickToSpacingCeil({
-                    tick: TickMath.getTickAtSqrtPrice(sqrtBid), spacing: TICK_SPACING
-                });
-                if (tickLower < floorTick) tickLower = floorTick;
-                bidAmountForMint = terminalAmount;
+                tickUpper = ceilingTick;
+
+                // Terminal the full bid leg [floor, spot] can absorb at that liquidity.
+                uint256 maxBid = liquidity == 0
+                    ? 0
+                    : SqrtPriceMath.getAmount1Delta({
+                        sqrtPriceAX96: TickMath.getSqrtPriceAtTick(floorTick),
+                        sqrtPriceBX96: sqrtSpotX96,
+                        liquidity: liquidity,
+                        roundUp: false
+                    });
+
+                if (terminalAmount >= maxBid) {
+                    // Terminal is abundant: pin the bid bound at the floor; only `maxBid` is paired, the rest is a
+                    // leftover.
+                    tickLower = floorTick;
+                    bidAmountForMint = maxBid;
+                } else {
+                    // Solve the bid bound X where the terminal exactly fills [X, spot]: sqrt(X) = sqrt(spot) - T/L.
+                    uint160 sqrtBid = SqrtPriceMath.getNextSqrtPriceFromAmount1RoundingDown({
+                        sqrtPX96: sqrtSpotX96, liquidity: liquidity, amount: terminalAmount, add: false
+                    });
+                    // Align the bid bound INWARD (up) so the paired range never demands more terminal than is held.
+                    tickLower = JBLPSplitHookHelpers.alignTickToSpacingCeil({
+                        tick: TickMath.getTickAtSqrtPrice(sqrtBid), spacing: TICK_SPACING
+                    });
+                    if (tickLower < floorTick) tickLower = floorTick;
+                    bidAmountForMint = terminalAmount;
+                }
+
+                // A spot within one spacing of the ceiling aligns the bid bound onto the ceiling itself. Keep a
+                // one-spacing leg for the asks to occupy; the held terminal pairs across the part of it below spot.
+                if (tickLower >= tickUpper && terminalAmount != 0) tickLower = tickUpper - TICK_SPACING;
+                if (tickLower < tickUpper) return (tickLower, tickUpper, bidAmountForMint);
             }
-        } else {
-            // Project is token1: mirror image. Asks (token1) sit BELOW spot down to the issuance ceiling (the
-            // corridor's LOWER tick). Bids (token0 = terminal) sit ABOVE spot, up toward the cash-out floor (the
-            // corridor's UPPER tick).
-            int24 ceilingTick = corridorLower;
-            int24 floorTick = corridorUpper;
-            uint160 sqrtCeiling = TickMath.getSqrtPriceAtTick(ceilingTick);
-            uint160 sqrtFloor = TickMath.getSqrtPriceAtTick(floorTick);
+
+            // Bid-only: anchor liquidity to the TERMINAL over the bid leg [floor, spot], capped at the ceiling so the
+            // hook never bids above the issuance price. Held project tokens contribute nothing and are carried back.
+            if (terminalAmount != 0) {
+                tickUpper = spotTick < ceilingTick
+                    ? JBLPSplitHookHelpers.alignTickToSpacing({tick: spotTick, spacing: TICK_SPACING})
+                    : ceilingTick;
+                if (tickUpper > floorTick) return (floorTick, tickUpper, terminalAmount);
+            }
+
+            revert JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot({
+                spotTick: spotTick,
+                ceilingTick: ceilingTick,
+                projectAmount: projectAmount,
+                terminalAmount: terminalAmount
+            });
+        }
+
+        // Project is token1: mirror image. Asks (token1) sit BELOW spot down to the issuance ceiling (the corridor's
+        // LOWER tick). Bids (token0 = terminal) sit ABOVE spot, up toward the cash-out floor (the corridor's UPPER
+        // tick).
+        int24 ceilingTickForToken1 = corridorLower;
+        int24 floorTickForToken1 = corridorUpper;
+
+        // Ask-anchored geometry, while there are project tokens to offer and a spot strictly inside the ceiling.
+        if (projectAmount != 0 && spotTick > ceilingTickForToken1) {
+            uint160 sqrtCeiling = TickMath.getSqrtPriceAtTick(ceilingTickForToken1);
 
             // Anchor liquidity to the ask leg so the ENTIRE project balance deploys across [ceiling, spot].
             uint128 liquidity = LiquidityAmounts.getLiquidityForAmount1({
                 sqrtPriceAX96: sqrtCeiling, sqrtPriceBX96: sqrtSpotX96, amount1: projectAmount
             });
 
-            tickLower = ceilingTick;
+            tickLower = ceilingTickForToken1;
 
             // Terminal the full bid leg [spot, floor] can absorb at that liquidity.
             uint256 maxBid = liquidity == 0
                 ? 0
                 : SqrtPriceMath.getAmount0Delta({
-                    sqrtPriceAX96: sqrtSpotX96, sqrtPriceBX96: sqrtFloor, liquidity: liquidity, roundUp: false
+                    sqrtPriceAX96: sqrtSpotX96,
+                    sqrtPriceBX96: TickMath.getSqrtPriceAtTick(floorTickForToken1),
+                    liquidity: liquidity,
+                    roundUp: false
                 });
 
             if (terminalAmount >= maxBid) {
                 // Terminal is abundant: pin the bid bound at the floor; only `maxBid` is paired, the rest is a
                 // leftover.
-                tickUpper = floorTick;
+                tickUpper = floorTickForToken1;
                 bidAmountForMint = maxBid;
             } else {
                 // Solve the bid bound Y where the terminal exactly fills [spot, Y] (removing token0 raises the price).
@@ -994,10 +1048,31 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 tickUpper = JBLPSplitHookHelpers.alignTickToSpacing({
                     tick: TickMath.getTickAtSqrtPrice(sqrtBid), spacing: TICK_SPACING
                 });
-                if (tickUpper > floorTick) tickUpper = floorTick;
+                if (tickUpper > floorTickForToken1) tickUpper = floorTickForToken1;
                 bidAmountForMint = terminalAmount;
             }
+
+            // A spot within one spacing of the ceiling aligns the bid bound onto the ceiling itself. Keep a
+            // one-spacing leg for the asks to occupy; the held terminal pairs across the part of it above spot.
+            if (tickUpper <= tickLower && terminalAmount != 0) tickUpper = tickLower + TICK_SPACING;
+            if (tickLower < tickUpper) return (tickLower, tickUpper, bidAmountForMint);
         }
+
+        // Bid-only: anchor liquidity to the TERMINAL over the bid leg [spot, floor], capped at the ceiling so the hook
+        // never bids above the issuance price. Held project tokens contribute nothing and are carried back.
+        if (terminalAmount != 0) {
+            tickLower = spotTick > ceilingTickForToken1
+                ? JBLPSplitHookHelpers.alignTickToSpacingCeil({tick: spotTick, spacing: TICK_SPACING})
+                : ceilingTickForToken1;
+            if (tickLower < floorTickForToken1) return (tickLower, floorTickForToken1, terminalAmount);
+        }
+
+        revert JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot({
+            spotTick: spotTick,
+            ceilingTick: ceilingTickForToken1,
+            projectAmount: projectAmount,
+            terminalAmount: terminalAmount
+        });
     }
 
     /// @notice Consolidate the project's holdings into ONE single-sided (asks-only) position spanning from the pool's
@@ -1528,24 +1603,16 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint256 projectAmount = accumulatedProjectTokens[projectId] + recoveredProject + claimedCredits;
         uint256 terminalAmount = recoveredTerminal + accumulatedTerminalTokens[projectId][terminalToken];
 
-        // Resolve token ordering once; it flips both the economic gate and the adaptive ask/bid geometry.
+        // Resolve token ordering once; it flips the adaptive ask/bid geometry.
         (address token0,) = _sortTokens({tokenA: projectToken, tokenB: Currency.unwrap(_toCurrency(terminalToken))});
         bool projectIsToken0 = projectToken == token0;
 
-        // Economic gate: only seed/extend/rebalance while the spot sits below the issuance ceiling, so asks below the
-        // ceiling are fillable. A spot at/past the ceiling would make the adaptive ask leg empty/inverted.
-        uint160 sqrtPriceX96 = _getSqrtPriceX96(key);
-        int24 spotTick = TickMath.getTickAtSqrtPrice(sqrtPriceX96);
-        _requireSpotBelowCeiling({
-            projectIsToken0: projectIsToken0,
-            corridorLower: corridorLower,
-            corridorUpper: corridorUpper,
-            spotTick: spotTick
-        });
-
         // Compute the adaptive position: asks anchored to the full project balance up to the ceiling, bid bound solved
         // from the terminal balance (clamped at the floor). `bidAmountForMint` is the terminal actually paired; any
-        // excess (when the bid bound pins at the floor) stays a leftover carried to the project balance below.
+        // excess (when the bid bound pins at the floor) stays a leftover carried to the project balance below. A spot
+        // that leaves no room for asks yields a bid-only position; one that leaves nothing deployable at all reverts
+        // `NoDeployableLiquidityAtSpot` and the holdings wait for the corridor or the spot to move.
+        uint160 sqrtPriceX96 = _getSqrtPriceX96(key);
         (int24 tickLower, int24 tickUpper, uint256 bidAmountForMint) = _adaptiveRange({
             projectIsToken0: projectIsToken0,
             corridorLower: corridorLower,
@@ -1681,13 +1748,20 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 ruleset: ruleset
             });
 
-            // Reject existing prices outside or AT the boundary of the project's valid range. Boundary equality is
-            // treated as out-of-bounds because a preinitialization at exactly `sqrtPriceAtTick(tickLower)` or
-            // `sqrtPriceAtTick(tickUpper)` is the cheapest manipulation that still passes a loose comparison and
-            // sites the LP at the extreme of the economic band, single-siding the initial liquidity.
+            // Reject an existing price at or beyond the CASH-OUT FLOOR side of the band, where an LP sited at the
+            // extreme would sell the project's tokens into a manipulated price. The ISSUANCE-CEILING side is accepted:
+            // a price at or past the issuance price is where the corridor naturally ends up once the asks have filled,
+            // and the position the hook then mints is bid-only and capped at the ceiling, so it can never be sited
+            // outside the economic band. Rejecting that side instead would permanently strand the pair — with no
+            // liquidity in the pool, nothing can trade the price back into the band, so the rejection never resolves.
+            // Ordering-aware: the issuance ceiling is the band's UPPER bound when the project is token0 and its LOWER
+            // bound when it is token1.
             uint160 sqrtPriceLower = TickMath.getSqrtPriceAtTick(tickLower);
             uint160 sqrtPriceUpper = TickMath.getSqrtPriceAtTick(tickUpper);
-            if (existingSqrtPriceX96 <= sqrtPriceLower || existingSqrtPriceX96 >= sqrtPriceUpper) {
+            bool outsideFloor = projectCurrency == currency0
+                ? existingSqrtPriceX96 <= sqrtPriceLower
+                : existingSqrtPriceX96 >= sqrtPriceUpper;
+            if (outsideFloor) {
                 revert JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds({
                     existingPrice: existingSqrtPriceX96, lowerBound: sqrtPriceLower, upperBound: sqrtPriceUpper
                 });
@@ -1927,33 +2001,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             amount1 = SqrtPriceMath.getAmount1Delta({
                 sqrtPriceAX96: sqrtA, sqrtPriceBX96: sqrtB, liquidity: liquidity, roundUp: false
             });
-        }
-    }
-
-    /// @notice Revert if the pool's live spot has reached or passed the project's issuance-price (ceiling) tick, so the
-    /// adaptive ask leg would be empty/inverted. Ordering-aware: the ceiling is the corridor's UPPER tick when the
-    /// project is token0 and its LOWER tick when the project is token1.
-    /// @param projectIsToken0 Whether the project token sorts as Uniswap currency0.
-    /// @param corridorLower The lower (raw-ascending) bound of the project's economic corridor.
-    /// @param corridorUpper The upper (raw-ascending) bound of the project's economic corridor.
-    /// @param spotTick The pool's live spot tick.
-    function _requireSpotBelowCeiling(
-        bool projectIsToken0,
-        int24 corridorLower,
-        int24 corridorUpper,
-        int24 spotTick
-    )
-        internal
-        pure
-    {
-        // Project is token0: asks fill upward toward `corridorUpper`; a spot at/above it leaves no room for asks.
-        // Project is token1: asks fill downward toward `corridorLower`; a spot at/below it leaves no room for asks.
-        if (projectIsToken0) {
-            if (spotTick >= corridorUpper) {
-                revert JBUniswapV4LPSplitHook_SpotAboveCeilingAtSeed({spotTick: spotTick, ceilingTick: corridorUpper});
-            }
-        } else if (spotTick <= corridorLower) {
-            revert JBUniswapV4LPSplitHook_SpotAboveCeilingAtSeed({spotTick: spotTick, ceilingTick: corridorLower});
         }
     }
 

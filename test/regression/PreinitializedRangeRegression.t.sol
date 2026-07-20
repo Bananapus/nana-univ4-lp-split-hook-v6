@@ -128,9 +128,10 @@ contract RegressionPreinitializedRangeRegression is LPSplitHookV4TestBase {
         vm.deal(address(terminal), 1000 ether);
     }
 
-    /// @notice A pool pre-initialized below the LP range now reverts with
-    ///         ExistingPoolPriceOutOfBounds, preventing single-sided out-of-range deployment.
-    function test_PreinitializedBelowRange_RevertsOutOfBounds() public {
+    /// @notice A pool pre-initialized below the LP range — past the issuance ceiling in this native-ETH ordering —
+    ///         holds no terminal for the hook to offer as bids, so nothing is deployable and the deploy refuses with
+    ///         NoDeployableLiquidityAtSpot rather than minting out-of-range single-sided liquidity.
+    function test_PreinitializedBelowRange_RefusesLegibly() public {
         uint256 totalProjectTokens = 100e18;
 
         _accumulateTokens(PROJECT_ID, totalProjectTokens);
@@ -149,7 +150,7 @@ contract RegressionPreinitializedRangeRegression is LPSplitHookV4TestBase {
         positionManager.initializePool(key, sqrtPriceBelowRange);
 
         vm.prank(owner);
-        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot.selector);
         hook.deployPool(PROJECT_ID);
     }
 }

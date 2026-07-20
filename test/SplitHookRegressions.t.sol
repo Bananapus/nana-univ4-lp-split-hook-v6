@@ -81,8 +81,8 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         assertNotEq(newTokenId, originalTokenId, "tokenId should change after authorized rebalance");
     }
 
-    /// @notice rebalanceLiquidity reverts with ZeroLiquidity when the new
-    ///         position would have zero liquidity (prevents bricking via tokenIdOf=0).
+    /// @notice rebalanceLiquidity reverts with NoDeployableLiquidityAtSpot when the project holds neither project
+    ///         tokens to offer as asks nor terminal tokens to offer as bids (prevents bricking via tokenIdOf=0).
     function test_H2_rebalance_zeroLiquidity_reverts() public {
         // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard and
         // reaches the zero-liquidity check.
@@ -111,7 +111,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
 
         // Should revert instead of zeroing tokenIdOf
         vm.prank(owner);
-        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ZeroLiquidity.selector);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot.selector);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         // tokenIdOf should remain unchanged (revert rolled back state)
