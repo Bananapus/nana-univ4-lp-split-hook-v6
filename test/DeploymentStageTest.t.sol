@@ -195,7 +195,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         vm.startPrank(address(controller));
         projectToken.approve(address(hook), amount);
         JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, amount);
-        hook.processSplitWith(context);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
 
         // Tokens should be accumulated
@@ -228,7 +228,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         vm.startPrank(address(controller));
         projectToken.approve(address(hook), newAmount);
         JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, newAmount);
-        hook.processSplitWith(context);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
 
         // The newly received tokens are accumulated, not burned.
@@ -260,7 +260,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         vm.startPrank(address(controller));
         projectToken.approve(address(hook), newAmount);
         JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, newAmount);
-        hook.processSplitWith(context);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
 
         assertEq(controller.burnCallCount(), burnCountAfterDeploy, "no burn should occur post-deploy");
@@ -346,7 +346,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         vm.startPrank(address(controller));
         projectToken.approve(address(hook), newAmount);
         JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, newAmount);
-        hook.processSplitWith(context);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
 
         // tokenId should remain the same (no second pool created)

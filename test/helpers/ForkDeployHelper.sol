@@ -50,6 +50,13 @@ import {MockGeomeanOracle} from "../mock/MockGeomeanOracle.sol";
 /// @notice Shared base contract for fork tests that deploy JB core from source.
 /// Eliminates the 18-way duplication of `_deployJBCore()` across fork test files.
 abstract contract ForkDeployHelper is Test {
+    /// @notice Gas cap that covers intake but sits below the hook's inline-automation attempt floor
+    /// (`_AUTOMATION_ATTEMPT_MIN_GAS` + `_AUTOMATION_GAS_RESERVE`), so accumulate helpers keep their
+    /// accumulate-only semantics: intake completes and automation skips, exactly like a distribution that arrives
+    /// without enough gas for inline automation. Tests that want inline automation call `processSplitWith` with full
+    /// gas themselves.
+    uint256 internal constant INTAKE_ONLY_GAS = 300_000;
+
     // ─── Canonical addresses
     IAllowanceTransfer constant PERMIT2 = IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3);
     address multisig = address(0xBEEF);

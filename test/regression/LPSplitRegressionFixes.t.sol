@@ -175,11 +175,12 @@ contract LPSplitRegressionFixes is LPSplitHookV4TestBase {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Credit-only splits strand — revert before accumulation
+    // Credit-only splits — unbacked claims revert before any ledger write
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice processSplitWith should revert with JBUniswapV4LPSplitHook_InvalidProjectId
-    ///         BEFORE updating accumulatedProjectTokens when the project has no ERC-20 token.
+    /// @notice For a project with no ERC-20 token, processSplitWith takes the credits path. When no credits were
+    ///         actually transferred to the hook (a lying controller), the backing check reverts with
+    ///         JBUniswapV4LPSplitHook_InsufficientBalance BEFORE any ledger write.
     function test_M41_fix_reverts_before_accumulate() public {
         // Verify the project has no ERC-20 token set.
         assertEq(address(jbTokens.tokenOf(NO_TOKEN_PROJECT_ID)), address(0), "precondition: no ERC-20 token");
@@ -204,12 +205,13 @@ contract LPSplitRegressionFixes is LPSplitHookV4TestBase {
             })
         });
 
-        // Call processSplitWith from the controller — should revert.
+        // Call processSplitWith from the controller — the unbacked credits claim must revert.
         vm.prank(address(controller));
-        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidProjectId.selector);
-        hook.processSplitWith(context);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientBalance.selector);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
 
-        // Accumulator should still be zero (revert happened before _accumulateTokens).
+        // Neither ledger may have been written (revert happened before any accounting).
         assertEq(hook.accumulatedProjectTokens(NO_TOKEN_PROJECT_ID), 0, "accumulator must remain zero after revert");
+        assertEq(hook.accumulatedProjectCredits(NO_TOKEN_PROJECT_ID), 0, "credit ledger must remain zero after revert");
     }
 }

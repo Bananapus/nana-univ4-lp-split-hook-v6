@@ -224,7 +224,7 @@ contract FeeProjectSelfBurnRegression is LPSplitHookV4TestBase {
         vm.startPrank(address(burningController));
         token.approve(address(hook), amount);
         JBSplitHookContext memory context = _buildContext(projectId, address(token), amount, 1);
-        hook.processSplitWith(context);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
     }
 

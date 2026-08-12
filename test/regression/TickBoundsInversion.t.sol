@@ -317,7 +317,9 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
         // Build context for the test project.
         vm.startPrank(address(controller));
         highProjectToken.approve(address(hook), accAmount);
-        hook.processSplitWith(_buildContext(TEST_PROJECT_ID, address(highProjectToken), accAmount, 1));
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(
+            _buildContext(TEST_PROJECT_ID, address(highProjectToken), accAmount, 1)
+        );
         vm.stopPrank();
 
         assertEq(hook.accumulatedProjectTokens(TEST_PROJECT_ID), accAmount, "Tokens should be accumulated");

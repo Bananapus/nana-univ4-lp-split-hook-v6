@@ -336,7 +336,7 @@ contract RegressionRegression is LPSplitHookV4TestBase {
             })
         });
 
-        hook.processSplitWith(context);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
     }
 }

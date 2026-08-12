@@ -157,7 +157,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         });
         vm.startPrank(address(jbController));
         IERC20(address(projectToken)).approve(address(hook), 100_000e18);
-        hook.processSplitWith(context);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
     }
 
@@ -213,7 +213,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         });
         vm.startPrank(address(jbController));
         IERC20(address(projectToken)).approve(address(hook), 50_000e18);
-        hook.processSplitWith(context);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
         // Post-deploy inflow accumulates for a later addLiquidity; the hook never burns.
         assertEq(
@@ -406,16 +406,18 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         vm.prank(multisig);
         jbController.queueRulesetsOf(projectId, newConfigs, "");
         vm.warp(block.timestamp + 3 days);
-        uint256 initialWeight = hook.initialWeightOf(projectId);
-        assertTrue(initialWeight > 0, "initialWeightOf should be set from setUp accumulation");
+        // `initialWeightOf` is recorded lazily on the first successful processing attempt, so it is still unset
+        // here; the decay is measured against the queued ruleset's undecayed weight instead.
+        assertEq(hook.initialWeightOf(projectId), 0, "initialWeightOf should be unset before the first processing");
         (JBRuleset memory currentRuleset,) = jbController.currentRulesetOf(projectId);
-        assertTrue(currentRuleset.weight * 10 <= initialWeight, "weight should have decayed >= 10x");
+        assertTrue(currentRuleset.weight * 10 <= newConfigs[0].weight, "weight should have decayed >= 10x");
         address randomUser = makeAddr("randomDeployer");
         vm.prank(randomUser);
         hook.deployPool(projectId);
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should be deployed by random user");
         uint256 tokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         assertTrue(tokenId != 0, "should hold a position NFT");
+        assertEq(hook.initialWeightOf(projectId), currentRuleset.weight, "weight should snapshot on first processing");
     }
 
     function test_fork_deployPool_permissionlessBeforeDecay() public {

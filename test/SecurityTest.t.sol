@@ -26,7 +26,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
         vm.expectPartialRevert(
             JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_SplitSenderNotValidControllerOrTerminal.selector
         );
-        hook.processSplitWith(context);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -57,7 +57,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
 
         vm.prank(address(controller));
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NotHookSpecifiedInContext.selector);
-        hook.processSplitWith(context);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -74,7 +74,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
 
         vm.prank(address(controller));
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_TerminalTokensNotAllowed.selector);
-        hook.processSplitWith(context);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -366,7 +366,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
         vm.startPrank(address(controller));
         projectToken.approve(address(hook), additionalAmount);
         JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, additionalAmount);
-        hook.processSplitWith(context);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
 
         // accumulatedProjectTokens should NOT increase (tokens were burned, not accumulated)

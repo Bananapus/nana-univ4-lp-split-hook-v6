@@ -129,7 +129,7 @@ contract NativeETHTest is LPSplitHookV4TestBase {
         // with the project token as the token field.
         vm.startPrank(address(controller));
         projectToken.approve(address(hook), accAmount);
-        hook.processSplitWith(_buildReservedContext(PROJECT_ID, accAmount));
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(_buildReservedContext(PROJECT_ID, accAmount));
         vm.stopPrank();
 
         // Verify accumulation was recorded
@@ -176,7 +176,7 @@ contract NativeETHTest is LPSplitHookV4TestBase {
 
         vm.startPrank(address(controller));
         projectToken.approve(address(hook), accAmount);
-        hook.processSplitWith(_buildReservedContext(PROJECT_ID, accAmount));
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(_buildReservedContext(PROJECT_ID, accAmount));
         vm.stopPrank();
 
         assertEq(hook.accumulatedProjectTokens(PROJECT_ID), accAmount);

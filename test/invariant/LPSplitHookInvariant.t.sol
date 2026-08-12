@@ -52,6 +52,11 @@ contract InvariantMockPermit2 {
 /// @dev The fuzzer calls functions on this handler. Each function mutates hook state
 ///      through the legitimate `processSplitWith` entry point.
 contract LPSplitHookHandler is Test {
+    /// @notice Gas cap that covers intake but sits below the hook's inline-automation attempt floor, keeping the
+    /// handler's accumulate actions accumulate-only (automation skips, exactly like a distribution arriving without
+    /// enough gas for it), so the invariants keep exercising the explicit deploy/add paths.
+    uint256 internal constant INTAKE_ONLY_GAS = 300_000;
+
     JBUniswapV4LPSplitHook public hook;
     MockERC20 public projectToken;
     MockERC20 public terminalToken;
@@ -133,7 +138,7 @@ contract LPSplitHookHandler is Test {
         // Call processSplitWith as the controller (the authorized caller).
         vm.startPrank(address(controller));
         projectToken.approve(address(hook), amount);
-        hook.processSplitWith(context);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
 
         callCount++;
@@ -163,7 +168,7 @@ contract LPSplitHookHandler is Test {
         });
 
         vm.prank(address(controller));
-        hook.processSplitWith(context);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
 
         callCount++;
     }

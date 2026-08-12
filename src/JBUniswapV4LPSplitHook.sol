@@ -190,6 +190,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// longer be safely settled in the new token.
     error JBUniswapV4LPSplitHook_UnclaimedFeeTokenChanged(address previousToken, address nextToken);
 
+    /// @notice Thrown when a reserved-token split arrives with native value attached. Reserved project tokens are
+    /// either credits or the project's ERC-20, never a terminal token, so no `msg.value` should ever ride along.
+    error JBUniswapV4LPSplitHook_UnexpectedMsgValue(uint256 value);
+
     /// @notice Thrown when the token amounts paired for a position yield zero liquidity.
     error JBUniswapV4LPSplitHook_ZeroLiquidity(uint256 amount0, uint256 amount1);
 
@@ -209,6 +213,16 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     //*********************************************************************//
     // ----------------------- internal constants ------------------------ //
     //*********************************************************************//
+
+    /// @notice The minimum gas an inline automation attempt is worth starting with. Below this, `processSplitWith`
+    /// skips automation entirely rather than burning the caller's gas on an attempt that cannot reach a mint.
+    /// @dev A deploy/add flow costs several hundred thousand gas (corridor math, oracle reads, Permit2, and the
+    /// PositionManager mint). The permissionless `deployPool`/`addLiquidity` retries are NOT bound by this floor.
+    uint256 internal constant _AUTOMATION_ATTEMPT_MIN_GAS = 500_000;
+
+    /// @notice The gas reserved for `processSplitWith` to finish (emit the failure event and return to the
+    /// Controller) after an inline automation attempt, successful or not.
+    uint256 internal constant _AUTOMATION_GAS_RESERVE = 64_000;
 
     /// @notice The slippage floor, out of `BPS`, applied to a burned position's contract-derived principal read.
     /// @dev When consolidating, the hook computes the position's current token amounts from its on-chain liquidity and
@@ -267,6 +281,14 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     // --------------------- public stored properties -------------------- //
     //*********************************************************************//
 
+    /// @notice The credit balance (project tokens with no ERC-20 deployed yet) currently accounted for each project.
+    /// @dev Core transfers reserved credits to the hook BEFORE invoking it, so `processSplitWith` accepts and
+    /// accounts them here rather than reverting (which would strand the already-transferred credits with no ledger).
+    /// No Uniswap work happens until the project deploys an ERC-20; `deployPool`/`addLiquidity` then normalize this
+    /// ledger into transferable tokens via `_claimHookCreditsFor` and deploy them as liquidity.
+    /// @custom:param projectId The ID of the project to get the currently accounted LP credit balance of.
+    mapping(uint256 projectId => uint256 accumulatedProjectCredits) public accumulatedProjectCredits;
+
     /// @notice The accumulated project-token balance currently held for each project before its first pool deployment.
     /// @dev `processSplitWith` accumulates project tokens here while the project is still in pre-deployment mode.
     /// Once a pool is deployed for a project, the project permanently transitions out of this accumulation path.
@@ -319,6 +341,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @dev This balance is denominated in the token stored in `claimableFeeTokenOf[projectId]`.
     /// @custom:param projectId The ID of the project to get the currently claimable fee-token balance of.
     mapping(uint256 projectId => uint256 claimableFeeTokens) public claimableFeeTokens;
+
+    /// @notice The terminal token the project's one supported pool was deployed against.
+    /// @dev Set once, after the pool deployment succeeds, so post-deployment inline automation can resolve the pool
+    /// pairing without re-running the terminal-token auto-selection. Never cleared: `hasDeployedPool` marks a one-way
+    /// transition and no lifecycle replaces the pool.
+    /// @custom:param projectId The ID of the project to get the deployed pool's terminal token of.
+    mapping(uint256 projectId => address terminalToken) public deployedTerminalTokenOf;
 
     /// @notice The percentage of LP fees routed to the fee project, in basis points (e.g. 3800 = 38%).
     uint256 public feePercent;
@@ -514,55 +543,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param projectId The ID of the project whose accumulated tokens should be added as liquidity.
     /// @param terminalToken The terminal token paired with the project token in the deployed pool.
     function addLiquidity(uint256 projectId, address terminalToken) external nonReentrant {
-        // Require a deployed pool for this project/terminal-token pair — `addLiquidity` only grows an existing pool.
-        uint256 activeTokenId = tokenIdOf[projectId][terminalToken];
-        if (activeTokenId == 0) {
-            revert JBUniswapV4LPSplitHook_InvalidStageForAction({
-                projectId: projectId, terminalToken: terminalToken, tokenId: activeTokenId
-            });
-        }
-
-        // Fetch the controller and current ruleset once; both feed the corridor math. `addLiquidity` is fully
-        // permissionless: the only gate is the economic one applied inside the mint executor (asks reach no further
-        // than the issuance ceiling and bids no further than the cash-out floor, so a spot that leaves no room for
-        // asks extends the position as bids alone).
-        address controller = _controllerOf(projectId);
-        (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
-
-        // Require a non-trivial accumulation so LP-fee dust (down to 1 wei carried into the ledger) cannot force a full
-        // fee-collect+burn+remint churn on every accrual. Dust keeps accruing until it crosses the threshold.
-        uint256 accumulated = accumulatedProjectTokens[projectId];
-        if (accumulated < _MIN_ADD_ACCUMULATION) {
-            revert JBUniswapV4LPSplitHook_AccumulationBelowThreshold({
-                projectId: projectId, accumulated: accumulated, threshold: _MIN_ADD_ACCUMULATION
-            });
-        }
-
-        // Resolve the project's ERC-20 and the pool key once for the TWAP guard and the mint below.
-        address projectToken = _tokenOf(projectId);
-        PoolKey memory key = poolKeysOf[projectId][terminalToken];
-
-        // Reject the add while the pool's spot price is off the oracle TWAP. Stops a JIT/sandwich attacker from
-        // shoving the pool price right before our add to make us mint at a manipulated range.
-        _requireSpotNearTwap({projectId: projectId, terminalToken: terminalToken, key: key});
-
-        // Mint another single-sided ask position from the accumulated project tokens — no funding cash-out.
-        _addSingleSidedLiquidity({
-            projectId: projectId,
-            projectToken: projectToken,
-            terminalToken: terminalToken,
-            controller: controller,
-            ruleset: ruleset
-        });
-
-        // Surface the resulting position id.
-        emit LiquidityAdded({
-            projectId: projectId,
-            terminalToken: terminalToken,
-            tokenId: tokenIdOf[projectId][terminalToken],
-            isNewPosition: true,
-            caller: msg.sender
-        });
+        _addLiquidity({projectId: projectId, terminalToken: terminalToken});
     }
 
     /// @notice Claims accumulated fee proceeds for `projectId` and sends them to `beneficiary`.
@@ -624,64 +605,23 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// already-initialized pool, the oracle-TWAP deviation guard.
     /// @param projectId The ID of the project whose accumulated tokens should be deployed as LP.
     function deployPool(uint256 projectId) external nonReentrant {
-        // `deployPool` is fully permissionless: anyone may seed the pool. The only gate is the economic one applied
-        // inside the mint executor — the seeded range never offers project tokens below the issuance price, so a spot
-        // that has already reached the ceiling seeds bids alone.
-        address controller = _controllerOf(projectId);
-        (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
-
-        // Auto-select the terminal token with the highest ETH-denominated value.
-        address terminalToken = JBUniswapV4LPSplitHookMath.findHighestValueTerminalTokenOf({
-            directory: IJBDirectory(DIRECTORY), projectId: projectId, controller: controller
-        });
-
-        if (tokenIdOf[projectId][terminalToken] != 0) {
-            revert JBUniswapV4LPSplitHook_PoolAlreadyDeployed({
-                projectId: projectId, terminalToken: terminalToken, tokenId: tokenIdOf[projectId][terminalToken]
-            });
-        }
-        if (hasDeployedPool[projectId]) {
-            revert JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported({
-                projectId: projectId, terminalToken: terminalToken
-            });
-        }
-
-        address projectToken = _tokenOf(projectId);
-        uint256 projectTokenBalance = accumulatedProjectTokens[projectId];
-
-        if (projectTokenBalance == 0) revert JBUniswapV4LPSplitHook_NoTokensAccumulated({projectId: projectId});
-
-        address terminal = _primaryTerminalOf({projectId: projectId, token: terminalToken});
-        if (terminal == address(0)) {
-            revert JBUniswapV4LPSplitHook_InvalidTerminalToken({projectId: projectId, terminalToken: terminalToken});
-        }
-
-        // Mark the project deployed before any external calls so a reentrant deployPool reverts (already deployed) and
-        // post-deploy inflows route to addLiquidity rather than re-entering this one-shot deploy path.
-        hasDeployedPool[projectId] = true;
-
-        _deployPoolAndAddLiquidity({
-            projectId: projectId,
-            projectToken: projectToken,
-            terminalToken: terminalToken,
-            controller: controller,
-            ruleset: ruleset
-        });
-
-        emit ProjectDeployed({
-            projectId: projectId,
-            terminalToken: terminalToken,
-            poolId: PoolId.unwrap(poolKeysOf[projectId][terminalToken].toId()),
-            caller: msg.sender
-        });
+        _deployPool(projectId);
     }
 
-    /// @notice Called by the Juicebox controller when reserved tokens are distributed to this hook's split. Tokens are
-    /// accumulated in escrow both before AND after pool deployment: pre-deploy, `deployPool` consumes the accumulation;
-    /// post-deploy, `addLiquidity` converts it into more liquidity. The hook never burns.
-    /// @dev Only accepts reserved-token splits (groupId == 1). Reverts if the sender is not the project's controller or
-    /// if the project has no ERC-20 token deployed.
+    /// @notice Called by the Juicebox controller when reserved tokens are distributed to this hook's split. The hook
+    /// FIRST durably accepts and accounts for the allocation (the project's ERC-20, or credits while the project has
+    /// no ERC-20), then best-effort attempts pool deployment or liquidity addition if enough gas remains. A failed
+    /// attempt cannot touch the accepted inventory: it stays in the ledgers, retryable through the permissionless
+    /// `deployPool`/`addLiquidity` entry points. The hook never burns.
+    /// @dev Only accepts reserved-token splits (groupId == 1) sent by the project's controller. Once intake has
+    /// accounted the allocation, nothing in this frame reverts: automation runs behind a gas-bounded self-call whose
+    /// failure is reported through `LiquidityAutomationFailed` (selector only — revert data is never copied
+    /// unbounded).
     function processSplitWith(JBSplitHookContext calldata context) external payable nonReentrant {
+        // Reserved project tokens are either credits or the project's ERC-20, never a terminal token — no native
+        // value should ever accompany this call.
+        if (msg.value != 0) revert JBUniswapV4LPSplitHook_UnexpectedMsgValue({value: msg.value});
+
         if (address(context.split.hook) != address(this)) {
             revert JBUniswapV4LPSplitHook_NotHookSpecifiedInContext({
                 expectedHook: address(this), actualHook: address(context.split.hook)
@@ -704,14 +644,26 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             revert JBUniswapV4LPSplitHook_TerminalTokensNotAllowed({groupId: context.groupId, requiredGroupId: 1});
         }
 
+        // The canonical project token is the asset authority — `context.token` is never trusted for resolution.
         address projectToken = _tokenOf(context.projectId);
 
-        // This hook requires an ERC-20 project token — credits cannot be paired as LP. Check before pulling tokens so
-        // internal accounting stays clean on revert.
+        // Credits-only project: Core transferred the credits to this hook BEFORE this call, so rejecting them would
+        // strand them here with no ledger. Account them instead; they normalize into ERC-20 LP principal once the
+        // project tokenizes. No Uniswap work is possible until then, so automation is skipped successfully.
         if (projectToken == address(0)) {
-            revert JBUniswapV4LPSplitHook_InvalidProjectId({
-                projectId: context.projectId, controller: controller, projectToken: projectToken
-            });
+            // Only grow the ledger when the hook's actual credit balance backs the prior LP credits, the new
+            // amount, AND any outstanding fee-credit liabilities for this project — a lying controller cannot
+            // inflate the ledger past what was really delivered.
+            uint256 creditBalance =
+                IJBTokens(TOKENS).creditBalanceOf({holder: address(this), projectId: context.projectId});
+            uint256 required = accumulatedProjectCredits[context.projectId] + context.amount
+                + _totalOutstandingFeeCreditClaims[context.projectId];
+            if (creditBalance < required) {
+                revert JBUniswapV4LPSplitHook_InsufficientBalance({available: creditBalance, required: required});
+            }
+
+            accumulatedProjectCredits[context.projectId] += context.amount;
+            return;
         }
 
         // Pull the allocated tokens from the controller via the granted allowance.
@@ -723,27 +675,15 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             received = IERC20(projectToken).balanceOf(address(this)) - balanceBefore;
         }
 
-        // Record the accumulation-era ruleset weight on first accumulation as a reference snapshot. Post-deployment
-        // this is already set, so the branch is a no-op.
-        if (initialWeightOf[context.projectId] == 0) {
-            (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(context.projectId);
-            initialWeightOf[context.projectId] = ruleset.weight;
-        }
-
         // Accumulate the received project tokens. This is the hook's only sink for reserved-token inflow, both before
         // AND after pool deployment — the hook never burns. Pre-deployment, `deployPool` consumes the accumulation;
         // post-deployment, `addLiquidity` does. Burning is a protocol-layer split-routing decision (route a split to
         // {projectId:0, hook:0, beneficiary:0xdead}), not this hook's job.
         _accumulateTokens({projectId: context.projectId, amount: received});
 
-        // Defense-in-depth: verify the actual ERC-20 balance (minus outstanding fee token claims) covers the
-        // accumulated total. Guards against accounting drift from custom controllers.
-        uint256 spendable = IERC20(projectToken).balanceOf(address(this)) - _unavailableFeeTokenBalance(projectToken);
-        if (spendable < accumulatedProjectTokens[context.projectId]) {
-            revert JBUniswapV4LPSplitHook_InsufficientBalance({
-                available: spendable, required: accumulatedProjectTokens[context.projectId]
-            });
-        }
+        // Intake is complete: the allocation is durably represented in the ledger. Everything below is best-effort
+        // and must not be able to revert this frame.
+        _attemptAutomation(context.projectId);
     }
 
     /// @notice Burn the project's single LP position and re-mint it, re-centered on the project's freshly recomputed
@@ -1075,6 +1015,75 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         });
     }
 
+    /// @notice Convert the project's accumulated reserved tokens into additional protocol-owned liquidity on its
+    /// deployed pool. Shared executor behind the permissionless `addLiquidity` entry point and the best-effort inline
+    /// automation self-call.
+    /// @param projectId The ID of the project whose accumulated tokens should be added as liquidity.
+    /// @param terminalToken The terminal token paired with the project token in the deployed pool.
+    function _addLiquidity(uint256 projectId, address terminalToken) internal {
+        // Require a deployed pool for this project/terminal-token pair — `addLiquidity` only grows an existing pool.
+        uint256 activeTokenId = tokenIdOf[projectId][terminalToken];
+        if (activeTokenId == 0) {
+            revert JBUniswapV4LPSplitHook_InvalidStageForAction({
+                projectId: projectId, terminalToken: terminalToken, tokenId: activeTokenId
+            });
+        }
+
+        // Fetch the controller and current ruleset once; both feed the corridor math. `addLiquidity` is fully
+        // permissionless: the only gate is the economic one applied inside the mint executor (asks reach no further
+        // than the issuance ceiling and bids no further than the cash-out floor, so a spot that leaves no room for
+        // asks extends the position as bids alone).
+        address controller = _controllerOf(projectId);
+        (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
+
+        // Record the ruleset weight as a processing-era reference on the first successful attempt, now that intake
+        // no longer reads rulesets.
+        if (initialWeightOf[projectId] == 0) initialWeightOf[projectId] = ruleset.weight;
+
+        // Require a non-trivial accumulation so LP-fee dust (down to 1 wei carried into the ledger) cannot force a full
+        // fee-collect+burn+remint churn on every accrual. Dust keeps accruing until it crosses the threshold.
+        uint256 accumulated = accumulatedProjectTokens[projectId];
+        if (accumulated < _MIN_ADD_ACCUMULATION) {
+            revert JBUniswapV4LPSplitHook_AccumulationBelowThreshold({
+                projectId: projectId, accumulated: accumulated, threshold: _MIN_ADD_ACCUMULATION
+            });
+        }
+
+        // Resolve the project's ERC-20 and the pool key once for the TWAP guard and the mint below.
+        address projectToken = _tokenOf(projectId);
+        PoolKey memory key = poolKeysOf[projectId][terminalToken];
+
+        // Verify the actual ERC-20 balance (minus outstanding fee token claims) covers the accumulated total before
+        // deploying it. Guards against accounting drift from custom controllers; checked here — not during intake —
+        // so a pre-existing inconsistency cannot cause a newly delivered allocation to be burned by Core.
+        uint256 spendable = IERC20(projectToken).balanceOf(address(this)) - _unavailableFeeTokenBalance(projectToken);
+        if (spendable < accumulated) {
+            revert JBUniswapV4LPSplitHook_InsufficientBalance({available: spendable, required: accumulated});
+        }
+
+        // Reject the add while the pool's spot price is off the oracle TWAP. Stops a JIT/sandwich attacker from
+        // shoving the pool price right before our add to make us mint at a manipulated range.
+        _requireSpotNearTwap({projectId: projectId, terminalToken: terminalToken, key: key});
+
+        // Mint another single-sided ask position from the accumulated project tokens — no funding cash-out.
+        _addSingleSidedLiquidity({
+            projectId: projectId,
+            projectToken: projectToken,
+            terminalToken: terminalToken,
+            controller: controller,
+            ruleset: ruleset
+        });
+
+        // Surface the resulting position id.
+        emit LiquidityAdded({
+            projectId: projectId,
+            terminalToken: terminalToken,
+            tokenId: tokenIdOf[projectId][terminalToken],
+            isNewPosition: true,
+            caller: msg.sender
+        });
+    }
+
     /// @notice Consolidate the project's holdings into ONE single-sided (asks-only) position spanning from the pool's
     /// live spot out to the project's issuance/cash-out ceiling — no funding cash-out. Used by both `deployPool` (no
     /// prior position to burn) and `addLiquidity` (burns + refolds the prior position so the hook never fragments into
@@ -1189,6 +1198,34 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             // forge-lint: disable-next-line(unsafe-typecast)
             expiration: uint48(block.timestamp + _DEADLINE_SECONDS)
         });
+    }
+
+    /// @notice Best-effort attempt to convert a project's freshly accepted inventory into liquidity inline: deploy
+    /// the pool if none exists yet, otherwise grow the deployed pool's position. Never reverts — the attempt runs
+    /// behind a gas-bounded external self-call so any failure rolls back the attempt's state while the caller's
+    /// accepted inventory remains intact and retryable through the permissionless `deployPool`/`addLiquidity`.
+    /// @param projectId The ID of the project to attempt automation for.
+    function _attemptAutomation(uint256 projectId) internal {
+        // Below the churn threshold the attempt would be rejected anyway — keep accruing and skip successfully.
+        if (accumulatedProjectTokens[projectId] < _MIN_ADD_ACCUMULATION) return;
+
+        // Post-deployment automation needs the recorded pool pairing; without it there is nothing to grow safely.
+        if (hasDeployedPool[projectId] && deployedTerminalTokenOf[projectId] == address(0)) return;
+
+        // Skip when the remaining gas cannot cover a meaningful attempt plus the reserve this frame needs to finish
+        // and return to the Controller. The permissionless retries are not bound by this floor.
+        if (gasleft() < _AUTOMATION_ATTEMPT_MIN_GAS + _AUTOMATION_GAS_RESERVE) return;
+
+        // The external self-call is the rollback boundary: a revert inside the attempt rolls back the attempt's
+        // state changes while this frame's accepted inventory stays intact. Only the error selector is captured, so
+        // a revert-data bomb downstream cannot blow up this frame's memory.
+        (bool success, bytes4 reasonSelector) = _boundedSelfCall({
+            data: abi.encodeCall(this.executeAutomationFor, (projectId)), gasLimit: gasleft() - _AUTOMATION_GAS_RESERVE
+        });
+
+        if (!success) {
+            emit LiquidityAutomationFailed({projectId: projectId, reasonSelector: reasonSelector, caller: msg.sender});
+        }
     }
 
     /// @notice Take a best-effort protocol fee cut of `amount` (in `feeToken`) for `projectId` by paying it to the
@@ -1309,6 +1346,33 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             feeTokensMinted: received,
             caller: msg.sender
         });
+    }
+
+    /// @notice Call this contract itself with a bounded gas budget, capturing at most the revert selector.
+    /// @dev Mirrors the Router Terminal Gateway's `_boundedCall`: the returndata is never copied beyond four bytes,
+    /// so a revert-data bomb from a downstream dependency cannot force unbounded memory expansion in this frame.
+    /// @param data The calldata for the self-call.
+    /// @param gasLimit The gas budget to forward (EIP-150 may forward less).
+    /// @return success Whether the self-call succeeded.
+    /// @return reasonSelector The first four bytes of the revert data (zero when none was returned).
+    function _boundedSelfCall(
+        bytes memory data,
+        uint256 gasLimit
+    )
+        internal
+        returns (bool success, bytes4 reasonSelector)
+    {
+        assembly ("memory-safe") {
+            success := call(gasLimit, address(), 0, add(data, 0x20), mload(data), 0, 0)
+            if iszero(success) {
+                if gt(returndatasize(), 3) {
+                    // Scratch space: zero the word, lay the selector into its top bytes, and read it back.
+                    mstore(0, 0)
+                    returndatacopy(0, 0, 4)
+                    reasonSelector := mload(0)
+                }
+            }
+        }
     }
 
     /// @notice Burn an existing LP position via `BURN_POSITION` + `TAKE_PAIR` and recover its principal (plus any
@@ -1450,22 +1514,21 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         IERC20(feeProjectToken).safeTransfer({to: beneficiary, value: tokenAmount});
     }
 
-    /// @notice Converts this hook's internal project-token credits into the registered ERC-20.
-    /// @dev Core burns holder credits before ERC-20 balances during cash-out. Normalizing first keeps LP sizing and
-    /// post-add dust accounting scoped to transferable project tokens already visible to Uniswap V4.
+    /// @notice Converts this hook's accounted LP credits for a project into the registered ERC-20.
+    /// @dev Claims exactly `accumulatedProjectCredits[projectId]` — the credits accepted through `processSplitWith`
+    /// — rather than every non-fee credit the hook happens to hold, so fee-credit liabilities and unrelated credit
+    /// arrivals stay out of LP principal. The ledger is cleared before the external claim; a revert restores it
+    /// atomically with the rest of the frame.
     /// @param projectId The Juicebox project whose credits are being normalized.
     /// @param controller The project's controller.
     /// @return creditCount The number of credits claimed into ERC-20 project tokens.
     function _claimHookCreditsFor(uint256 projectId, address controller) internal returns (uint256 creditCount) {
-        uint256 creditBalance = IJBTokens(TOKENS).creditBalanceOf({holder: address(this), projectId: projectId});
-        uint256 unavailableCredits = _totalOutstandingFeeCreditClaims[projectId];
+        creditCount = accumulatedProjectCredits[projectId];
+        if (creditCount == 0) return 0;
 
-        // Fee-credit claims are denominated in the fee project's credits. If that same project later deploys LP through
-        // this clone, only credits not already owed to fee claimants can be normalized into ERC-20 LP principal.
-        if (creditBalance <= unavailableCredits) return 0;
+        accumulatedProjectCredits[projectId] = 0;
 
-        creditCount = creditBalance - unavailableCredits;
-
+        // The hook is the holder, so no external permission is needed for this claim.
         IJBController(controller)
             .claimTokensFor({
             holder: address(this), projectId: projectId, tokenCount: creditCount, beneficiary: address(this)
@@ -1791,6 +1854,91 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         return IERC20(Currency.unwrap(currency)).balanceOf(address(this));
     }
 
+    /// @notice Create the Uniswap V4 pool and mint the initial LP position from the project's accumulated reserved
+    /// tokens (and any accounted credits, normalized into the project's ERC-20). Shared executor behind the
+    /// permissionless `deployPool` entry point and the best-effort inline automation self-call.
+    /// @param projectId The ID of the project whose accumulated tokens should be deployed as LP.
+    function _deployPool(uint256 projectId) internal {
+        // `deployPool` is fully permissionless: anyone may seed the pool. The only gate is the economic one applied
+        // inside the mint executor — the seeded range never offers project tokens below the issuance price, so a spot
+        // that has already reached the ceiling seeds bids alone.
+        address controller = _controllerOf(projectId);
+        (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
+
+        // Record the ruleset weight as a processing-era reference on the first successful attempt, now that intake
+        // no longer reads rulesets.
+        if (initialWeightOf[projectId] == 0) initialWeightOf[projectId] = ruleset.weight;
+
+        // Auto-select the terminal token with the highest ETH-denominated value.
+        address terminalToken = JBUniswapV4LPSplitHookMath.findHighestValueTerminalTokenOf({
+            directory: IJBDirectory(DIRECTORY), projectId: projectId, controller: controller
+        });
+
+        if (tokenIdOf[projectId][terminalToken] != 0) {
+            revert JBUniswapV4LPSplitHook_PoolAlreadyDeployed({
+                projectId: projectId, terminalToken: terminalToken, tokenId: tokenIdOf[projectId][terminalToken]
+            });
+        }
+        if (hasDeployedPool[projectId]) {
+            revert JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported({
+                projectId: projectId, terminalToken: terminalToken
+            });
+        }
+
+        address projectToken = _tokenOf(projectId);
+
+        // Credits cannot be paired as LP — deployment waits until the project has an ERC-20 to normalize them into.
+        if (projectToken == address(0)) {
+            revert JBUniswapV4LPSplitHook_InvalidProjectId({
+                projectId: projectId, controller: controller, projectToken: projectToken
+            });
+        }
+
+        uint256 projectTokenBalance = accumulatedProjectTokens[projectId];
+
+        // Accounted credits count as deployable inventory: `_consolidateAndReMint` normalizes them into the ERC-20
+        // via `_claimHookCreditsFor` before sizing the mint.
+        if (projectTokenBalance == 0 && accumulatedProjectCredits[projectId] == 0) {
+            revert JBUniswapV4LPSplitHook_NoTokensAccumulated({projectId: projectId});
+        }
+
+        // Verify the actual ERC-20 balance (minus outstanding fee token claims) covers the accumulated total before
+        // deploying it. Guards against accounting drift from custom controllers; checked here — not during intake —
+        // so a pre-existing inconsistency cannot cause a newly delivered allocation to be burned by Core.
+        uint256 spendable = IERC20(projectToken).balanceOf(address(this)) - _unavailableFeeTokenBalance(projectToken);
+        if (spendable < projectTokenBalance) {
+            revert JBUniswapV4LPSplitHook_InsufficientBalance({available: spendable, required: projectTokenBalance});
+        }
+
+        address terminal = _primaryTerminalOf({projectId: projectId, token: terminalToken});
+        if (terminal == address(0)) {
+            revert JBUniswapV4LPSplitHook_InvalidTerminalToken({projectId: projectId, terminalToken: terminalToken});
+        }
+
+        // Mark the project deployed before any external calls so a reentrant deployPool reverts (already deployed) and
+        // post-deploy inflows route to addLiquidity rather than re-entering this one-shot deploy path.
+        hasDeployedPool[projectId] = true;
+
+        _deployPoolAndAddLiquidity({
+            projectId: projectId,
+            projectToken: projectToken,
+            terminalToken: terminalToken,
+            controller: controller,
+            ruleset: ruleset
+        });
+
+        // Remember the pool's terminal-token pairing so post-deployment inline automation can resolve the position
+        // without re-running the auto-selection. Recorded only once the deployment has succeeded.
+        deployedTerminalTokenOf[projectId] = terminalToken;
+
+        emit ProjectDeployed({
+            projectId: projectId,
+            terminalToken: terminalToken,
+            poolId: PoolId.unwrap(poolKeysOf[projectId][terminalToken].toId()),
+            caller: msg.sender
+        });
+    }
+
     /// @notice Deploy pool and add liquidity using accumulated tokens.
     /// @param projectId The ID of the project.
     /// @param projectToken The project token address.
@@ -1833,6 +1981,25 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             controller: controller,
             ruleset: ruleset
         });
+    }
+
+    /// @notice Execute an inline automation attempt for a project: deploy the pool if none exists yet, otherwise add
+    /// the accumulated inventory to the deployed pool's position. Callable only via this contract's own best-effort
+    /// `_attemptAutomation` so a revert anywhere in the flow can be caught and forgiven while the parent frame's
+    /// accepted inventory stays intact.
+    /// @dev This target is intentionally NOT `nonReentrant`: it is reached through an internal `this.` self-call
+    /// while `processSplitWith` still holds the reentrancy lock, so guarding it would self-revert. A genuine
+    /// reentrant call into any guarded entry point during the attempt is still rejected by that outer lock, and the
+    /// `msg.sender == address(this)` gate blocks any direct external call.
+    /// @param projectId The ID of the project to attempt automation for.
+    function executeAutomationFor(uint256 projectId) external {
+        if (msg.sender != address(this)) revert JBUniswapV4LPSplitHook_Unauthorized();
+
+        if (hasDeployedPool[projectId]) {
+            _addLiquidity({projectId: projectId, terminalToken: deployedTerminalTokenOf[projectId]});
+        } else {
+            _deployPool(projectId);
+        }
     }
 
     /// @notice Mint a new concentrated-liquidity position via the Uniswap V4 PositionManager, settling both currencies

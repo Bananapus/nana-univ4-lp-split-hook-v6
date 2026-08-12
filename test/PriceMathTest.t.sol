@@ -17,16 +17,20 @@ import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionMa
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
-/// @notice Wrapper that exposes internal price math functions for testing.
-contract TestableJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
-    constructor(
-        address _directory,
-        IJBPermissions _permissions,
-        address _tokens,
-        IAllowanceTransfer _permit2
-    )
-        JBUniswapV4LPSplitHook(_directory, _permissions, _tokens, _permit2, IJBSuckerRegistry(address(0)))
-    {}
+/// @notice Wrapper that exposes the internal price math library functions for testing.
+/// @dev Standalone (NOT inheriting the hook): the wrappers only call `JBUniswapV4LPSplitHookMath` /
+/// `JBLPSplitHookHelpers`, and inheriting the full hook pushed this test contract past the EIP-170 runtime size
+/// checked by `forge build --sizes`.
+contract TestableJBUniswapV4LPSplitHook {
+    // Mirror the hook's immutables the math library reads.
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
+    address public immutable DIRECTORY;
+    // forge-lint: disable-next-line(screaming-snake-case-immutable)
+    IJBSuckerRegistry public immutable SUCKER_REGISTRY = IJBSuckerRegistry(address(0));
+
+    constructor(address _directory, IJBPermissions, address, IAllowanceTransfer) {
+        DIRECTORY = _directory;
+    }
 
     /// @dev Helper to fetch controller and ruleset for a project.
     function _fetchControllerAndRuleset(uint256 projectId)
@@ -194,14 +198,6 @@ contract PriceMathTest is LPSplitHookV4TestBase {
         testableHook = new TestableJBUniswapV4LPSplitHook(
             address(directory), IJBPermissions(address(permissions)), address(jbTokens), IAllowanceTransfer(address(0))
         );
-        testableHook.initialize({
-            initialFeeProjectId: FEE_PROJECT_ID,
-            initialFeePercent: FEE_PERCENT,
-            newPoolManager: IPoolManager(address(1)),
-            newPositionManager: IPositionManager(address(positionManager)),
-            newOracleHook: IHooks(address(0)),
-            newBuybackHook: IJBBuybackHookRegistry(address(0))
-        });
     }
 
     // ─────────────────────────────────────────────────────────────────────

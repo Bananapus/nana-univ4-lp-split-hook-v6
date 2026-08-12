@@ -502,7 +502,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         proj.mint(address(controller), amount);
         vm.startPrank(address(controller));
         proj.approve(address(hook), amount);
-        hook.processSplitWith(_buildContext(pid, address(proj), amount, 1));
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(_buildContext(pid, address(proj), amount, 1));
         vm.stopPrank();
     }
 

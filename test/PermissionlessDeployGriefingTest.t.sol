@@ -161,7 +161,7 @@ contract PermissionlessDeployGriefingTest is LPSplitHookV4TestBase {
         vm.startPrank(address(controller));
         projectToken.approve(address(hook), 100e18);
         JBSplitHookContext memory context = _buildContext(freshProjectId, address(projectToken), 100e18, 1);
-        hook.processSplitWith(context);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
 
         // Decay weight 10x

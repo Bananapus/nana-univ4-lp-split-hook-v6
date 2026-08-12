@@ -310,7 +310,8 @@ contract SingleSided_CeilingGeometryTest is LPSplitHookV4TestBase {
     /// hook writes when it routes collected LP fees or carries a mint leftover. The hook never sizes a bid from its raw
     /// (commingled) balance, so the ledger entry is what makes the terminal spendable for this project.
     function _creditTerminalLedger(uint256 amount) internal {
-        bytes32 slot = keccak256(abi.encode(address(terminalToken), keccak256(abi.encode(PROJECT_ID, uint256(1)))));
+        // `accumulatedTerminalTokens` sits at slot 2 (see the slot map in TestBaseV4).
+        bytes32 slot = keccak256(abi.encode(address(terminalToken), keccak256(abi.encode(PROJECT_ID, uint256(2)))));
         vm.store(address(hook), slot, bytes32(amount));
         terminalToken.mint(address(hook), amount);
         assertEq(hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)), amount, "ledger credited");

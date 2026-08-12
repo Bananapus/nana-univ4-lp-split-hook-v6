@@ -71,7 +71,7 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
 
         vm.startPrank(address(controller));
         feeProjectToken.approve(address(hook), amount);
-        hook.processSplitWith(_buildContext(FEE_PROJECT_ID, address(feeProjectToken), amount, 1));
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(_buildContext(FEE_PROJECT_ID, address(feeProjectToken), amount, 1));
         vm.stopPrank();
     }
 

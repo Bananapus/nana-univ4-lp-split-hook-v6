@@ -332,7 +332,7 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
         vm.startPrank(address(malicious)); // malicious IS the controller
         projectToken.approve(address(hook), accumulateAmount);
         JBSplitHookContext memory accCtx = _buildReservedContext(PROJECT_ID, accumulateAmount);
-        hook.processSplitWith(accCtx);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(accCtx);
         vm.stopPrank();
 
         uint256 accBefore = hook.accumulatedProjectTokens(PROJECT_ID);

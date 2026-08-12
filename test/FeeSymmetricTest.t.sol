@@ -177,7 +177,7 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
         projectTokenB.mint(address(controller), amount);
         vm.startPrank(address(controller));
         projectTokenB.approve(address(hook), amount);
-        hook.processSplitWith(_buildContext(PROJECT_B, address(projectTokenB), amount, 1));
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(_buildContext(PROJECT_B, address(projectTokenB), amount, 1));
         vm.stopPrank();
         vm.prank(owner);
         hook.deployPool(PROJECT_B);

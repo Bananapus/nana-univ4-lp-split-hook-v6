@@ -32,6 +32,14 @@ interface IJBUniswapV4LPSplitHook {
         address caller
     );
 
+    /// @notice Emitted when a best-effort inline automation attempt (pool deployment or liquidity addition) fails
+    /// after a successful intake. The accepted inventory remains accounted and retryable through the permissionless
+    /// `deployPool`/`addLiquidity` entry points.
+    /// @param projectId The Juicebox project ID.
+    /// @param reasonSelector The first four bytes of the attempt's revert data (zero when none was returned).
+    /// @param caller The address that triggered the distribution.
+    event LiquidityAutomationFailed(uint256 indexed projectId, bytes4 reasonSelector, address caller);
+
     /// @notice Emitted when LP fees are routed back to the project.
     /// @param projectId The Juicebox project ID.
     /// @param token The token that was routed (the project token or the terminal token).

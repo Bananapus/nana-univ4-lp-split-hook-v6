@@ -5,8 +5,9 @@ import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 
 /// @notice `deployPool` is fully permissionless — the weight-decay owner gate has been removed. `initialWeightOf` is
-/// still snapshotted on first accumulation (retained as an informational per-project value), but it no longer gates
-/// anything: any caller can seed the pool at any weight. The economic spot-below-ceiling gate (covered by
+/// still snapshotted (retained as an informational per-project value) but lazily, on the first successful deploy/add
+/// processing attempt — intake no longer reads rulesets — and it no longer gates anything: any caller can seed the
+/// pool at any weight. The economic spot-below-ceiling gate (covered by
 /// `SingleSided_PermissionlessGateTest`) is the only remaining gate.
 contract WeightDecayDeployTest is LPSplitHookV4TestBase {
     address internal randomUser;
@@ -16,23 +17,31 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
         randomUser = makeAddr("randomUser");
     }
 
-    // ─── initialWeightOf snapshot (still recorded)
+    // ─── initialWeightOf snapshot (recorded lazily)
     // ──────────────────────────────────────────────
 
-    /// @notice initialWeightOf is recorded on the first processSplitWith accumulation.
-    function test_initialWeightOf_recordedOnFirstAccumulation() public {
+    /// @notice initialWeightOf is no longer read during intake (intake must not touch rulesets); it is recorded on
+    /// the first successful deploy/add processing attempt.
+    function test_initialWeightOf_recordedOnFirstProcessingAttempt() public {
         assertEq(hook.initialWeightOf(PROJECT_ID), 0, "should be 0 before any accumulation");
         _accumulateTokens(PROJECT_ID, 100e18);
-        assertEq(hook.initialWeightOf(PROJECT_ID), DEFAULT_WEIGHT, "should record initial weight");
+        assertEq(hook.initialWeightOf(PROJECT_ID), 0, "intake should NOT read rulesets");
+
+        vm.prank(owner);
+        hook.deployPool(PROJECT_ID);
+        assertEq(hook.initialWeightOf(PROJECT_ID), DEFAULT_WEIGHT, "should record weight on first processing");
     }
 
-    /// @notice initialWeightOf is NOT overwritten on subsequent accumulations.
-    function test_initialWeightOf_notOverwrittenOnSubsequentAccumulations() public {
+    /// @notice initialWeightOf is NOT overwritten by later processing attempts.
+    function test_initialWeightOf_notOverwrittenOnSubsequentProcessing() public {
         _accumulateTokens(PROJECT_ID, 100e18);
+        vm.prank(owner);
+        hook.deployPool(PROJECT_ID);
         assertEq(hook.initialWeightOf(PROJECT_ID), DEFAULT_WEIGHT);
 
         controller.setWeight(PROJECT_ID, DEFAULT_WEIGHT / 2);
         _accumulateTokens(PROJECT_ID, 50e18);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
         assertEq(hook.initialWeightOf(PROJECT_ID), DEFAULT_WEIGHT, "should NOT overwrite initial weight");
     }
 

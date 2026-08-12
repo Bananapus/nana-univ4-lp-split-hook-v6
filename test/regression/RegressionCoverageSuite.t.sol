@@ -211,7 +211,7 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
         projectToken.approve(address(hook), amount);
         // Build a reserved-token split context (groupId = 1).
         JBSplitHookContext memory context = _buildReservedContext(projectId, amount);
-        hook.processSplitWith(context);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
     }
 
@@ -282,7 +282,7 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
         vm.startPrank(address(tsController));
         projectToken.approve(address(hook), 100e18);
         JBSplitHookContext memory ctxB = _buildContext(projectB, address(projectToken), 100e18, 1);
-        hook.processSplitWith(ctxB);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(ctxB);
         vm.stopPrank();
 
         vm.prank(owner);
@@ -352,7 +352,7 @@ contract FeeTokensExcludedFromRebalanceTest is LPSplitHookV4TestBase {
         vm.startPrank(address(burnController));
         projectToken.approve(address(hook), amount);
         JBSplitHookContext memory ctx = _buildReservedContext(projectId, amount);
-        hook.processSplitWith(ctx);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(ctx);
         vm.stopPrank();
     }
 
@@ -475,7 +475,7 @@ contract FeeTokensExcludedFromSplitBalanceCheckTest is LPSplitHookV4TestBase {
         vm.startPrank(address(burnController));
         projectToken.approve(address(hook), 100e18);
         JBSplitHookContext memory ctx1 = _buildReservedContext(PROJECT_ID, 100e18);
-        hook.processSplitWith(ctx1);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(ctx1);
         vm.stopPrank();
 
         vm.prank(owner);
@@ -534,7 +534,7 @@ contract FeeTokensExcludedFromSplitBalanceCheckTest is LPSplitHookV4TestBase {
         //   balanceOf(this) - _totalOutstandingFeeTokenClaims >= accumulatedProjectTokens
         // Without the subtraction, this would revert because balanceOf includes
         // project 1's reserved fee tokens that do not belong to project 3.
-        hook.processSplitWith(ctx3);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(ctx3);
         vm.stopPrank();
 
         // ── Step 4: Verify accumulation succeeded. ──

@@ -155,7 +155,7 @@ contract FeeClaimReserveCaptureRegression is LPSplitHookV4TestBase {
 
         vm.startPrank(address(controller));
         projectToken.approve(address(hook), 100e18);
-        hook.processSplitWith(_buildContext(PROJECT_ID, address(projectToken), 100e18, 1));
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(_buildContext(PROJECT_ID, address(projectToken), 100e18, 1));
         vm.stopPrank();
 
         vm.prank(owner);
@@ -199,7 +199,7 @@ contract FeeClaimReserveCaptureRegression is LPSplitHookV4TestBase {
 
         vm.startPrank(address(controller));
         projectTokenB.approve(address(hook), 100e18);
-        hook.processSplitWith(_buildContext(PROJECT_B, address(projectTokenB), 100e18, 1));
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(_buildContext(PROJECT_B, address(projectTokenB), 100e18, 1));
         vm.stopPrank();
 
         vm.prank(owner);

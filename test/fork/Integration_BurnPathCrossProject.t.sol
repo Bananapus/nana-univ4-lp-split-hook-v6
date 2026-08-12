@@ -109,7 +109,7 @@ contract Integration_BurnPathCrossProject is ForkDeployHelper {
         });
         vm.startPrank(address(jbController));
         IERC20(address(pTokenA)).approve(address(hook), burnAmount);
-        hook.processSplitWith(burnCtx);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(burnCtx);
         vm.stopPrank();
         // Post-deploy inflow for A accumulates (never burned); B's accumulation is untouched (cross-project isolation).
         assertEq(hook.accumulatedProjectTokens(pidA), aAccBefore + burnAmount, "A inflow accumulates after deploy");
@@ -201,7 +201,7 @@ contract Integration_BurnPathCrossProject is ForkDeployHelper {
         });
         vm.startPrank(address(jbController));
         IERC20(tokenAddr).approve(address(hook), amount);
-        hook.processSplitWith(context);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
     }
 

@@ -88,7 +88,7 @@ contract SingleSided_OrderingTest is LPSplitHookV4TestBase {
         vm.prank(address(controller));
         proj.approve(address(hook), 1e18);
         vm.prank(address(controller));
-        hook.processSplitWith(_buildContext(PID, address(proj), 1e18, 1));
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(_buildContext(PID, address(proj), 1e18, 1));
 
         vm.prank(owner);
         hook.deployPool(PID);

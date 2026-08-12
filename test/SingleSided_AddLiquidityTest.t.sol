@@ -236,15 +236,21 @@ contract SingleSided_AddLiquidityTest is LPSplitHookV4TestBase {
         assertEq(terminal.cashOutCallCount(), cashOutCallsBefore, "no cashOutTokensOf calls during deploy/add cycle");
     }
 
-    /// @notice Credit sweep: project-token credits held by the hook are folded into the minted position (claimed into
-    /// ERC-20 and added as principal), not silently stranded.
+    /// @notice Credit sweep: project-token credits ACCOUNTED by the hook (accepted through the credits intake path
+    /// before the project tokenized) are folded into the minted position (claimed into ERC-20 and added as
+    /// principal), not silently stranded.
     function test_Deploy_FoldsHookHeldProjectTokenCredits() public {
         _initPoolAtLowerFifth();
 
-        // Accumulate ERC-20 reserved tokens, and separately grant the hook project-token CREDITS (as if a reserved
-        // distribution landed as credits before the project tokenized).
+        // Accumulate ERC-20 reserved tokens, and separately account project-token CREDITS through the intake path
+        // (a reserved distribution that landed as credits before the project tokenized).
         _accumulateTokens(PROJECT_ID, 0.5e18);
+        jbTokens.setToken(PROJECT_ID, address(0));
         jbTokens.setCreditBalance(address(hook), PROJECT_ID, 0.2e18);
+        vm.prank(address(controller));
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(_buildContext(PROJECT_ID, address(0), 0.2e18, 1));
+        jbTokens.setToken(PROJECT_ID, address(projectToken));
+        assertEq(hook.accumulatedProjectCredits(PROJECT_ID), 0.2e18, "credits should be accounted by intake");
 
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);

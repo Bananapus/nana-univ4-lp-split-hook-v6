@@ -89,26 +89,27 @@ contract LPSplitHookV4TestBase is Test {
     // ─── Hook Storage Slots
     // `JBUniswapV4LPSplitHook` declares its stored properties alphabetically (STYLE_GUIDE) and none of them pack, so
     // each occupies one slot in declaration order. Verified against `forge inspect ... storageLayout`:
-    //   0 accumulatedProjectTokens    6 claimableFeeTokenOf   12 oracleHook
-    //   1 accumulatedTerminalTokens   7 claimableFeeTokens    13 poolKeysOf
-    //   2 activeTickLowerOf           8 feePercent            14 poolManager
-    //   3 activeTickUpperOf           9 feeProjectId          15 positionManager
-    //   4 buybackHook                10 hasDeployedPool       16 rangedCorridorLowerOf
-    //   5 claimableFeeCredits        11 initialWeightOf       17 rangedCorridorUpperOf
-    //  18 tokenIdOf                  19 _inflightFeeRoutingCount
-    //  20 _totalOutstandingFeeCreditClaims                    21 _totalOutstandingFeeTokenClaims
+    //   0 accumulatedProjectCredits   7 claimableFeeTokenOf   14 oracleHook
+    //   1 accumulatedProjectTokens    8 claimableFeeTokens    15 poolKeysOf
+    //   2 accumulatedTerminalTokens   9 deployedTerminalTokenOf  16 poolManager
+    //   3 activeTickLowerOf          10 feePercent            17 positionManager
+    //   4 activeTickUpperOf          11 feeProjectId          18 rangedCorridorLowerOf
+    //   5 buybackHook                12 hasDeployedPool       19 rangedCorridorUpperOf
+    //   6 claimableFeeCredits        13 initialWeightOf       20 tokenIdOf
+    //  21 _inflightFeeRoutingCount   22 _totalOutstandingFeeCreditClaims
+    //  23 _totalOutstandingFeeTokenClaims
 
     /// @notice Storage slot of the hook's `oracleHook`.
-    uint256 internal constant SLOT_ORACLE_HOOK = 12;
+    uint256 internal constant SLOT_ORACLE_HOOK = 14;
 
     /// @notice Storage slot of the hook's `tokenIdOf` mapping.
-    uint256 internal constant SLOT_TOKEN_ID_OF = 18;
+    uint256 internal constant SLOT_TOKEN_ID_OF = 20;
 
     /// @notice Storage slot of the hook's `_inflightFeeRoutingCount` mapping.
-    uint256 internal constant SLOT_INFLIGHT_FEE_ROUTING_COUNT = 19;
+    uint256 internal constant SLOT_INFLIGHT_FEE_ROUTING_COUNT = 21;
 
     /// @notice Storage slot of the hook's `_totalOutstandingFeeTokenClaims` mapping.
-    uint256 internal constant SLOT_OUTSTANDING_FEE_TOKEN_CLAIMS = 21;
+    uint256 internal constant SLOT_OUTSTANDING_FEE_TOKEN_CLAIMS = 23;
 
     address public owner;
     address public user;
@@ -298,6 +299,13 @@ contract LPSplitHookV4TestBase is Test {
 
     // ─── Accumulation & Deployment Helpers
 
+    /// @notice Gas cap that covers intake but sits below the hook's inline-automation attempt floor
+    /// (`_AUTOMATION_ATTEMPT_MIN_GAS` + `_AUTOMATION_GAS_RESERVE`), so the accumulate helpers keep their
+    /// accumulate-only semantics: intake completes and automation skips, exactly like a distribution that arrives
+    /// without enough gas for inline automation. Tests that want inline automation call `processSplitWith` with full
+    /// gas themselves (see DurableIntakeTest).
+    uint256 internal constant INTAKE_ONLY_GAS = 300_000;
+
     function _accumulateTokens(uint256 projectId, uint256 amount) internal {
         // Mint to controller and approve the hook — processSplitWith pulls via transferFrom.
         projectToken.mint(address(controller), amount);
@@ -305,7 +313,7 @@ contract LPSplitHookV4TestBase is Test {
         projectToken.approve(address(hook), amount);
 
         JBSplitHookContext memory context = _buildReservedContext(projectId, amount);
-        hook.processSplitWith(context);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
     }
 

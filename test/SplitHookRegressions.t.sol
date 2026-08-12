@@ -238,7 +238,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         vm.startPrank(address(controller));
         projectToken.approve(address(hook), newAmount);
         JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, newAmount);
-        hook.processSplitWith(context);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
 
         assertEq(controller.burnCallCount(), burnCountBefore, "no burn should occur after pool deployed");
@@ -269,7 +269,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         vm.startPrank(address(controller));
         projectToken.approve(address(hook), amount);
         JBSplitHookContext memory context = _buildContext(freshProjectId, address(projectToken), amount, 1);
-        hook.processSplitWith(context);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
 
         assertEq(
