@@ -92,7 +92,7 @@ contract Integration_TerminalMigration is ForkDeployHelper {
         vm.prank(multisig);
         hook.deployPool(pid);
         assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "Pool deployed");
-        uint256 initialTokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+        uint256 initialTokenId = hook.askTokenIdOf(pid, JBConstants.NATIVE_TOKEN);
         uint128 initialLiq = V4_POSITION_MANAGER.getPositionLiquidity(initialTokenId);
         assertTrue(initialLiq > 0, "Initial position has liquidity");
         IJBTerminal primaryBefore = jbDirectory.primaryTerminalOf(pid, JBConstants.NATIVE_TOKEN);
@@ -130,7 +130,7 @@ contract Integration_TerminalMigration is ForkDeployHelper {
         // Permissionless: any non-owner stranger may rebalance once the corridor has genuinely drifted.
         vm.prank(address(0xB0BB1E));
         hook.rebalanceLiquidity({projectId: pid, terminalToken: JBConstants.NATIVE_TOKEN});
-        uint256 newTokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+        uint256 newTokenId = hook.askTokenIdOf(pid, JBConstants.NATIVE_TOKEN);
         assertTrue(newTokenId > 0, "New tokenId exists");
         uint128 newLiq = V4_POSITION_MANAGER.getPositionLiquidity(newTokenId);
         assertTrue(newLiq > 0, "Rebalanced position has liquidity after terminal migration");

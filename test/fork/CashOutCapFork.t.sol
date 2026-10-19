@@ -75,7 +75,7 @@ contract CashOutCapFork is ForkDeployHelper {
         vm.prank(multisig);
         hook.deployPool(pid);
         assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "Pool should deploy");
-        uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+        uint256 tokenId = hook.askTokenIdOf(pid, JBConstants.NATIVE_TOKEN);
         uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         assertTrue(posLiq > 0, "Position should have liquidity");
         PoolKey memory key = hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN);

@@ -226,7 +226,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 0.5e18);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
-        assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "deploy strictly below ceiling must succeed");
+        assertNotEq(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "deploy strictly below ceiling must succeed");
     }
 
     function _absTick(int24 a, int24 b) internal pure returns (int24) {
@@ -275,7 +275,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 0.5e18);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
-        assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "near-TWAP deploy must succeed");
+        assertNotEq(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "near-TWAP deploy must succeed");
     }
 
     /// @notice A fresh pool the hook initializes itself has no TWAP history, so the guard is skipped and the cold-start
@@ -290,7 +290,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 0.5e18);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
-        assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "cold-start deploy must skip the TWAP guard");
+        assertNotEq(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "cold-start deploy must skip the TWAP guard");
     }
 
     // ─── Finding 1 (CRITICAL): a deploy spends ONLY this project's own burn-recovered terminal ───
@@ -316,7 +316,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
-        (uint256 projectSide, uint256 terminalSide) = _lockedSides(hook.tokenIdOf(PROJECT_ID, address(terminalToken)));
+        (uint256 projectSide, uint256 terminalSide) = _lockedSides(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)));
         assertEq(terminalSide, 0, "donated terminal must not be paired into the position (asks-only)");
         assertEq(projectSide, 0.5e18, "the full project balance deploys as asks");
         assertEq(terminalToken.balanceOf(address(hook)), donation, "donation stays on the hook, never swept or routed");
@@ -337,7 +337,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
-        (, uint256 terminalSide) = _lockedSides(hook.tokenIdOf(PROJECT_ID, address(terminalToken)));
+        (, uint256 terminalSide) = _lockedSides(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)));
         assertEq(terminalSide, 0, "project A must not pair another project's terminal as its bid");
         assertEq(terminalToken.balanceOf(address(hook)), bBalance, "the other project's terminal is fully preserved");
     }
@@ -352,7 +352,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 0.5e18);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
         // Inject this project's OWN terminal into its position (as filled asks would), recovered on the burn.
         uint256 bid = 1e18;
@@ -365,7 +365,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
-        (, uint256 terminalSide) = _lockedSides(hook.tokenIdOf(PROJECT_ID, address(terminalToken)));
+        (, uint256 terminalSide) = _lockedSides(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)));
         assertGt(terminalSide, 0, "the burn-recovered terminal must seed the re-minted bid leg");
         assertLe(terminalSide, bid, "the bid never exceeds the recovered terminal");
     }
@@ -393,7 +393,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 1e18);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
         // Give the position a bid and MATERIAL pending terminal-side LP fees.
         terminalToken.mint(address(positionManager), 1e18);
@@ -421,7 +421,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         assertEq(store.surplusPerToken(PROJECT_ID), surplusBefore, "routed fees do not bump the project's surplus");
 
         // The fee remainder was folded into the bid leg alongside the recovered terminal.
-        (, uint256 terminalSide) = _lockedSides(hook.tokenIdOf(PROJECT_ID, address(terminalToken)));
+        (, uint256 terminalSide) = _lockedSides(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)));
         assertGt(terminalSide, 0, "the collected fee is folded into the re-minted bid leg");
 
         // The stored drift basis reflects the freshly computed corridor.
@@ -460,12 +460,12 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
     /// @notice A meaningful accumulation still adds liquidity (a fresh position is minted).
     function test_Finding7_MeaningfulAccumulation_StillAdds() public {
         _deployForAdd();
-        uint256 oldTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 oldTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         _accumulateTokens(PROJECT_ID, 0.5e18);
 
         vm.prank(user);
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
-        assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), oldTokenId, "meaningful accumulation must add");
+        assertNotEq(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), oldTokenId, "meaningful accumulation must add");
     }
 
     // ─── Cold-start seed helpers (Fix A / Fix B) ───
@@ -530,7 +530,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
     /// issuance ceiling, with a non-degenerate range — the invariant both Fix A (zero-cashout) and Fix B (one-spacing
     /// corridor) must satisfy for either token ordering.
     function _assertColdStartAsksOnlyBelowCeiling(uint256 pid, address term, address proj) internal view {
-        uint256 tokenId = hook.tokenIdOf(pid, term);
+        uint256 tokenId = hook.askTokenIdOf(pid, term);
         assertNotEq(tokenId, 0, "cold-start deploy must mint a position");
 
         (uint256 projectSide, uint256 terminalSide) = _lockedSidesFor(tokenId, term, proj);
@@ -654,7 +654,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 0.5e18);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
         // Inject FAR more of this project's own terminal than a 0.5e18 ask leg's bid can absorb, so the burn recovers
         // an excess that must pin the bid bound at the floor. Fund only the injected principal (so the mock's SWEEP has
@@ -678,7 +678,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
 
         // The bid was pinned at the floor: only part of the recovered terminal was paired into the re-minted position.
         (, uint256 terminalSide) = _lockedSidesFor(
-            hook.tokenIdOf(PROJECT_ID, address(terminalToken)), address(terminalToken), address(projectToken)
+            hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), address(terminalToken), address(projectToken)
         );
         assertGt(terminalSide, 0, "the floor-leg bid is seeded from recovered terminal");
         assertLt(terminalSide, injected, "the paired bid is capped at floor capacity, below the recovered terminal");

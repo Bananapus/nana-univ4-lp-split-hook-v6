@@ -169,7 +169,7 @@ contract TokenIdFork is ForkDeployHelper {
         emit log_named_uint("  nextTokenId before deploy", nextTokenIdBefore);
         vm.prank(multisig);
         hook.deployPool(projectId);
-        uint256 storedTokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+        uint256 storedTokenId = hook.askTokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         uint256 nextTokenIdAfter = V4_POSITION_MANAGER.nextTokenId();
         assertEq(storedTokenId, nextTokenIdBefore, "tokenIdOf should equal pre-mint nextTokenId");
         assertEq(storedTokenId, nextTokenIdAfter - 1, "tokenIdOf should equal post-mint nextTokenId - 1");
@@ -189,7 +189,7 @@ contract TokenIdFork is ForkDeployHelper {
         _accumulateTokens(projectId, address(projectToken), 100_000e18);
         vm.prank(multisig);
         hook.deployPool(projectId);
-        uint256 oldTokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+        uint256 oldTokenId = hook.askTokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         uint128 oldLiq = V4_POSITION_MANAGER.getPositionLiquidity(oldTokenId);
         PoolKey memory key = hook.poolKeyOf(projectId, JBConstants.NATIVE_TOKEN);
         TokenIdSwapHelper swapHelper = new TokenIdSwapHelper(V4_POOL_MANAGER);
@@ -226,7 +226,7 @@ contract TokenIdFork is ForkDeployHelper {
         // Permissionless: any non-owner stranger may rebalance once the corridor has genuinely drifted.
         vm.prank(address(0xB0BB1E));
         hook.rebalanceLiquidity({projectId: projectId, terminalToken: JBConstants.NATIVE_TOKEN});
-        uint256 newTokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+        uint256 newTokenId = hook.askTokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         uint256 nextTokenIdAfterRebalance = V4_POSITION_MANAGER.nextTokenId();
         assertTrue(newTokenId != oldTokenId, "Token ID should change after rebalance");
         assertEq(newTokenId, nextTokenIdBeforeRebalance, "New tokenId should equal pre-rebalance nextTokenId");

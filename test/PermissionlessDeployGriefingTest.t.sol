@@ -73,10 +73,10 @@ contract PermissionlessDeployGriefingTest is LPSplitHookV4TestBase {
         // Pool was deployed with the HIGH-liquidity token, not the attacker's choice
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "pool should be deployed");
         assertTrue(
-            hook.tokenIdOf(PROJECT_ID, address(terminalToken)) != 0,
+            hook.askTokenIdOf(PROJECT_ID, address(terminalToken)) != 0,
             "pool should exist for highest-value token (terminalToken)"
         );
-        assertEq(hook.tokenIdOf(PROJECT_ID, address(lowLiquidityToken)), 0, "no pool should exist for low-value token");
+        assertEq(hook.askTokenIdOf(PROJECT_ID, address(lowLiquidityToken)), 0, "no pool should exist for low-value token");
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -102,7 +102,7 @@ contract PermissionlessDeployGriefingTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
 
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "pool should be deployed");
-        assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "pool should exist for highest-value token");
+        assertNotEq(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "pool should exist for highest-value token");
     }
 
     // ─────────────────────────────────────────────────────────────────────

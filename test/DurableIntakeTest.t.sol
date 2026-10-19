@@ -204,13 +204,13 @@ contract DurableIntakeTest is LPSplitHookV4TestBase {
 
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "pool should deploy inline");
         assertEq(hook.deployedTerminalTokenOf(PROJECT_ID), address(terminalToken), "terminal token should be recorded");
-        assertTrue(hook.tokenIdOf(PROJECT_ID, address(terminalToken)) != 0, "a position should exist");
+        assertTrue(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)) != 0, "a position should exist");
     }
 
     /// @notice After the pool exists, a later sufficient accumulation converts into more liquidity inline.
     function test_InlineAutomation_AddsLiquidityPostDeploy() public {
         test_InlineAutomation_DeploysPool();
-        uint256 tokenIdBefore = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenIdBefore = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
         uint256 amount = 50e18;
         projectToken.mint(address(controller), amount);
@@ -220,7 +220,7 @@ contract DurableIntakeTest is LPSplitHookV4TestBase {
         vm.stopPrank();
 
         assertTrue(
-            hook.tokenIdOf(PROJECT_ID, address(terminalToken)) != tokenIdBefore,
+            hook.askTokenIdOf(PROJECT_ID, address(terminalToken)) != tokenIdBefore,
             "the position should have been re-minted with the new accumulation"
         );
         assertLt(hook.accumulatedProjectTokens(PROJECT_ID), amount, "accumulation should be consumed by the add");
@@ -362,7 +362,7 @@ contract DurableIntakeTest is LPSplitHookV4TestBase {
         // Seed a 3e18 fee-credit liability (backed by credits at the hook), as fee routing would have.
         vm.store(
             address(hook),
-            keccak256(abi.encode(FEE_PROJECT_ID, uint256(22))), // _totalOutstandingFeeCreditClaims, slot 22
+            keccak256(abi.encode(FEE_PROJECT_ID, uint256(19))), // _totalOutstandingFeeCreditClaims, slot 19
             bytes32(uint256(3e18))
         );
         jbTokens.setCreditBalance(address(hook), FEE_PROJECT_ID, 4e18);

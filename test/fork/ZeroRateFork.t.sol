@@ -80,7 +80,7 @@ contract ZeroRateFork is ForkDeployHelper {
         vm.prank(multisig);
         hook.deployPool(pid);
         assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "Pool should deploy with 100% reserved");
-        uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+        uint256 tokenId = hook.askTokenIdOf(pid, JBConstants.NATIVE_TOKEN);
         assertTrue(tokenId != 0, "Position NFT should exist");
         uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         assertTrue(posLiq > 0, "Position should have liquidity");
@@ -104,7 +104,7 @@ contract ZeroRateFork is ForkDeployHelper {
         vm.prank(multisig);
         hook.deployPool(pid);
         assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "Pool should deploy with weight=0");
-        uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+        uint256 tokenId = hook.askTokenIdOf(pid, JBConstants.NATIVE_TOKEN);
         uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         assertTrue(posLiq > 0, "Position should have liquidity with weight=0");
         PoolKey memory key = hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN);

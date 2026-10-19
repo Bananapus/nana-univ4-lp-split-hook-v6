@@ -18,7 +18,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
 
         // Deploy a pool so we have a position to test rebalance
         _accumulateAndDeploy(PROJECT_ID, 100e18);
-        poolTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        poolTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
         // Ensure PositionManager has tokens for rebalance
         projectToken.mint(address(positionManager), 50e18);
@@ -41,13 +41,13 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         // Verify the position was not disturbed
-        uint256 tokenIdAfter = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenIdAfter = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertEq(tokenIdAfter, poolTokenId, "tokenIdOf should remain unchanged after unauthorized attempt");
     }
 
     /// @notice rebalanceLiquidity succeeds when called by the project owner.
     function test_H2_rebalance_owner_succeeds() public {
-        uint256 originalTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 originalTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(originalTokenId, 0, "should have an active position");
 
         // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
@@ -56,7 +56,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
-        uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(newTokenId, 0, "new tokenId should be nonzero");
         assertNotEq(newTokenId, originalTokenId, "tokenId should change after rebalance");
     }
@@ -68,7 +68,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         // Grant SET_BUYBACK_POOL permission to operator
         permissions.setPermission(operator, owner, PROJECT_ID, JBPermissionIds.SET_BUYBACK_POOL, true);
 
-        uint256 originalTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 originalTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
         // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
         controller.setWeight(PROJECT_ID, 900e18);
@@ -76,7 +76,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         vm.prank(operator);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
-        uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(newTokenId, 0, "new tokenId should be nonzero");
         assertNotEq(newTokenId, originalTokenId, "tokenId should change after authorized rebalance");
     }
@@ -116,7 +116,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
 
         // tokenIdOf should remain unchanged (revert rolled back state)
         assertEq(
-            hook.tokenIdOf(PROJECT_ID, address(terminalToken)),
+            hook.askTokenIdOf(PROJECT_ID, address(terminalToken)),
             poolTokenId,
             "tokenIdOf should remain unchanged after revert"
         );

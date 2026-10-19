@@ -76,7 +76,7 @@ contract SingleSided_AddLiquidityTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
-        uint256 firstTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 firstTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(firstTokenId, 0, "deployPool should have minted the first position");
 
         // Simulate a buy that lifts the pool's spot price roughly halfway between the initial spot and the
@@ -97,7 +97,7 @@ contract SingleSided_AddLiquidityTest is LPSplitHookV4TestBase {
 
         // (a) A (second) position is tracked, minted above the lifted spot; the first is BURNED, not orphaned — the
         // consolidation invariant means the hook tracks exactly one live position.
-        uint256 secondTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 secondTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(secondTokenId, 0, "tokenIdOf should be nonzero after addLiquidity");
         assertNotEq(secondTokenId, firstTokenId, "addLiquidity should mint a fresh ask, not overwrite in place");
         assertEq(
@@ -189,7 +189,7 @@ contract SingleSided_AddLiquidityTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 0.5e18);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
-        uint256 t1 = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 t1 = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
         // Buy #1 lifts spot; more tokens accumulate; add consolidates (burns t1, mints t2).
         int24 lift1 = initialTick + (corridorUpper - initialTick) / 3;
@@ -197,7 +197,7 @@ contract SingleSided_AddLiquidityTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 0.3e18);
         vm.prank(owner);
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
-        uint256 t2 = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 t2 = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
         // Buy #2 lifts spot again; add consolidates (burns t2, mints t3).
         int24 lift2 = lift1 + (corridorUpper - lift1) / 3;
@@ -205,7 +205,7 @@ contract SingleSided_AddLiquidityTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 0.2e18);
         vm.prank(owner);
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
-        uint256 t3 = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 t3 = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
         // Exactly one live position: each add re-mints a distinct id; the prior ids are burned.
         assertTrue(t1 != t2 && t2 != t3 && t1 != t3, "each consolidation should mint a distinct id");
@@ -255,7 +255,7 @@ contract SingleSided_AddLiquidityTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(tokenId, 0, "deployPool should have minted a position");
 
         // The position folds accumulated ERC-20 (0.5e18) + claimed credits (0.2e18) = 0.7e18 into its project side.

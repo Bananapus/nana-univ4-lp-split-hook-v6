@@ -186,7 +186,7 @@ contract LPSplitHookHandler is Test {
         // Guard: only run if pool is deployed for this project.
         if (!hook.hasDeployedPool(projectId)) return;
 
-        uint256 tokenId = hook.tokenIdOf(projectId, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(projectId, address(terminalToken));
         if (tokenId == 0) return;
 
         // Bound fee amounts to realistic range [0, 1e24] to avoid overflow.
@@ -231,7 +231,7 @@ contract LPSplitHookHandler is Test {
         // Guard: only run if pool is deployed for this project.
         if (!hook.hasDeployedPool(projectId)) return;
 
-        uint256 tokenId = hook.tokenIdOf(projectId, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(projectId, address(terminalToken));
         if (tokenId == 0) return;
 
         // Burn slippage is now contract-derived; the fuzzed min seeds are unused.
@@ -444,7 +444,7 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
     ///      sets tokenIdOf (which would indicate a critical state corruption).
     function invariant_tokenIdConsistentWithDeployedCount() public view {
         for (uint256 i = 1; i <= handler.MAX_PROJECT_ID(); i++) {
-            uint256 tokenId = hook.tokenIdOf(i, address(terminalToken));
+            uint256 tokenId = hook.askTokenIdOf(i, address(terminalToken));
             bool poolDeployed = hook.hasDeployedPool(i);
 
             if (tokenId != 0) {
@@ -528,7 +528,7 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
     ///      a zero tokenId, so this invariant should hold after any sequence of calls.
     function invariant_positionLifecycleConsistency() public view {
         for (uint256 i = 1; i <= handler.MAX_PROJECT_ID(); i++) {
-            uint256 tokenId = hook.tokenIdOf(i, address(terminalToken));
+            uint256 tokenId = hook.askTokenIdOf(i, address(terminalToken));
             bool poolDeployed = hook.hasDeployedPool(i);
 
             // If a pool is deployed, tokenIdOf should be nonzero (rebalance preserves this).

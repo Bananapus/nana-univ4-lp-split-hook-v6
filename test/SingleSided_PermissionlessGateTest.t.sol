@@ -73,7 +73,7 @@ contract SingleSided_PermissionlessGateTest is LPSplitHookV4TestBase {
         vm.prank(STRANGER);
         hook.deployPool(PROJECT_ID);
 
-        assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "a stranger must be able to seed the pool");
+        assertNotEq(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "a stranger must be able to seed the pool");
     }
 
     /// @notice A stranger can extend an existing pool permissionlessly while a live corridor remains.
@@ -82,7 +82,7 @@ contract SingleSided_PermissionlessGateTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 1e18);
         vm.prank(STRANGER);
         hook.deployPool(PROJECT_ID);
-        uint256 firstId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 firstId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
         // Fund the PositionManager for the burn+re-mint consolidation, then accumulate more and extend as a stranger.
         projectToken.mint(address(positionManager), 100e18);
@@ -92,7 +92,7 @@ contract SingleSided_PermissionlessGateTest is LPSplitHookV4TestBase {
         vm.prank(STRANGER);
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
-        uint256 secondId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 secondId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(secondId, 0, "a stranger must be able to extend the pool");
         assertNotEq(secondId, firstId, "the extend consolidates into a fresh position");
     }

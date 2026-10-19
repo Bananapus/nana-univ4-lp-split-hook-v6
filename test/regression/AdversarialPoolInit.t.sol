@@ -150,7 +150,7 @@ contract AdversarialPoolInitTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
 
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "deployment should succeed with in-band price");
-        assertGt(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "LP position should exist");
+        assertGt(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "LP position should exist");
     }
 
     /// @notice No pre-initialization → normal flow, deployment succeeds.
@@ -163,6 +163,6 @@ contract AdversarialPoolInitTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
 
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "normal deployment should succeed");
-        assertGt(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "LP position should exist");
+        assertGt(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "LP position should exist");
     }
 }

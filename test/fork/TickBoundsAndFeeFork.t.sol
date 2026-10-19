@@ -189,7 +189,7 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
         vm.prank(multisig);
         hook.deployPool(projectId);
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "Pool should be deployed");
-        uint256 tokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+        uint256 tokenId = hook.askTokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         assertTrue(tokenId != 0, "Position NFT should exist");
         uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         assertTrue(posLiq > 0, "Position should have liquidity");
@@ -222,7 +222,7 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
                 hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN),
                 string.concat("Pool not deployed for taxRate ", vm.toString(uint256(taxRates[i])))
             );
-            uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+            uint256 tokenId = hook.askTokenIdOf(pid, JBConstants.NATIVE_TOKEN);
             uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
             assertTrue(posLiq > 0, string.concat("Zero liquidity for taxRate ", vm.toString(uint256(taxRates[i]))));
             PoolKey memory key = hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN);
@@ -337,7 +337,7 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
         SwapHelper swapHelper = new SwapHelper(V4_POOL_MANAGER);
         IERC20(address(projectToken)).approve(address(swapHelper), type(uint256).max);
         bool projIsToken0 = Currency.unwrap(key.currency0) == address(projectToken);
-        uint256 tokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+        uint256 tokenId = hook.askTokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         uint128 seedLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         uint256 buyAmountIn = _crossingBuyAmount(projectId, seedLiq);
         vm.deal(address(this), buyAmountIn + 1000 ether);
@@ -381,7 +381,7 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
         SwapHelper swapHelper = new SwapHelper(V4_POOL_MANAGER);
         IERC20(address(projectToken)).approve(address(swapHelper), type(uint256).max);
         bool projIsToken0 = Currency.unwrap(key.currency0) == address(projectToken);
-        uint256 oldTokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+        uint256 oldTokenId = hook.askTokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         uint128 oldLiq = V4_POSITION_MANAGER.getPositionLiquidity(oldTokenId);
         (, int24 tickBefore,,) = V4_POOL_MANAGER.getSlot0(poolId);
         emit log_named_int("  Tick before swaps", tickBefore);
@@ -408,7 +408,7 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
         // Permissionless: any non-owner stranger may rebalance once the corridor has genuinely drifted.
         vm.prank(address(0xB0BB1E));
         hook.rebalanceLiquidity({projectId: projectId, terminalToken: JBConstants.NATIVE_TOKEN});
-        uint256 newTokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+        uint256 newTokenId = hook.askTokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         assertTrue(newTokenId != oldTokenId, "Token ID should change after rebalance");
         uint128 newLiq = V4_POSITION_MANAGER.getPositionLiquidity(newTokenId);
         assertTrue(newLiq > 0, "New position should have liquidity after rebalance");
@@ -435,7 +435,7 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
         );
         PoolKey memory key = hook.poolKeyOf(extremeProjectId, JBConstants.NATIVE_TOKEN);
         PoolId poolId = key.toId();
-        uint256 tokenId = hook.tokenIdOf(extremeProjectId, JBConstants.NATIVE_TOKEN);
+        uint256 tokenId = hook.askTokenIdOf(extremeProjectId, JBConstants.NATIVE_TOKEN);
         uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         assertTrue(posLiq > 0, "Position should have liquidity at 95% tax rate");
         (uint160 sqrtPriceX96, int24 currentTick,,) = V4_POOL_MANAGER.getSlot0(poolId);

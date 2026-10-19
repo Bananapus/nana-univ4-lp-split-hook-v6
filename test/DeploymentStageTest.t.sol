@@ -28,7 +28,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(tokenId, 0, "tokenIdOf should be nonzero after deployPool");
     }
 
@@ -58,7 +58,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
 
         assertEq(terminal.cashOutCallCount(), 0, "a nonzero cash-out tax rate must not trigger a deploy cash-out");
-        assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "the single-sided position should mint");
+        assertNotEq(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "the single-sided position should mint");
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -86,7 +86,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(tokenId, 0, "tokenIdOf should be nonzero after deployPool");
     }
 
@@ -204,7 +204,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         );
 
         // Pool should NOT exist (no auto-deploy)
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertEq(tokenId, 0, "tokenIdOf should remain 0 -- no auto-deploy");
     }
 
@@ -334,7 +334,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
 
         // Record tokenId and mint count after first deploy
-        uint256 firstTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 firstTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         uint256 mintCountAfterDeploy = positionManager.mintCallCount();
         uint256 burnCountAfterDeploy = controller.burnCallCount();
         uint256 accumulatedAfterDeploy = hook.accumulatedProjectTokens(PROJECT_ID);
@@ -350,7 +350,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         vm.stopPrank();
 
         // tokenId should remain the same (no second pool created)
-        uint256 tokenIdAfter = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenIdAfter = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertEq(tokenIdAfter, firstTokenId, "tokenId should not change after second processSplitWith");
 
         // PositionManager.mint should NOT have been called again
@@ -383,7 +383,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
 
         assertNotEq(
-            hook.tokenIdOf(PROJECT_ID, address(terminalToken)),
+            hook.askTokenIdOf(PROJECT_ID, address(terminalToken)),
             0,
             "a permissionless caller must be able to seed the pool"
         );
@@ -406,7 +406,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         vm.prank(operator);
         hook.deployPool(PROJECT_ID);
 
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(tokenId, 0, "tokenIdOf should be nonzero after deployPool by permitted operator");
     }
 }

@@ -89,7 +89,7 @@ contract CrossProjectFork is ForkDeployHelper {
         assertEq(bTokenBalanceAfter, bTokenBalanceBefore, "B token balance should be unchanged");
         // A's accumulation is consumed by the deploy; only an unpaired remainder is carried forward (never burned).
         assertLt(hook.accumulatedProjectTokens(pidA), 10_000e18, "A bulk consumed; only remainder carried after deploy");
-        uint256 tokenIdA = hook.tokenIdOf(pidA, JBConstants.NATIVE_TOKEN);
+        uint256 tokenIdA = hook.askTokenIdOf(pidA, JBConstants.NATIVE_TOKEN);
         uint128 posLiqA = V4_POSITION_MANAGER.getPositionLiquidity(tokenIdA);
         assertTrue(posLiqA > 0, "A position should have liquidity");
         emit log_named_uint("  A position liquidity", posLiqA);

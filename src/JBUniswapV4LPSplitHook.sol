@@ -30,6 +30,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {Actions} from "@uniswap/v4-periphery/src/libraries/Actions.sol";
 import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
+import {PositionInfo, PositionInfoLibrary} from "@uniswap/v4-periphery/src/libraries/PositionInfoLibrary.sol";
 import {ReentrancyGuard} from "solady/src/utils/ReentrancyGuard.sol";
 
 import {IJBUniswapV4LPSplitHook} from "./interfaces/IJBUniswapV4LPSplitHook.sol";
@@ -37,34 +38,25 @@ import {JBLPSplitHookHelpers} from "./libraries/JBLPSplitHookHelpers.sol";
 import {JBUniswapV4LPSplitHookMath} from "./libraries/JBUniswapV4LPSplitHookMath.sol";
 
 /// @custom:benediction DEVS BENEDICAT ET PROTEGAT CONTRACTVS MEAM
-/// @notice A split hook that builds and manages a Uniswap V4 liquidity position for a Juicebox project, using the
-/// project's reserved-token distributions as the seed capital. The lifecycle has two stages:
+/// @notice A split hook that turns a Juicebox project's reserved-token distributions into protocol-owned Uniswap V4
+/// liquidity, held as at most TWO single-sided positions per project:
 ///
-/// 1. Accumulation — Each time the project distributes reserved tokens, the hook's share is held in escrow. Anyone
-/// can
-/// trigger `deployPool`, which mints the accumulated tokens as a single-sided ask position — seeded purely from those
-/// accumulated tokens, never from a cash-out — spanning from the pool's live price out to the project's
-/// issuance/cash-out corridor.
+/// - The ASK holds project tokens from just past the pool's live price out to the issuance ceiling (never below the
+/// cash-out floor).
+/// - The BID holds terminal tokens from just past the live price back to the cash-out floor (never past the issuance
+/// ceiling).
 ///
-/// 2. Grow-and-route — After the pool exists, further reserved tokens sent to the hook keep accumulating in escrow.
-/// Anyone can later call `addLiquidity` to convert the accumulated tokens into more protocol-owned liquidity: it checks
-/// the pool's spot price against the oracle TWAP to reject sandwiched adds, then mints another single-sided ask
-/// position spanning from the pool's live price out to the project's issuance/cash-out corridor. LP trading fees are
-/// collected
-/// periodically from the project's currently tracked position and routed back to the project's terminal balance,
-/// with an optional protocol fee split to a configurable fee project. The hook never burns project tokens:
-/// supply-reducing burns are a protocol-layer split-routing decision, so every token this hook touches ends up as
-/// liquidity.
-///
-/// The hook also supports `rebalanceLiquidity`, which re-centers the LP tick range around the project's current
-/// issuance and cash-out prices when they drift from the original deployment parameters.
+/// Trading converts each position toward the other token. Every recycle (inline on each reserved-token distribution,
+/// or the permissionless `deployPool`/`addLiquidity` retries) collects and routes fees, burns both positions, and
+/// re-mints them single-sided around the new spot: every project token held (new reserved tokens, recovered
+/// principal, fee remainders) goes into the ask, and every terminal token held goes into the bid. Collected fees take
+/// an optional cut for a configurable fee project; the remainder stays protocol-owned liquidity. The hook never burns
+/// project tokens: supply-reducing burns are a protocol-layer split-routing decision.
 ///
 /// @dev Each clone manages exactly one Uniswap V4 pool per project (one terminal-token pairing). `deployPool`,
-/// `addLiquidity`, `rebalanceLiquidity`, and `collectAndRouteLPFees` are permissionless — anyone may call them —
-/// with
-/// abuse bounded by economic gates (asks reach no further than the issuance ceiling, bids no further than the
-/// cash-out floor) and an oracle-TWAP deviation guard. The pool uses a 1% fee tier, 200-tick spacing, and a shared
-/// oracle hook for TWAP observations.
+/// `addLiquidity`, and `collectAndRouteLPFees` are permissionless, with abuse bounded by the economic gates above and
+/// an oracle-TWAP deviation guard. The pool uses a 1% fee tier, 200-tick spacing, and a shared oracle hook for TWAP
+/// observations.
 /// @dev Every state-changing external entry point that can reach an external call (terminal `pay`/`addToBalanceOf`,
 /// controller `claimTokensFor`/`transferCreditsFrom`, or the Uniswap V4 PositionManager) is guarded with
 /// solady's `ReentrancyGuard.nonReentrant`. Guarded functions never call each other externally (via `this.`) —
@@ -73,6 +65,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     using SafeERC20 for IERC20;
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
+    using PositionInfoLibrary for PositionInfo;
     using StateLibrary for IPoolManager;
 
     //*********************************************************************//
@@ -90,14 +83,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// silent truncation (which could disable a mint or shrink a burn slippage floor to near-zero) is rejected
     /// outright.
     error JBUniswapV4LPSplitHook_AmountExceedsUint128(uint256 amount);
-
-    /// @notice Thrown when a permissionless rebalance is attempted but the freshly computed issuance/cash-out corridor
-    /// is within `_MIN_REBALANCE_DRIFT_TICKS` of the corridor the live position was ranged against on BOTH bounds, so
-    /// re-centering would churn the position for no meaningful re-ranging. The drift is measured on CORRIDOR movement
-    /// (floor + ceiling), not on the adaptive lower/bid bound, so a terminal-only inflow cannot trigger churn.
-    error JBUniswapV4LPSplitHook_DriftBelowThreshold(
-        int24 currentTickLower, int24 currentTickUpper, int24 newTickLower, int24 newTickUpper
-    );
 
     /// @notice Thrown when a pre-initialized pool's price sits at or past the CASH-OUT FLOOR side of the project's
     /// economic tick range.
@@ -172,9 +157,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @notice Thrown when a temporary Permit2 allowance granted for an operation is not fully consumed by it.
     error JBUniswapV4LPSplitHook_TemporaryAllowanceNotConsumed(address token, address spender, uint256 allowance);
 
-    /// @notice Thrown when no terminal accepting the given token can be found for the project.
-    error JBUniswapV4LPSplitHook_TerminalNotFound(uint256 projectId, address token);
-
     /// @notice Thrown when a split is routed to the hook under a group ID other than the one reserved for terminal
     /// tokens.
     error JBUniswapV4LPSplitHook_TerminalTokensNotAllowed(uint256 groupId, uint256 requiredGroupId);
@@ -246,13 +228,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// unaffected.
     uint256 internal constant _MIN_ADD_ACCUMULATION = 1e15;
 
-    /// @notice The minimum corridor drift (in ticks) a permissionless rebalance must clear on at least one bound.
-    /// @dev Defaults to one pool `tickSpacing`. If the freshly recomputed `[floor, ceiling]` sits within this distance
-    /// of the live position on BOTH bounds, `rebalanceLiquidity` reverts — cheap churn that would burn and re-mint
-    /// the
-    /// same effective range (paying gas + realizing burn slippage) for no re-centering benefit is rejected.
-    int24 internal constant _MIN_REBALANCE_DRIFT_TICKS = TICK_SPACING;
-
     /// @notice The TWAP observation window (in seconds) used to validate the pool's spot price before adding liquidity.
     /// @dev Matches the buyback hook's expected oracle warmup. `addLiquidity` reverts until the pool oracle has at
     /// least this much history; accumulation continues safely in the meantime.
@@ -296,27 +271,26 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// balance of.
     mapping(uint256 projectId => uint256 accumulatedProjectTokens) public accumulatedProjectTokens;
 
-    /// @notice The terminal-token balance currently held for each project as protocol-owned bid-leg liquidity.
-    /// @dev Mirrors `accumulatedProjectTokens` for the terminal side. Credited ONLY from this project's own
-    /// LP-fee collections (the non-cut remainder of the terminal-token fee) and its own unconsumed mint leftovers.
-    /// `_consolidateAndReMint` sizes the bid leg from this ledger plus the project's own burn-recovered terminal —
-    /// never from the hook's raw token balance — so one project can never consume another's terminal or an outside
-    /// donation.
-    /// @custom:param projectId The ID of the project whose accumulated terminal-token bid liquidity to read.
+    /// @notice The terminal-token balance held for each project outside its positions, waiting for the next bid.
+    /// @dev Mirrors `accumulatedProjectTokens` for the terminal side. Credited ONLY from this project's own LP-fee
+    /// remainders, the principal recovered from burning its own positions, and unconsumed mint leftovers. The bid is
+    /// sized from this ledger, never from the hook's raw token balance, so one project can never consume another's
+    /// terminal or an outside donation.
+    /// @custom:param projectId The ID of the project whose held terminal tokens to read.
     /// @custom:param terminalToken The terminal token paired with the project's token in its pool.
     mapping(uint256 projectId => mapping(address terminalToken => uint256)) public accumulatedTerminalTokens;
 
-    /// @notice The lower tick of the currently active LP position for each project and terminal-token pair.
-    /// @dev Recorded when a position is minted. `addLiquidity` compares the live corridor against these stored ticks to
-    /// decide whether to top up the active position or re-range into a new one.
+    /// @notice The PositionManager token ID of each project's ask position (project tokens, spot to ceiling).
+    /// @dev Zero when the project has no live ask (before deployment, or when the last recycle left no ask range).
     /// @custom:param projectId The ID of the project.
     /// @custom:param terminalToken The terminal token paired with the project's token in the deployed pool.
-    mapping(uint256 projectId => mapping(address terminalToken => int24 tickLower)) public activeTickLowerOf;
+    mapping(uint256 projectId => mapping(address terminalToken => uint256 tokenId)) public askTokenIdOf;
 
-    /// @notice The upper tick of the currently active LP position for each project and terminal-token pair.
+    /// @notice The PositionManager token ID of each project's bid position (terminal tokens, spot to floor).
+    /// @dev Zero when the project has no live bid (no terminal tokens held, or no bid range at the last recycle).
     /// @custom:param projectId The ID of the project.
     /// @custom:param terminalToken The terminal token paired with the project's token in the deployed pool.
-    mapping(uint256 projectId => mapping(address terminalToken => int24 tickUpper)) public activeTickUpperOf;
+    mapping(uint256 projectId => mapping(address terminalToken => uint256 tokenId)) public bidTokenIdOf;
 
     /// @notice The buyback-hook registry configured for this clone.
     /// @dev Held as per-clone storage (set once via `initialize`) rather than an implementation immutable so different
@@ -391,28 +365,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @dev Set once per clone via `initialize`. Held as storage rather than immutable so the implementation's
     /// constructor inputs are byte-identical on every chain (the V4 PositionManager varies per chain).
     IPositionManager public positionManager;
-
-    /// @notice The lower tick of the issuance/cash-out CORRIDOR the currently active position was ranged against.
-    /// @dev Distinct from `activeTickLowerOf`: the active position's bounds include the ADAPTIVE bid bound (which moves
-    /// with the hook's terminal balance, not real economic drift), whereas this records the economic corridor floor at
-    /// mint time. `rebalanceLiquidity`'s drift guard compares the freshly recomputed corridor against these stored
-    /// corridor bounds — not against the adaptive bounds — so a terminal-only inflow can never trigger churn while
-    /// a
-    /// genuine issuance-decay/surplus move can.
-    /// @custom:param projectId The ID of the project.
-    /// @custom:param terminalToken The terminal token paired with the project's token in the deployed pool.
-    mapping(uint256 projectId => mapping(address terminalToken => int24 corridorLower)) public rangedCorridorLowerOf;
-
-    /// @notice The upper tick of the issuance/cash-out CORRIDOR the currently active position was ranged against.
-    /// @custom:param projectId The ID of the project.
-    /// @custom:param terminalToken The terminal token paired with the project's token in the deployed pool.
-    mapping(uint256 projectId => mapping(address terminalToken => int24 corridorUpper)) public rangedCorridorUpperOf;
-
-    /// @notice The Uniswap V4 PositionManager token ID for each deployed project and terminal-token pair.
-    /// @dev This is zero before deployment and nonzero after the first successful position mint.
-    /// @custom:param projectId The ID of the project to get an LP position token ID for.
-    /// @custom:param terminalToken The terminal token paired with the project's token in the deployed pool.
-    mapping(uint256 projectId => mapping(address terminalToken => uint256 tokenId)) public tokenIdOf;
 
     //*********************************************************************//
     // -------------------- internal stored properties ------------------- //
@@ -572,20 +524,22 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
     }
 
-    /// @notice Collect accrued Uniswap LP trading fees for a project (from its single active position) and route them
-    /// into the project's protocol-owned liquidity. A best-effort fee-project cut is taken on EACH side; the remaining
-    /// project-token portion is carried into the ask-leg ledger and the remaining terminal-token portion into the
-    /// bid-leg ledger, both becoming future liquidity (never burned, never deposited to the treasury). Callable by
+    /// @notice Collect accrued Uniswap LP trading fees from a project's ask and bid positions and route them into the
+    /// project's protocol-owned liquidity. A best-effort fee-project cut is taken on EACH side; the remaining
+    /// project-token portion is carried into the ask ledger and the remaining terminal-token portion into the bid
+    /// ledger, both becoming liquidity at the next recycle (never burned, never deposited to the treasury). Callable by
     /// anyone.
     /// @param projectId The ID of the project whose LP fees to collect.
     /// @param terminalToken The terminal token paired with the project token in the pool.
     // forge-lint: disable-next-line(mixed-case-function)
     function collectAndRouteLPFees(uint256 projectId, address terminalToken) external nonReentrant {
-        // Ensure a pool has been deployed for this project/token pair.
-        uint256 tokenId = tokenIdOf[projectId][terminalToken];
-        if (tokenId == 0) {
+        uint256 askTokenId = askTokenIdOf[projectId][terminalToken];
+        uint256 bidTokenId = bidTokenIdOf[projectId][terminalToken];
+
+        // Ensure the project has at least one live position for this pair.
+        if (askTokenId == 0 && bidTokenId == 0) {
             revert JBUniswapV4LPSplitHook_InvalidStageForAction({
-                projectId: projectId, terminalToken: terminalToken, tokenId: tokenId
+                projectId: projectId, terminalToken: terminalToken, tokenId: 0
             });
         }
 
@@ -593,10 +547,24 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         address projectToken = _tokenOf(projectId);
         PoolKey memory key = poolKeysOf[projectId][terminalToken];
 
-        // Collect LP fees and route them to the project's terminal balance.
-        _collectAndRouteFees({
-            projectId: projectId, projectToken: projectToken, terminalToken: terminalToken, tokenId: tokenId, key: key
-        });
+        if (askTokenId != 0) {
+            _collectAndRouteFees({
+                projectId: projectId,
+                projectToken: projectToken,
+                terminalToken: terminalToken,
+                tokenId: askTokenId,
+                key: key
+            });
+        }
+        if (bidTokenId != 0) {
+            _collectAndRouteFees({
+                projectId: projectId,
+                projectToken: projectToken,
+                terminalToken: terminalToken,
+                tokenId: bidTokenId,
+                key: key
+            });
+        }
     }
 
     /// @notice Create the Uniswap V4 pool and mint the initial LP position as a single-sided ask of the project's
@@ -686,99 +654,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         _attemptAutomation(context.projectId);
     }
 
-    /// @notice Burn the project's single LP position and re-mint it, re-centered on the project's freshly recomputed
-    /// issuance/cash-out corridor. Useful when issuance/cash-out rate changes have shifted the economic band away from
-    /// the live position. Permissionless: anyone may call it. Two guards bound abuse: the fresh corridor must have
-    /// drifted at least `_MIN_REBALANCE_DRIFT_TICKS` from the live position on at least one bound (so a caller cannot
-    /// churn the position for gas/slippage with no re-ranging), and the pool's spot must be near the oracle TWAP (so a
-    /// sandwiched spot cannot skew the re-mint ratio). The terminal tokens recovered from the burn become the bid side
-    /// of the re-centered two-sided position.
-    /// @param projectId The ID of the project whose LP position should be rebalanced.
-    /// @param terminalToken The terminal token paired with the project token in the pool.
-    function rebalanceLiquidity(uint256 projectId, address terminalToken) external nonReentrant {
-        address terminal = _primaryTerminalOf({projectId: projectId, token: terminalToken});
-        if (terminal == address(0)) {
-            revert JBUniswapV4LPSplitHook_InvalidTerminalToken({projectId: projectId, terminalToken: terminalToken});
-        }
-
-        uint256 tokenId = tokenIdOf[projectId][terminalToken];
-        if (tokenId == 0) {
-            revert JBUniswapV4LPSplitHook_InvalidStageForAction({
-                projectId: projectId, terminalToken: terminalToken, tokenId: tokenId
-            });
-        }
-
-        address projectToken = _tokenOf(projectId);
-        PoolKey memory key = poolKeysOf[projectId][terminalToken];
-        address controller = _controllerOf(projectId);
-        (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
-
-        // Collect and route accrued LP trading fees BEFORE the burn so the terminal-fee remainder lands in this
-        // project's bid-leg ledger and is folded into the re-minted position's bid (rather than compounding the burn's
-        // principal read), and the project-fee remainder lands in the ask-leg ledger. The corridor itself is derived
-        // from the project's rates/surplus, which fee routing leaves untouched: collected fees become protocol-owned
-        // liquidity held in the hook, not treasury surplus.
-        _collectAndRouteFees({
-            projectId: projectId, projectToken: projectToken, terminalToken: terminalToken, tokenId: tokenId, key: key
-        });
-
-        // Recompute the project's economic corridor from its current rates.
-        (int24 floorTick, int24 ceilingTick) = JBUniswapV4LPSplitHookMath.calculateTickBounds({
-            directory: IJBDirectory(DIRECTORY),
-            suckerRegistry: SUCKER_REGISTRY,
-            projectId: projectId,
-            terminalToken: terminalToken,
-            projectToken: projectToken,
-            controller: controller,
-            ruleset: ruleset
-        });
-
-        // Drift guard: reject a rebalance that would not meaningfully re-range. The comparison is against the CORRIDOR
-        // the live position was ranged against (floor + ceiling), NOT the active position's adaptive bounds — the
-        // lower/bid bound moves with the hook's terminal balance rather than real economic drift, so comparing it would
-        // let a pure terminal inflow churn the position. If the fresh corridor is within `_MIN_REBALANCE_DRIFT_TICKS`
-        // of the ranged-against corridor on BOTH bounds, there is nothing worth churning for.
-        int24 prevCorridorLower = rangedCorridorLowerOf[projectId][terminalToken];
-        int24 prevCorridorUpper = rangedCorridorUpperOf[projectId][terminalToken];
-        if (
-            _absTickDiff({a: floorTick, b: prevCorridorLower}) <= _MIN_REBALANCE_DRIFT_TICKS
-                && _absTickDiff({a: ceilingTick, b: prevCorridorUpper}) <= _MIN_REBALANCE_DRIFT_TICKS
-        ) {
-            revert JBUniswapV4LPSplitHook_DriftBelowThreshold({
-                currentTickLower: prevCorridorLower,
-                currentTickUpper: prevCorridorUpper,
-                newTickLower: floorTick,
-                newTickUpper: ceilingTick
-            });
-        }
-
-        // Reject the rebalance while the pool's spot price is off the oracle TWAP. The burn and re-mint price against
-        // the live spot, so a sandwiched/JIT-skewed spot would make the re-mint deploy at a manipulated ratio. Mirrors
-        // `addLiquidity`'s guard (and, like it, reverts if the oracle TWAP has not warmed up yet).
-        _requireSpotNearTwap({projectId: projectId, terminalToken: terminalToken, key: key});
-
-        // Burn the live position and re-mint ONE adaptive position across the fresh corridor, folding in recovered
-        // tokens and any hook-held credits. Asks (project) are anchored to the full project balance up to the ceiling;
-        // the bid bound is solved from the recovered/accrued terminal (clamped at the corridor floor). A spot that
-        // leaves no room for asks re-mints as bids alone, which is where the position lands once the asks have filled.
-        _consolidateAndReMint({
-            projectId: projectId,
-            projectToken: projectToken,
-            terminalToken: terminalToken,
-            corridorLower: floorTick,
-            corridorUpper: ceilingTick,
-            controller: controller
-        });
-
-        emit PermissionlessRebalanced({
-            projectId: projectId,
-            terminalToken: terminalToken,
-            tickLower: activeTickLowerOf[projectId][terminalToken],
-            tickUpper: activeTickUpperOf[projectId][terminalToken],
-            caller: msg.sender
-        });
-    }
-
     //*********************************************************************//
     // ------------------------- external views -------------------------- //
     //*********************************************************************//
@@ -800,8 +675,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param terminalToken The terminal token paired with the project token.
     /// @return deployed True once a position exists for the pair.
     function isPoolDeployed(uint256 projectId, address terminalToken) public view returns (bool deployed) {
-        // A nonzero position token id is the marker that the pool was deployed and seeded.
-        return tokenIdOf[projectId][terminalToken] != 0;
+        // The pool pairing is recorded once the deployment (pool + first recycle) has succeeded.
+        return hasDeployedPool[projectId] && deployedTerminalTokenOf[projectId] == terminalToken;
     }
 
     /// @notice The Uniswap V4 pool key (currency pair, fee, tick spacing, and hook) for a project's deployed pool.
@@ -833,206 +708,19 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         accumulatedProjectTokens[projectId] += amount;
     }
 
-    /// @notice Compute the adaptive `[tickLower, tickUpper]` range and mintable liquidity for ONE position, given the
-    /// held project/terminal amounts. The ask leg (project-token-only, from spot out to the issuance ceiling) is
-    /// anchored to the ENTIRE project balance, so asks are never starved by a scarce terminal. The bid leg
-    /// (terminal-token-only, from spot toward the cash-out floor) is sized by solving for the bound at which the
-    /// terminal balance exactly fills the leg at that same liquidity; if the terminal is so abundant that the solved
-    /// bound would fall past the floor, the bound is pinned at the floor and `bidAmountForMint < terminalAmount` (the
-    /// excess is routed to the project balance by the caller as a leftover, never stranded).
-    /// @dev Branches on token ordering — Uniswap's below-range/above-range single-sided rule flips with which
-    /// currency
-    /// the project token is, so the ask leg is ABOVE spot when the project is token0 and BELOW spot when it is token1.
-    /// @dev Three regimes, in order:
-    /// 1. Ask room (project tokens held AND a spot strictly inside the ceiling): the ask-anchored solve above. When
-    /// the solved bid bound aligns onto the ceiling tick — the spot sits within one spacing of it — the range is
-    /// clamped to keep a one-spacing leg rather than collapsing to zero width.
-    /// 2. Bid-only (no project tokens, or a spot at/past the ceiling, or a collapsed leg with no terminal to pair
-    /// across it): liquidity anchors to the TERMINAL amount over the bid leg alone, which is where the position
-    /// naturally lands once the asks have filled and converted the hook's holdings to terminal. The bid leg is capped
-    /// at the issuance ceiling, so the hook never bids above the issuance price. Any project tokens contribute zero
-    /// and are carried back to the accumulation ledger by the caller.
-    /// 3. Neither: revert `JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot` — the holdings wait for the corridor
-    /// or
-    /// the spot to move.
-    /// @param projectIsToken0 Whether the project token sorts as Uniswap currency0.
-    /// @param corridorLower The lower (raw-ascending) bound of the project's economic corridor.
-    /// @param corridorUpper The upper (raw-ascending) bound of the project's economic corridor.
-    /// @param sqrtSpotX96 The pool's live spot sqrt price.
-    /// @param projectAmount The total project tokens to deploy as the ask leg.
-    /// @param terminalAmount The total terminal tokens available to seed the bid leg.
-    /// @return tickLower The lower tick of the adaptive position.
-    /// @return tickUpper The upper tick of the adaptive position.
-    /// @return bidAmountForMint The terminal amount actually paired into the mint (== `terminalAmount` unless the bid
-    /// bound was pinned at the floor, in which case it is the floor-leg capacity and the remainder is a leftover).
-    function _adaptiveRange(
-        bool projectIsToken0,
-        int24 corridorLower,
-        int24 corridorUpper,
-        uint160 sqrtSpotX96,
-        uint256 projectAmount,
-        uint256 terminalAmount
-    )
-        internal
-        pure
-        returns (int24 tickLower, int24 tickUpper, uint256 bidAmountForMint)
-    {
-        int24 spotTick = TickMath.getTickAtSqrtPrice(sqrtSpotX96);
-
-        if (projectIsToken0) {
-            // Project is token0: asks (token0) sit ABOVE spot, up to the issuance ceiling (the corridor's UPPER tick).
-            // Bids (token1 = terminal) sit BELOW spot, down toward the cash-out floor (the corridor's LOWER tick).
-            int24 ceilingTick = corridorUpper;
-            int24 floorTick = corridorLower;
-
-            // Ask-anchored geometry, while there are project tokens to offer and a spot strictly inside the ceiling.
-            if (projectAmount != 0 && spotTick < ceilingTick) {
-                uint160 sqrtCeiling = TickMath.getSqrtPriceAtTick(ceilingTick);
-
-                // Anchor liquidity to the ask leg so the ENTIRE project balance deploys across [spot, ceiling].
-                uint128 liquidity = LiquidityAmounts.getLiquidityForAmount0({
-                    sqrtPriceAX96: sqrtSpotX96, sqrtPriceBX96: sqrtCeiling, amount0: projectAmount
-                });
-
-                tickUpper = ceilingTick;
-
-                // Terminal the full bid leg [floor, spot] can absorb at that liquidity.
-                uint256 maxBid = liquidity == 0
-                    ? 0
-                    : SqrtPriceMath.getAmount1Delta({
-                        sqrtPriceAX96: TickMath.getSqrtPriceAtTick(floorTick),
-                        sqrtPriceBX96: sqrtSpotX96,
-                        liquidity: liquidity,
-                        roundUp: false
-                    });
-
-                if (terminalAmount >= maxBid) {
-                    // Terminal is abundant: pin the bid bound at the floor; only `maxBid` is paired, the rest is a
-                    // leftover.
-                    tickLower = floorTick;
-                    bidAmountForMint = maxBid;
-                } else {
-                    // Solve the bid bound X where the terminal exactly fills [X, spot]: sqrt(X) = sqrt(spot) - T/L.
-                    uint160 sqrtBid = SqrtPriceMath.getNextSqrtPriceFromAmount1RoundingDown({
-                        sqrtPX96: sqrtSpotX96, liquidity: liquidity, amount: terminalAmount, add: false
-                    });
-                    // Align the bid bound INWARD (up) so the paired range never demands more terminal than is held.
-                    tickLower = JBLPSplitHookHelpers.alignTickToSpacingCeil({
-                        tick: TickMath.getTickAtSqrtPrice(sqrtBid), spacing: TICK_SPACING
-                    });
-                    if (tickLower < floorTick) tickLower = floorTick;
-                    bidAmountForMint = terminalAmount;
-                }
-
-                // A spot within one spacing of the ceiling aligns the bid bound onto the ceiling itself. Keep a
-                // one-spacing leg for the asks to occupy; the held terminal pairs across the part of it below spot.
-                if (tickLower >= tickUpper && terminalAmount != 0) tickLower = tickUpper - TICK_SPACING;
-                if (tickLower < tickUpper) return (tickLower, tickUpper, bidAmountForMint);
-            }
-
-            // Bid-only: anchor liquidity to the TERMINAL over the bid leg [floor, spot], capped at the ceiling so the
-            // hook never bids above the issuance price. Held project tokens contribute nothing and are carried back.
-            if (terminalAmount != 0) {
-                tickUpper = spotTick < ceilingTick
-                    ? JBLPSplitHookHelpers.alignTickToSpacing({tick: spotTick, spacing: TICK_SPACING})
-                    : ceilingTick;
-                if (tickUpper > floorTick) return (floorTick, tickUpper, terminalAmount);
-            }
-
-            revert JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot({
-                spotTick: spotTick,
-                ceilingTick: ceilingTick,
-                projectAmount: projectAmount,
-                terminalAmount: terminalAmount
-            });
-        }
-
-        // Project is token1: mirror image. Asks (token1) sit BELOW spot down to the issuance ceiling (the corridor's
-        // LOWER tick). Bids (token0 = terminal) sit ABOVE spot, up toward the cash-out floor (the corridor's UPPER
-        // tick).
-        int24 ceilingTickForToken1 = corridorLower;
-        int24 floorTickForToken1 = corridorUpper;
-
-        // Ask-anchored geometry, while there are project tokens to offer and a spot strictly inside the ceiling.
-        if (projectAmount != 0 && spotTick > ceilingTickForToken1) {
-            uint160 sqrtCeiling = TickMath.getSqrtPriceAtTick(ceilingTickForToken1);
-
-            // Anchor liquidity to the ask leg so the ENTIRE project balance deploys across [ceiling, spot].
-            uint128 liquidity = LiquidityAmounts.getLiquidityForAmount1({
-                sqrtPriceAX96: sqrtCeiling, sqrtPriceBX96: sqrtSpotX96, amount1: projectAmount
-            });
-
-            tickLower = ceilingTickForToken1;
-
-            // Terminal the full bid leg [spot, floor] can absorb at that liquidity.
-            uint256 maxBid = liquidity == 0
-                ? 0
-                : SqrtPriceMath.getAmount0Delta({
-                    sqrtPriceAX96: sqrtSpotX96,
-                    sqrtPriceBX96: TickMath.getSqrtPriceAtTick(floorTickForToken1),
-                    liquidity: liquidity,
-                    roundUp: false
-                });
-
-            if (terminalAmount >= maxBid) {
-                // Terminal is abundant: pin the bid bound at the floor; only `maxBid` is paired, the rest is a
-                // leftover.
-                tickUpper = floorTickForToken1;
-                bidAmountForMint = maxBid;
-            } else {
-                // Solve the bid bound Y where the terminal exactly fills [spot, Y] (removing token0 raises the price).
-                uint160 sqrtBid = SqrtPriceMath.getNextSqrtPriceFromAmount0RoundingUp({
-                    sqrtPX96: sqrtSpotX96, liquidity: liquidity, amount: terminalAmount, add: false
-                });
-                // Align the bid bound INWARD (down) so the paired range never demands more terminal than is held.
-                tickUpper = JBLPSplitHookHelpers.alignTickToSpacing({
-                    tick: TickMath.getTickAtSqrtPrice(sqrtBid), spacing: TICK_SPACING
-                });
-                if (tickUpper > floorTickForToken1) tickUpper = floorTickForToken1;
-                bidAmountForMint = terminalAmount;
-            }
-
-            // A spot within one spacing of the ceiling aligns the bid bound onto the ceiling itself. Keep a
-            // one-spacing leg for the asks to occupy; the held terminal pairs across the part of it above spot.
-            if (tickUpper <= tickLower && terminalAmount != 0) tickUpper = tickLower + TICK_SPACING;
-            if (tickLower < tickUpper) return (tickLower, tickUpper, bidAmountForMint);
-        }
-
-        // Bid-only: anchor liquidity to the TERMINAL over the bid leg [spot, floor], capped at the ceiling so the hook
-        // never bids above the issuance price. Held project tokens contribute nothing and are carried back.
-        if (terminalAmount != 0) {
-            tickLower = spotTick > ceilingTickForToken1
-                ? JBLPSplitHookHelpers.alignTickToSpacingCeil({tick: spotTick, spacing: TICK_SPACING})
-                : ceilingTickForToken1;
-            if (tickLower < floorTickForToken1) return (tickLower, floorTickForToken1, terminalAmount);
-        }
-
-        revert JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot({
-            spotTick: spotTick,
-            ceilingTick: ceilingTickForToken1,
-            projectAmount: projectAmount,
-            terminalAmount: terminalAmount
-        });
-    }
-
-    /// @notice Convert the project's accumulated reserved tokens into additional protocol-owned liquidity on its
-    /// deployed pool. Shared executor behind the permissionless `addLiquidity` entry point and the best-effort inline
-    /// automation self-call.
-    /// @param projectId The ID of the project whose accumulated tokens should be added as liquidity.
+    /// @notice Recycle the project's positions on its deployed pool, folding in the accumulated reserved tokens. Shared
+    /// executor behind the permissionless `addLiquidity` entry point and the best-effort inline automation self-call.
+    /// @param projectId The ID of the project whose positions should be recycled.
     /// @param terminalToken The terminal token paired with the project token in the deployed pool.
     function _addLiquidity(uint256 projectId, address terminalToken) internal {
-        // Require a deployed pool for this project/terminal-token pair — `addLiquidity` only grows an existing pool.
-        uint256 activeTokenId = tokenIdOf[projectId][terminalToken];
-        if (activeTokenId == 0) {
+        // Require the deployed pool for this exact pairing — `addLiquidity` only recycles an existing pool.
+        if (!isPoolDeployed({projectId: projectId, terminalToken: terminalToken})) {
             revert JBUniswapV4LPSplitHook_InvalidStageForAction({
-                projectId: projectId, terminalToken: terminalToken, tokenId: activeTokenId
+                projectId: projectId, terminalToken: terminalToken, tokenId: 0
             });
         }
 
-        // Fetch the controller and current ruleset once; both feed the corridor math. `addLiquidity` is fully
-        // permissionless: the only gate is the economic one applied inside the mint executor (asks reach no further
-        // than the issuance ceiling and bids no further than the cash-out floor, so a spot that leaves no room for
-        // asks extends the position as bids alone).
+        // Fetch the controller and current ruleset once; both feed the corridor math.
         address controller = _controllerOf(projectId);
         (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
 
@@ -1049,7 +737,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             });
         }
 
-        // Resolve the project's ERC-20 and the pool key once for the TWAP guard and the mint below.
+        // Resolve the project's ERC-20 and the pool key once for the TWAP guard and the recycle below.
         address projectToken = _tokenOf(projectId);
         PoolKey memory key = poolKeysOf[projectId][terminalToken];
 
@@ -1061,12 +749,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             revert JBUniswapV4LPSplitHook_InsufficientBalance({available: spendable, required: accumulated});
         }
 
-        // Reject the add while the pool's spot price is off the oracle TWAP. Stops a JIT/sandwich attacker from
-        // shoving the pool price right before our add to make us mint at a manipulated range.
+        // Reject the recycle while the pool's spot price is off the oracle TWAP. The burns and re-mints price against
+        // the live spot, so a sandwiched/JIT-skewed spot would re-center both positions around a manipulated price.
         _requireSpotNearTwap({projectId: projectId, terminalToken: terminalToken, key: key});
 
-        // Mint another single-sided ask position from the accumulated project tokens — no funding cash-out.
-        _addSingleSidedLiquidity({
+        _recycle({
             projectId: projectId,
             projectToken: projectToken,
             terminalToken: terminalToken,
@@ -1074,103 +761,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             ruleset: ruleset
         });
 
-        // Surface the resulting position id.
         emit LiquidityAdded({
             projectId: projectId,
             terminalToken: terminalToken,
-            tokenId: tokenIdOf[projectId][terminalToken],
-            isNewPosition: true,
+            askTokenId: askTokenIdOf[projectId][terminalToken],
+            bidTokenId: bidTokenIdOf[projectId][terminalToken],
             caller: msg.sender
         });
-    }
-
-    /// @notice Consolidate the project's holdings into ONE single-sided (asks-only) position spanning from the pool's
-    /// live spot out to the project's issuance/cash-out ceiling — no funding cash-out. Used by both `deployPool` (no
-    /// prior position to burn) and `addLiquidity` (burns + refolds the prior position so the hook never fragments into
-    /// multiple untracked NFTs). The position holds only project tokens and only trades once buyers push spot into it.
-    /// @dev Assumes the pool is already initialized (the revnet norm) — `_deployPoolAndAddLiquidity` calls
-    /// `_createAndInitializePool` immediately before this, which best-effort initializes an uninitialized pool or
-    /// accepts an already-initialized one's live price.
-    /// @param projectId The ID of the project.
-    /// @param projectToken The project token address.
-    /// @param terminalToken The terminal token address.
-    /// @param controller The project's controller address (pre-fetched to avoid redundant lookups).
-    /// @param ruleset The project's current ruleset (pre-fetched to avoid redundant lookups).
-    function _addSingleSidedLiquidity(
-        uint256 projectId,
-        address projectToken,
-        address terminalToken,
-        address controller,
-        JBRuleset memory ruleset
-    )
-        internal
-    {
-        // Collect and route any accrued LP trading fees BEFORE the re-mint so the terminal-fee remainder lands in this
-        // project's bid-leg ledger (folded into the re-mint's bid) and the project-fee remainder in the ask-leg ledger.
-        // Skipped on a first deploy (no position yet). The burn inside `_consolidateAndReMint` then recovers only
-        // principal.
-        uint256 existingTokenId = tokenIdOf[projectId][terminalToken];
-        if (existingTokenId != 0) {
-            _collectAndRouteFees({
-                projectId: projectId,
-                projectToken: projectToken,
-                terminalToken: terminalToken,
-                tokenId: existingTokenId,
-                key: poolKeysOf[projectId][terminalToken]
-            });
-        }
-
-        // The project's economic corridor (cash-out floor to issuance ceiling), as a sorted ascending raw tick range.
-        // The adaptive-range logic inside `_consolidateAndReMint` anchors asks to the full project balance up to the
-        // ceiling and solves the bid bound from the terminal balance (clamped at the floor), spanning the live spot.
-        (int24 corridorLower, int24 corridorUpper) = JBUniswapV4LPSplitHookMath.calculateTickBounds({
-            directory: IJBDirectory(DIRECTORY),
-            suckerRegistry: SUCKER_REGISTRY,
-            projectId: projectId,
-            terminalToken: terminalToken,
-            projectToken: projectToken,
-            controller: controller,
-            ruleset: ruleset
-        });
-
-        _consolidateAndReMint({
-            projectId: projectId,
-            projectToken: projectToken,
-            terminalToken: terminalToken,
-            corridorLower: corridorLower,
-            corridorUpper: corridorUpper,
-            controller: controller
-        });
-    }
-
-    /// @notice Deposit tokens into a project's primary terminal balance via `addToBalanceOf`.
-    /// @param projectId The ID of the project to credit.
-    /// @param token The token to deposit (native sentinel or ERC-20).
-    /// @param amount The amount to deposit.
-    /// @param isNative Whether `token` is the native-ETH sentinel (sent as msg.value) vs. an ERC-20 (pulled via
-    /// approve).
-    function _addToProjectBalance(uint256 projectId, address token, uint256 amount, bool isNative) internal {
-        // Nothing to deposit — avoid a no-op external call.
-        if (amount == 0) return;
-
-        // Route to the project's primary terminal for this token; revert if it has none (the deposit has no home).
-        address terminal = _primaryTerminalOf({projectId: projectId, token: token});
-        if (terminal == address(0)) {
-            revert JBUniswapV4LPSplitHook_TerminalNotFound({projectId: projectId, token: token});
-        }
-
-        // ERC-20 deposits are pulled by the terminal, so grant an exact-use approval first; native ETH is sent inline.
-        if (!isNative) {
-            IERC20(token).forceApprove({spender: terminal, value: amount});
-        }
-
-        // Add the tokens to the project's terminal balance. `shouldReturnHeldFees: false` — this is a plain top-up.
-        IJBMultiTerminal(terminal).addToBalanceOf{value: isNative ? amount : 0}({
-            projectId: projectId, token: token, amount: amount, shouldReturnHeldFees: false, memo: "", metadata: ""
-        });
-
-        // The terminal must have consumed the full approval; a leftover allowance is live spend authority and reverts.
-        if (!isNative) _requireTemporaryAllowanceConsumed({token: token, spender: terminal});
     }
 
     /// @notice Grant the PositionManager a time-limited Permit2 allowance so it can pull tokens during SETTLE.
@@ -1377,7 +974,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
     /// @notice Burn an existing LP position via `BURN_POSITION` + `TAKE_PAIR` and recover its principal (plus any
     /// accrued fees the burn collects). The recovered tokens remain in this contract for the subsequent re-mint.
-    /// @dev Called only by `_consolidateAndReMint`, which derives the min amounts from a live-price principal read
+    /// @dev Called only by `_retirePosition`, which derives the min amounts from a live-price principal read
     /// (`_burnSlippageFloor`) — the min amounts are always contract-derived, never caller-supplied.
     /// @param tokenId The Uniswap V4 position NFT token ID to burn.
     /// @param key The pool key identifying the Uniswap V4 pool.
@@ -1407,29 +1004,19 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     }
 
     /// @notice The contract-derived burn slippage floor for `tokenId`: `_BURN_SLIPPAGE_BPS`/`BPS` of the position's
-    /// principal computed from its on-chain liquidity and the live pool price. Returned in (currency0, currency1) order
-    /// to match `BURN_POSITION`. Callers never supply burn minimums, so a sandwiched spot cannot force a bad unwind.
+    /// principal computed from its on-chain liquidity and range at the live pool price. Returned in (currency0,
+    /// currency1) order to match `BURN_POSITION`. Callers never supply burn minimums.
     /// @param tokenId The position NFT token ID to be burned.
-    /// @param tickLower The lower tick of the live position.
-    /// @param tickUpper The upper tick of the live position.
     /// @param key The pool key identifying the Uniswap V4 pool.
     /// @return min0 The minimum currency0 the burn must return.
     /// @return min1 The minimum currency1 the burn must return.
-    function _burnSlippageFloor(
-        uint256 tokenId,
-        int24 tickLower,
-        int24 tickUpper,
-        PoolKey memory key
-    )
-        internal
-        view
-        returns (uint128 min0, uint128 min1)
-    {
+    function _burnSlippageFloor(uint256 tokenId, PoolKey memory key) internal view returns (uint128 min0, uint128 min1) {
         uint128 liquidity = positionManager.getPositionLiquidity(tokenId);
         if (liquidity == 0) return (0, 0);
 
+        (, PositionInfo info) = positionManager.getPoolAndPositionInfo(tokenId);
         (uint256 amount0, uint256 amount1) = _positionPrincipal({
-            sqrtPriceX96: _getSqrtPriceX96(key), tickLower: tickLower, tickUpper: tickUpper, liquidity: liquidity
+            sqrtPriceX96: _getSqrtPriceX96(key), tickLower: info.tickLower(), tickUpper: info.tickUpper(), liquidity: liquidity
         });
 
         // Position principal is bounded by pooled token balances, so the discounted floor normally fits in uint128;
@@ -1600,156 +1187,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         });
     }
 
-    /// @notice Burn the project's live position (if any), fold in its recovered PRINCIPAL, the accumulation ledger, and
-    /// any hook-held project-token credits, and re-mint them as EXACTLY ONE position across `[tickLower, tickUpper]` at
-    /// the live spot. Leftovers are carried forward (project → the accumulation ledger; terminal → the project
-    /// balance), never burned. This is the single lifecycle primitive behind deploy, add, and rebalance; setting
-    /// `tokenIdOf` to the fresh mint AFTER burning the prior id is what enforces the one-position-per-pair invariant.
-    /// @dev The mint is single-sided (project-only) when the range sits on one side of the spot, and two-sided when the
-    /// range spans it — determined purely by `[tickLower, tickUpper]` vs. spot, so the caller controls single vs. two
-    /// sided by choosing the range. The burn slippage floor is always contract-derived (a fraction of a pre-burn
-    /// principal read at the live spot); callers never supply burn minimums. Before burning an existing position, any
-    /// accrued LP trading fees are collected and routed via `_collectAndRouteFees` (each side net of its best-effort
-    /// fee-project cut, the terminal remainder carried into the bid-leg ledger and the project remainder into the
-    /// ask-leg ledger) so the burn recovers only principal — trading fees are never re-folded into LP as untaxed
-    /// principal.
-    /// @param projectId The ID of the project.
-    /// @param projectToken The project token address.
-    /// @param terminalToken The terminal token address.
-    /// @param corridorLower The lower (raw-ascending) bound of the project's economic corridor.
-    /// @param corridorUpper The upper (raw-ascending) bound of the project's economic corridor.
-    /// @param controller The project's controller address (pre-fetched to avoid redundant lookups).
-    function _consolidateAndReMint(
-        uint256 projectId,
-        address projectToken,
-        address terminalToken,
-        int24 corridorLower,
-        int24 corridorUpper,
-        address controller
-    )
-        internal
-    {
-        PoolKey memory key = poolKeysOf[projectId][terminalToken];
-
-        // Fold hook-held project-token credits into transferable ERC-20 so they are included in the mint, not stranded.
-        uint256 claimedCredits = _claimHookCreditsFor({projectId: projectId, controller: controller});
-
-        // Burn the live position (if any), recovering only its PRINCIPAL with a contract-derived slippage floor.
-        // Snapshot the balances AFTER claiming credits so the recovered-deltas exclude them (counted separately below).
-        // LP trading fees are collected and routed by the CALLER before this runs (so the corridor reflects post-fee
-        // surplus), leaving the burn to recover only principal.
-        uint256 existingTokenId = tokenIdOf[projectId][terminalToken];
-        uint256 recoveredProject;
-        uint256 recoveredTerminal;
-        if (existingTokenId != 0) {
-            uint256 projBalBeforeBurn = IERC20(projectToken).balanceOf(address(this));
-            uint256 termBalBeforeBurn = _getTerminalTokenBalance(terminalToken);
-            (uint128 min0, uint128 min1) = _burnSlippageFloor({
-                tokenId: existingTokenId,
-                tickLower: activeTickLowerOf[projectId][terminalToken],
-                tickUpper: activeTickUpperOf[projectId][terminalToken],
-                key: key
-            });
-            _burnExistingPosition({
-                tokenId: existingTokenId, key: key, decreaseAmount0Min: min0, decreaseAmount1Min: min1
-            });
-            recoveredProject = IERC20(projectToken).balanceOf(address(this)) - projBalBeforeBurn;
-            recoveredTerminal = _getTerminalTokenBalance(terminalToken) - termBalBeforeBurn;
-        }
-
-        // Held amounts to re-mint. Project side = ledger + recovered-from-burn + freshly claimed credits (all now in
-        // this hook's transferable balance). Terminal side = ONLY the terminal recovered from burning THIS project's
-        // position PLUS this project's own terminal ledger (its collected terminal-fee remainders and prior mint
-        // leftovers) — both funded exclusively by this project's own inflows. The shared clone's raw terminal balance
-        // may include other projects' recovered terminal, donations, or another project's tokens set as this one's
-        // terminal; spending that balance would let one project capture another's — so it is never read for sizing.
-        uint256 projectAmount = accumulatedProjectTokens[projectId] + recoveredProject + claimedCredits;
-        uint256 terminalAmount = recoveredTerminal + accumulatedTerminalTokens[projectId][terminalToken];
-
-        // Resolve token ordering once; it flips the adaptive ask/bid geometry.
-        (address token0,) = _sortTokens({tokenA: projectToken, tokenB: Currency.unwrap(_toCurrency(terminalToken))});
-        bool projectIsToken0 = projectToken == token0;
-
-        // Compute the adaptive position: asks anchored to the full project balance up to the ceiling, bid bound solved
-        // from the terminal balance (clamped at the floor). `bidAmountForMint` is the terminal actually paired; any
-        // excess (when the bid bound pins at the floor) stays a leftover carried to the project balance below. A spot
-        // that leaves no room for asks yields a bid-only position; one that leaves nothing deployable at all reverts
-        // `NoDeployableLiquidityAtSpot` and the holdings wait for the corridor or the spot to move.
-        uint160 sqrtPriceX96 = _getSqrtPriceX96(key);
-        (int24 tickLower, int24 tickUpper, uint256 bidAmountForMint) = _adaptiveRange({
-            projectIsToken0: projectIsToken0,
-            corridorLower: corridorLower,
-            corridorUpper: corridorUpper,
-            sqrtSpotX96: sqrtPriceX96,
-            projectAmount: projectAmount,
-            terminalAmount: terminalAmount
-        });
-
-        // The terminal amount paired into the mint (caps + liquidity) is the solved/clamped bid `bidAmountForMint`, not
-        // the full held terminal — so a floor-pinned excess is left over and carried back to the terminal ledger
-        // rather
-        // than over-minted.
-        uint256 amount0 = projectIsToken0 ? projectAmount : bidAmountForMint;
-        uint256 amount1 = projectIsToken0 ? bidAmountForMint : projectAmount;
-
-        // A degenerate range (corridor collapsed to a single spacing) leaves no room to mint.
-        if (tickLower >= tickUpper) revert JBUniswapV4LPSplitHook_ZeroLiquidity({amount0: amount0, amount1: amount1});
-
-        // Derive the mintable liquidity from the paired amounts at the live spot across the adaptive range. Passing the
-        // paired amounts as both the liquidity basis AND the settle caps guarantees the mint never demands more than is
-        // held (the canonical `getLiquidityForAmounts` contract), and — because the project side is the binding
-        // constraint by construction — the entire project balance is deployed as asks.
-        uint128 liquidity = LiquidityAmounts.getLiquidityForAmounts({
-            sqrtPriceX96: sqrtPriceX96,
-            sqrtPriceAX96: TickMath.getSqrtPriceAtTick(tickLower),
-            sqrtPriceBX96: TickMath.getSqrtPriceAtTick(tickUpper),
-            amount0: amount0,
-            amount1: amount1
-        });
-        if (liquidity == 0) revert JBUniswapV4LPSplitHook_ZeroLiquidity({amount0: amount0, amount1: amount1});
-
-        // CEI: clear BOTH ledgers before the external mint; any unconsumed remainder on either side is carried back
-        // below (never burned, never deposited to the treasury). Record the corridor this position is ranged against
-        // (drift-guard basis; independent of the adaptive bounds) here too — it does not depend on the mint result,
-        // and
-        // writing it pre-mint keeps `corridorLower`/`corridorUpper` off the stack across the (inlined) mint.
-        accumulatedProjectTokens[projectId] = 0;
-        accumulatedTerminalTokens[projectId][terminalToken] = 0;
-        rangedCorridorLowerOf[projectId][terminalToken] = corridorLower;
-        rangedCorridorUpperOf[projectId][terminalToken] = corridorUpper;
-
-        uint256 projBalBeforeMint = IERC20(projectToken).balanceOf(address(this));
-        uint256 termBalBeforeMint = _getTerminalTokenBalance(terminalToken);
-
-        _mintPosition({
-            key: key,
-            tickLower: tickLower,
-            tickUpper: tickUpper,
-            liquidity: liquidity,
-            amount0: amount0,
-            amount1: amount1
-        });
-
-        // nextTokenId was incremented by MINT_POSITION, so (nextTokenId - 1) is the freshly minted ID. Setting
-        // tokenIdOf here — after burning the prior id above — is what maintains the single-position invariant.
-        tokenIdOf[projectId][terminalToken] = _nextTokenId() - 1;
-        activeTickLowerOf[projectId][terminalToken] = tickLower;
-        activeTickUpperOf[projectId][terminalToken] = tickUpper;
-
-        // Carry leftovers against the FULL held terminal (not the paired `bidAmountForMint`): the floor-pinned excess
-        // terminal, plus any alignment dust, is carried back to the terminal bid-leg ledger — never stranded, never
-        // burned, never deposited to the treasury. Project-token dust returns to the accumulation ledger.
-        _carryLeftovers({
-            projectId: projectId,
-            projectToken: projectToken,
-            terminalToken: terminalToken,
-            intendedProjectAmount: projectAmount,
-            intendedTerminalAmount: terminalAmount,
-            projBalBefore: projBalBeforeMint,
-            termBalBefore: termBalBeforeMint
-        });
-    }
-
     /// @notice Create and initialize Uniswap V4 pool.
     /// @param projectId The ID of the project.
     /// @param projectToken The project token address.
@@ -1874,12 +1311,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             directory: IJBDirectory(DIRECTORY), projectId: projectId, controller: controller
         });
 
-        if (tokenIdOf[projectId][terminalToken] != 0) {
-            revert JBUniswapV4LPSplitHook_PoolAlreadyDeployed({
-                projectId: projectId, terminalToken: terminalToken, tokenId: tokenIdOf[projectId][terminalToken]
-            });
-        }
         if (hasDeployedPool[projectId]) {
+            if (deployedTerminalTokenOf[projectId] == terminalToken) {
+                revert JBUniswapV4LPSplitHook_PoolAlreadyDeployed({
+                    projectId: projectId, terminalToken: terminalToken, tokenId: askTokenIdOf[projectId][terminalToken]
+                });
+            }
             revert JBUniswapV4LPSplitHook_OnlyOneTerminalTokenSupported({
                 projectId: projectId, terminalToken: terminalToken
             });
@@ -1896,7 +1333,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         uint256 projectTokenBalance = accumulatedProjectTokens[projectId];
 
-        // Accounted credits count as deployable inventory: `_consolidateAndReMint` normalizes them into the ERC-20
+        // Accounted credits count as deployable inventory: `_recycle` normalizes them into the ERC-20
         // via `_claimHookCreditsFor` before sizing the mint.
         if (projectTokenBalance == 0 && accumulatedProjectCredits[projectId] == 0) {
             revert JBUniswapV4LPSplitHook_NoTokensAccumulated({projectId: projectId});
@@ -1954,27 +1391,24 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     )
         internal
     {
-        // Initialize the pool if it hasn't been created yet.
-        if (tokenIdOf[projectId][terminalToken] == 0) {
-            (PoolKey memory key, bool wasAlreadyInitialized) = _createAndInitializePool({
-                projectId: projectId,
-                projectToken: projectToken,
-                terminalToken: terminalToken,
-                controller: controller,
-                ruleset: ruleset
-            });
+        (PoolKey memory key, bool wasAlreadyInitialized) = _createAndInitializePool({
+            projectId: projectId,
+            projectToken: projectToken,
+            terminalToken: terminalToken,
+            controller: controller,
+            ruleset: ruleset
+        });
 
-            // For a pool that was ALREADY initialized before this deploy (the revnet norm — a buyback pool already
-            // exists), validate the live spot against the oracle TWAP before minting, mirroring `addLiquidity`, so a
-            // deploy cannot be sandwiched into minting at a manipulated price. A pool this hook initializes itself in
-            // the same transaction has no TWAP history, so the guard is skipped (it would revert on cold start).
-            if (wasAlreadyInitialized) {
-                _requireSpotNearTwap({projectId: projectId, terminalToken: terminalToken, key: key});
-            }
+        // For a pool that was ALREADY initialized before this deploy (the revnet norm — a buyback pool already
+        // exists), validate the live spot against the oracle TWAP before minting, mirroring `addLiquidity`, so a
+        // deploy cannot be sandwiched into minting at a manipulated price. A pool this hook initializes itself in
+        // the same transaction has no TWAP history, so the guard is skipped (it would revert on cold start).
+        if (wasAlreadyInitialized) {
+            _requireSpotNearTwap({projectId: projectId, terminalToken: terminalToken, key: key});
         }
 
-        // Mint a single-sided ask position from the accumulated project tokens — no funding cash-out.
-        _addSingleSidedLiquidity({
+        // Mint the first ask (and a bid, if the hook already holds terminal tokens for this project).
+        _recycle({
             projectId: projectId,
             projectToken: projectToken,
             terminalToken: terminalToken,
@@ -2070,6 +1504,46 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // Drop currency1 separately only when it is an ERC-20 distinct from currency0; native ETH has no Permit2
         // allowance, and equal token addresses should not pay the extra clear call twice.
         if (token1 != address(0) && token1 != token0) _clearPermit2Approval(token1);
+    }
+
+    /// @notice Mint a single-sided position of `amount0` OR `amount1` across `[tickLower, tickUpper]`, returning its
+    /// token ID, or zero (minting nothing) when the range is empty or the amount yields no liquidity.
+    /// @dev The caller places the range entirely on the side of the spot where only the supplied currency is needed.
+    /// @param key The pool key identifying the Uniswap V4 pool.
+    /// @param tickLower The lower tick of the range.
+    /// @param tickUpper The upper tick of the range.
+    /// @param amount0 The currency0 amount to deploy (zero when deploying currency1).
+    /// @param amount1 The currency1 amount to deploy (zero when deploying currency0).
+    /// @return tokenId The minted position's token ID, or zero if nothing was minted.
+    function _mintSingleSided(
+        PoolKey memory key,
+        int24 tickLower,
+        int24 tickUpper,
+        uint256 amount0,
+        uint256 amount1
+    )
+        internal
+        returns (uint256 tokenId)
+    {
+        if (tickLower >= tickUpper || (amount0 == 0 && amount1 == 0)) return 0;
+
+        uint160 sqrtLower = TickMath.getSqrtPriceAtTick(tickLower);
+        uint160 sqrtUpper = TickMath.getSqrtPriceAtTick(tickUpper);
+        uint128 liquidity = amount0 != 0
+            ? LiquidityAmounts.getLiquidityForAmount0({
+                sqrtPriceAX96: sqrtLower, sqrtPriceBX96: sqrtUpper, amount0: amount0
+            })
+            : LiquidityAmounts.getLiquidityForAmount1({
+                sqrtPriceAX96: sqrtLower, sqrtPriceBX96: sqrtUpper, amount1: amount1
+            });
+        if (liquidity == 0) return 0;
+
+        _mintPosition({
+            key: key, tickLower: tickLower, tickUpper: tickUpper, liquidity: liquidity, amount0: amount0, amount1: amount1
+        });
+
+        // MINT_POSITION incremented nextTokenId, so the fresh mint is the one before it.
+        tokenId = _nextTokenId() - 1;
     }
 
     /// @notice Execute a batched position-manager action (mint, increase, burn, decrease, etc.) with a short deadline.
@@ -2171,6 +1645,118 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
     }
 
+    /// @notice Burn the project's ask and bid, then re-mint both single-sided around the live spot from everything the
+    /// hook holds for the project: every project token (new reserved tokens, recovered principal, fee remainders,
+    /// claimed credits) goes into the ask and every terminal token into the bid. This is the single lifecycle
+    /// primitive behind deploy and add.
+    /// @dev Token0 always rests above the spot and token1 below it. With `spotFloor` the spacing-aligned tick at or
+    /// below the spot, `[.., spotFloor]` holds only token1 and `[spotFloor + spacing, ..]` only token0, so both mints
+    /// are single-sided and the spot sits in the one-spacing gap between them. Both ranges stay inside the corridor:
+    /// the ask never sells below the cash-out floor and the bid never buys above the issuance ceiling. A side whose
+    /// range is empty (spot past the ceiling for the ask, past the floor for the bid) stays in its ledger for a later
+    /// recycle; if neither side can be minted the whole recycle reverts and the live positions are kept.
+    /// @param projectId The ID of the project.
+    /// @param projectToken The project token address.
+    /// @param terminalToken The terminal token address.
+    /// @param controller The project's controller address (pre-fetched to avoid redundant lookups).
+    /// @param ruleset The project's current ruleset (pre-fetched to avoid redundant lookups).
+    function _recycle(
+        uint256 projectId,
+        address projectToken,
+        address terminalToken,
+        address controller,
+        JBRuleset memory ruleset
+    )
+        internal
+    {
+        PoolKey memory key = poolKeysOf[projectId][terminalToken];
+
+        // Retire both live positions; their fees are routed and their principal joins the ledgers.
+        _retirePosition({
+            projectId: projectId,
+            projectToken: projectToken,
+            terminalToken: terminalToken,
+            tokenId: askTokenIdOf[projectId][terminalToken],
+            key: key
+        });
+        _retirePosition({
+            projectId: projectId,
+            projectToken: projectToken,
+            terminalToken: terminalToken,
+            tokenId: bidTokenIdOf[projectId][terminalToken],
+            key: key
+        });
+        delete askTokenIdOf[projectId][terminalToken];
+        delete bidTokenIdOf[projectId][terminalToken];
+
+        // Fold hook-held project-token credits into the ERC-20 ledger so they are minted, not stranded.
+        accumulatedProjectTokens[projectId] += _claimHookCreditsFor({projectId: projectId, controller: controller});
+
+        // The project's economic corridor (cash-out floor to issuance ceiling), as a sorted ascending raw tick range.
+        (int24 corridorLower, int24 corridorUpper) = JBUniswapV4LPSplitHookMath.calculateTickBounds({
+            directory: IJBDirectory(DIRECTORY),
+            suckerRegistry: SUCKER_REGISTRY,
+            projectId: projectId,
+            terminalToken: terminalToken,
+            projectToken: projectToken,
+            controller: controller,
+            ruleset: ruleset
+        });
+
+        int24 spotTick = TickMath.getTickAtSqrtPrice(_getSqrtPriceX96(key));
+        int24 spotFloor = JBLPSplitHookHelpers.alignTickToSpacing({tick: spotTick, spacing: TICK_SPACING});
+        bool projectIsToken0 = projectToken == Currency.unwrap(key.currency0);
+        uint256 projectAmount = accumulatedProjectTokens[projectId];
+        uint256 terminalAmount = accumulatedTerminalTokens[projectId][terminalToken];
+
+        // CEI: clear both ledgers before the external mints; `_carryLeftovers` returns whatever they do not consume.
+        accumulatedProjectTokens[projectId] = 0;
+        accumulatedTerminalTokens[projectId][terminalToken] = 0;
+        uint256 projBalBefore = IERC20(projectToken).balanceOf(address(this));
+        uint256 termBalBefore = _getTerminalTokenBalance(terminalToken);
+
+        // Token0 above the spot, clamped up to the corridor's lower bound.
+        uint256 token0PositionId = _mintSingleSided({
+            key: key,
+            tickLower: spotFloor + TICK_SPACING > corridorLower ? spotFloor + TICK_SPACING : corridorLower,
+            tickUpper: corridorUpper,
+            amount0: projectIsToken0 ? projectAmount : terminalAmount,
+            amount1: 0
+        });
+
+        // Token1 below the spot, clamped down to the corridor's upper bound.
+        uint256 token1PositionId = _mintSingleSided({
+            key: key,
+            tickLower: corridorLower,
+            tickUpper: spotFloor < corridorUpper ? spotFloor : corridorUpper,
+            amount0: 0,
+            amount1: projectIsToken0 ? terminalAmount : projectAmount
+        });
+
+        if (token0PositionId == 0 && token1PositionId == 0) {
+            revert JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot({
+                spotTick: spotTick,
+                ceilingTick: projectIsToken0 ? corridorUpper : corridorLower,
+                projectAmount: projectAmount,
+                terminalAmount: terminalAmount
+            });
+        }
+
+        askTokenIdOf[projectId][terminalToken] = projectIsToken0 ? token0PositionId : token1PositionId;
+        bidTokenIdOf[projectId][terminalToken] = projectIsToken0 ? token1PositionId : token0PositionId;
+
+        // Whatever a skipped side or mint rounding left unconsumed returns to its ledger.
+        _carryLeftovers({
+            projectId: projectId,
+            projectToken: projectToken,
+            terminalToken: terminalToken,
+            intendedProjectAmount: projectAmount,
+            intendedTerminalAmount: terminalAmount,
+            projBalBefore: projBalBefore,
+            termBalBefore: termBalBefore
+        });
+    }
+
     /// @notice Revert if the pool's spot price has deviated from the oracle TWAP by more than
     /// `_MAX_TWAP_DEVIATION_TICKS`, or if the TWAP cannot be read. Prevents a JIT/sandwich attacker from skewing the
     /// add ratio by moving the pool price right before the add.
@@ -2211,6 +1797,39 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 spotTick: spotTick, twapTick: twapTick, maxDeviationTicks: _MAX_TWAP_DEVIATION_TICKS
             });
         }
+    }
+
+    /// @notice Collect and route a position's fees, then burn it and credit its recovered principal to the project's
+    /// ledgers. No-op for a zero token ID.
+    /// @dev Fees are routed first so the fee-project cut applies to trading fees only, never to principal.
+    /// @param projectId The ID of the project that owns the position.
+    /// @param projectToken The project token address.
+    /// @param terminalToken The terminal token address.
+    /// @param tokenId The position NFT token ID to retire.
+    /// @param key The pool key identifying the Uniswap V4 pool.
+    function _retirePosition(
+        uint256 projectId,
+        address projectToken,
+        address terminalToken,
+        uint256 tokenId,
+        PoolKey memory key
+    )
+        internal
+    {
+        if (tokenId == 0) return;
+
+        _collectAndRouteFees({
+            projectId: projectId, projectToken: projectToken, terminalToken: terminalToken, tokenId: tokenId, key: key
+        });
+
+        (uint128 min0, uint128 min1) = _burnSlippageFloor({tokenId: tokenId, key: key});
+        uint256 projBalBefore = IERC20(projectToken).balanceOf(address(this));
+        uint256 termBalBefore = _getTerminalTokenBalance(terminalToken);
+
+        _burnExistingPosition({tokenId: tokenId, key: key, decreaseAmount0Min: min0, decreaseAmount1Min: min1});
+
+        accumulatedProjectTokens[projectId] += IERC20(projectToken).balanceOf(address(this)) - projBalBefore;
+        accumulatedTerminalTokens[projectId][terminalToken] += _getTerminalTokenBalance(terminalToken) - termBalBefore;
     }
 
     /// @notice Split collected LP fees into their terminal-token and project-token sides, take a best-effort

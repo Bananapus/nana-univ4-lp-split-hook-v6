@@ -39,7 +39,7 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
 
         // Verify pool was created (tokenId is nonzero)
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(tokenId, 0, "tokenIdOf should be nonzero after deploy");
 
         // Verify accumulated tokens were cleared
@@ -66,7 +66,7 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
     function test_FullLifecycle_DeployThenCollectFees() public {
         // Deploy pool
         _accumulateAndDeploy(PROJECT_ID, 100e18);
-        uint256 poolTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 poolTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
         // Determine token ordering for this pool
         bool terminalTokenIsToken0 = address(terminalToken) < address(projectToken);
@@ -110,7 +110,7 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
     function test_FullLifecycle_DeployThenRebalance() public {
         // Deploy pool
         _accumulateAndDeploy(PROJECT_ID, 100e18);
-        uint256 originalTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 originalTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(originalTokenId, 0, "original tokenId should be nonzero");
 
         // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
@@ -146,7 +146,7 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         );
 
         // Verify new tokenId differs from original
-        uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(newTokenId, 0, "new tokenId should be nonzero");
         assertNotEq(newTokenId, originalTokenId, "tokenIdOf should change after rebalance");
     }
@@ -160,7 +160,7 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
     function test_FullLifecycle_DeployThenClaimFees() public {
         // Deploy pool
         _accumulateAndDeploy(PROJECT_ID, 100e18);
-        uint256 poolTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 poolTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
         // Determine token ordering
         bool terminalTokenIsToken0 = address(terminalToken) < address(projectToken);
@@ -274,8 +274,8 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_3);
 
         // --- Verify independent token IDs ---
-        uint256 tokenId1 = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        uint256 tokenId3 = hook.tokenIdOf(PROJECT_3, address(terminalToken));
+        uint256 tokenId1 = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId3 = hook.askTokenIdOf(PROJECT_3, address(terminalToken));
 
         assertNotEq(tokenId1, 0, "PROJECT_ID tokenId should be nonzero");
         assertNotEq(tokenId3, 0, "PROJECT_3 tokenId should be nonzero");
@@ -345,7 +345,7 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
 
         // Verify pool was created
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(tokenId, 0, "tokenIdOf should be nonzero after deploy");
 
         // Verify accumulated tokens were cleared

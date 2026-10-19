@@ -195,7 +195,7 @@ contract RegressionRegression is LPSplitHookV4TestBase {
     function test_regression_claimFeeTokens_pausedCreditsDoNotBlockERC20Claims() public {
         _accumulateAndDeploy(PROJECT_ID, 1000e18);
 
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
         // Phase 1: accumulate credits (fee project has no ERC-20).
         jbTokens.setToken(FEE_PROJECT_ID, address(0));
@@ -285,7 +285,7 @@ contract RegressionRegression is LPSplitHookV4TestBase {
             new MintThenReenterFeeTerminal(hook, feeProjectToken, FEE_PROJECT_ID, address(terminalToken));
         _setDirectoryTerminal(FEE_PROJECT_ID, address(terminalToken), address(feeTerminal));
 
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         positionManager.setCollectableFees(tokenId, 100e18, 100e18);
         projectToken.mint(address(positionManager), 100e18);
         terminalToken.mint(address(positionManager), 100e18);

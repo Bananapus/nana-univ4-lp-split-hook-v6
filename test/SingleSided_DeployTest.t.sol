@@ -67,7 +67,7 @@ contract SingleSided_DeployTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
 
         // (a) A position was minted.
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(tokenId, 0, "tokenIdOf should be nonzero after deployPool");
 
         // (b) The minted position holds ZERO terminal tokens (asks-only) and the full accumulated project-token

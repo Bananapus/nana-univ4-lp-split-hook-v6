@@ -171,7 +171,7 @@ contract PriceRatioFork is ForkDeployHelper {
         _accumulateTokens(pid, address(pToken), 100_000e18);
         vm.prank(multisig);
         hook.deployPool(pid);
-        uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+        uint256 tokenId = hook.askTokenIdOf(pid, JBConstants.NATIVE_TOKEN);
         uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         assertTrue(posLiq > 0, "Position should have liquidity");
         emit log_named_uint("  position liquidity", posLiq);
@@ -201,7 +201,7 @@ contract PriceRatioFork is ForkDeployHelper {
         _accumulateTokens(pid, address(pToken), 100_000e18);
         vm.prank(multisig);
         hook.deployPool(pid);
-        uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+        uint256 tokenId = hook.askTokenIdOf(pid, JBConstants.NATIVE_TOKEN);
         uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         assertTrue(posLiq > 0, "Position should have liquidity with 90% tax rate");
         emit log_named_uint("  position liquidity (90% tax)", posLiq);
@@ -228,7 +228,7 @@ contract PriceRatioFork is ForkDeployHelper {
         _accumulateTokens(pid, address(pToken), 100_000e18);
         vm.prank(multisig);
         hook.deployPool(pid);
-        uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+        uint256 tokenId = hook.askTokenIdOf(pid, JBConstants.NATIVE_TOKEN);
         uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         assertTrue(posLiq > 0, "Position should have liquidity with 10% tax rate");
         emit log_named_uint("  position liquidity (10% tax)", posLiq);

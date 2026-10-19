@@ -29,6 +29,7 @@ import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionMa
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {PositionInfo, PositionInfoLibrary} from "@uniswap/v4-periphery/src/libraries/PositionInfoLibrary.sol";
 import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
@@ -135,26 +136,18 @@ contract BuySwapHelper is IUnlockCallback {
 /// REAL mainnet Uniswap V4 `PoolManager`/`PositionManager` (not the mock used by the rest of the suite) plus a
 /// from-source `JBMultiTerminal`/`JBTerminalStore`.
 ///
-/// Exercises the full revnet-shaped lifecycle end-to-end:
-///   1. A revnet-shaped project (non-zero `reservedPercent`, non-zero `cashOutTaxRate`) accumulates reserved tokens
-///      in the hook.
-///   2. The Uniswap V4 pool is pre-initialized (mimicking the revnet norm where the pool already exists) at a
-///      mid-corridor spot near the issuance ceiling — NOT at the cash-out floor, and NOT via the hook's own
-///      geometric-midpoint bootstrap price.
-///   3. A random, non-owner address permissionlessly calls `deployPool`, seeding a single-sided (project-token-only)
-///      ask position.
-///   4. A real buyer swaps terminal token for project token directly through the live pool (never through the hook),
-///      sized (via the position's own liquidity/tick math) to fully cross the ask band, so the position now holds
-///      terminal token as principal.
-///   5. After a real ruleset-weight-decay cycle shifts the project's issuance/cash-out corridor, a different random,
-///      non-owner address permissionlessly calls `rebalanceLiquidity`, which burns the exhausted ask position and
-///      re-mints a two-sided position bidding with the recovered terminal token.
-///   6. Throughout, the project's `JBTerminalStore` balance is snapshotted before/after every hook call and is
-///      asserted to never decrease — the hook never cashes out or otherwise drains the project's terminal balance;
-///      the only terminal-balance movement is LP-fee routing adding to it.
+/// Exercises the two-position lifecycle end-to-end, with every hook call made by a random non-owner:
+///   1. A revnet-shaped project accumulates reserved tokens; its pool is pre-initialized mid-corridor.
+///   2. `deployPool` seeds a single-sided ask (project tokens below the spot, ETH being currency0).
+///   3. A real buyer partly fills the ask through the live pool, so it holds terminal token.
+///   4. The next distribution's recycle burns it and re-mints a project-only ask and a terminal-only bid.
+///   5. The buyer sells back into the bid, so it holds project tokens.
+///   6. The next recycle moves those project tokens back into the ask and keeps the rest of the bid.
+///   Throughout, both positions stay inside the corridor and the project's terminal balance never decreases.
 contract Integration_SingleSidedRevnet is ForkDeployHelper {
     using StateLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;
+    using PositionInfoLibrary for PositionInfo;
 
     IPoolManager constant V4_POOL_MANAGER = IPoolManager(0x000000000004444c5dc75cB358380D2e3dE08A90);
     IPositionManager constant V4_POSITION_MANAGER = IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e);
@@ -164,7 +157,7 @@ contract Integration_SingleSidedRevnet is ForkDeployHelper {
 
     // Non-owner callers used to prove every entry point exercised here is permissionless.
     address randomDeployer = address(0xD00D);
-    address randomRebalancer = address(0xBEEF2);
+    address randomRecycler = address(0xBEEF2);
     address realBuyer = address(0xB0B);
 
     receive() external payable {}
@@ -197,26 +190,18 @@ contract Integration_SingleSidedRevnet is ForkDeployHelper {
         });
     }
 
-    function test_fork_singleSidedRevnet_seedBuyRebalance_noCashOut() public {
-        // ── 1. Launch a revnet-shaped project: non-zero reserved%, non-zero cash-out tax, and a ruleset that will
-        // decay (a second, halved-weight cycle is queued below to genuinely shift the issuance/cash-out corridor).
+    function test_fork_twoPositionRecycle_buySellRecycle_noCashOut() public {
+        // ── 1. A revnet-shaped project (reserved %, cash-out tax) with real surplus, accumulating reserved tokens.
         uint256 pid =
             _launchProject({reservedPercent: 3000, cashOutTaxRate: 4000, weight: 1_000_000e18, duration: 1 days});
         vm.prank(multisig);
         IJBToken pToken = jbController.deployERC20For(pid, "Revnet Token", "RVNT", bytes32(0));
-
-        // Seed real surplus so the bonding-curve cash-out floor is non-trivial (not the zero-surplus fallback).
         uint256 balAfterPay = _payProjectAndSnapshot(pid, 50 ether);
-
-        // Route reserved tokens to the hook (pre-deployment accumulation).
         _accumulateTokens(pid, address(pToken), 500_000e18);
 
-        // ── 2. Pre-initialize the pool at a mid-corridor spot near the issuance ceiling — mimicking the revnet
-        // norm
-        // where the pool already exists before the hook ever allocates — rather than letting `deployPool` bootstrap
-        // it at its own geometric-midpoint default. Compute the project's live economic corridor with the SAME
-        // linked math library the hook uses, at this exact moment (right before `deployPool`, so nothing else
-        // changes state in between and the preview matches what the hook itself will recompute).
+        // ── 2. Pre-initialize the pool mid-corridor (the revnet norm: the pool exists before the hook allocates).
+        // Native ETH always sorts as currency0, so the project token is currency1: its asks rest BELOW the spot down
+        // to `ascLower` (the issuance ceiling) and the hook's bids rest ABOVE the spot up to `ascUpper` (the floor).
         (JBRuleset memory ruleset,) = jbController.currentRulesetOf(pid);
         (int24 ascLower, int24 ascUpper) = JBUniswapV4LPSplitHookMath.calculateTickBounds({
             directory: jbDirectory,
@@ -228,157 +213,149 @@ contract Integration_SingleSidedRevnet is ForkDeployHelper {
             ruleset: ruleset
         });
         int24 tickSpacing = hook.TICK_SPACING();
-        assertTrue(ascUpper - ascLower > 2 * tickSpacing, "corridor too narrow for this test's tick offsets");
+        assertTrue(ascUpper - ascLower > 4 * tickSpacing, "corridor too narrow for this test's tick offsets");
+        int24 initTick = JBLPSplitHookHelpers.alignTickToSpacing({
+            tick: ascLower + (ascUpper - ascLower) / 2, spacing: tickSpacing
+        });
 
-        // The native terminal token always sorts as currency0 (its Uniswap-mapped address(0) is always the lowest
-        // address), so the project token is always currency1 for every ETH-paired pool this hook deploys. That
-        // means `ascLower` (the ascending-sorted lower bound from `calculateTickBounds`) is the ECONOMIC ISSUANCE
-        // CEILING (see `_adaptiveRange`'s "project is token1" branch), and `ascUpper` is the economic cash-out
-        // floor. Initialize one spacing INSIDE from the ceiling — deep in the corridor, nowhere near the floor.
-        int24 initTick = ascLower + tickSpacing;
-        uint160 initSqrtPrice = TickMath.getSqrtPriceAtTick(initTick);
-
-        Currency terminalCurrency = JBLPSplitHookHelpers.toCurrency(JBConstants.NATIVE_TOKEN);
-        Currency projectCurrency = Currency.wrap(address(pToken));
-        (Currency currency0, Currency currency1) = terminalCurrency < projectCurrency
-            ? (terminalCurrency, projectCurrency)
-            : (projectCurrency, terminalCurrency);
         PoolKey memory key = PoolKey({
-            currency0: currency0,
-            currency1: currency1,
+            currency0: JBLPSplitHookHelpers.toCurrency(JBConstants.NATIVE_TOKEN),
+            currency1: Currency.wrap(address(pToken)),
             fee: hook.POOL_FEE(),
             tickSpacing: tickSpacing,
             hooks: hook.oracleHook()
         });
-        V4_POSITION_MANAGER.initializePool(key, initSqrtPrice);
-        (uint160 preexistingSpot,,,) = V4_POOL_MANAGER.getSlot0(key.toId());
-        assertEq(preexistingSpot, initSqrtPrice, "pool must read back the pre-initialized spot");
+        V4_POSITION_MANAGER.initializePool(key, TickMath.getSqrtPriceAtTick(initTick));
 
-        // ── 3. Permissionless deploy: a random, non-owner address seeds the pool from the accumulated tokens.
-        // Deploying onto a pre-initialized pool now validates spot against the oracle TWAP; force TWAP == spot so the
-        // guard passes deterministically without seeding 30 minutes of observation history.
+        // ── 3. Permissionless deploy seeds the ask only: the hook holds no terminal tokens yet.
         _mockOracleTwapEqualsSpot(hook.oracleHook(), V4_POOL_MANAGER, key);
         vm.prank(randomDeployer);
         hook.deployPool(pid);
 
-        assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "pool should be deployed");
-        uint256 seedTokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
-        assertTrue(seedTokenId != 0, "seed position must exist");
-        uint128 seedLiquidity = V4_POSITION_MANAGER.getPositionLiquidity(seedTokenId);
-        assertTrue(seedLiquidity > 0, "seed position must have liquidity");
-
-        int24 seedTickLower = hook.activeTickLowerOf(pid, JBConstants.NATIVE_TOKEN);
-        int24 seedTickUpper = hook.activeTickUpperOf(pid, JBConstants.NATIVE_TOKEN);
-        (uint160 seedSpot,,,) = V4_POOL_MANAGER.getSlot0(key.toId());
-        (uint256 seedAmount0, uint256 seedAmount1) = _positionPrincipal({
-            sqrtPriceX96: seedSpot, tickLower: seedTickLower, tickUpper: seedTickUpper, liquidity: seedLiquidity
-        });
-        // Terminal (native ETH) is always currency0 for these ETH-paired pools; a single-sided ask position at seed
-        // holds (~)zero of it.
-        assertEq(seedAmount0, 0, "seed position must hold zero terminal token (single-sided ask)");
-        assertTrue(seedAmount1 > 0, "seed position must hold project tokens (the ask side)");
+        uint256 seedAskId = hook.askTokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+        assertTrue(seedAskId != 0, "seed ask must exist");
+        assertEq(hook.bidTokenIdOf(pid, JBConstants.NATIVE_TOKEN), 0, "no bid without terminal tokens");
+        (uint256 seedAsk0, uint256 seedAsk1) = _principalOf(seedAskId, key);
+        assertEq(seedAsk0, 0, "seed ask holds no terminal");
+        assertTrue(seedAsk1 > 0, "seed ask holds project tokens");
+        _assertAskBelowSpot(seedAskId, key, ascLower, ascUpper);
 
         uint256 balAfterDeploy = jbTerminalStore.balanceOf(address(jbMultiTerminal), pid, JBConstants.NATIVE_TOKEN);
         assertGe(balAfterDeploy, balAfterPay, "deployPool must never reduce the project's terminal balance");
 
-        // ── 4. Simulate a real buy: a genuine buyer swaps terminal token for project token THROUGH THE LIVE POOL
-        // (never through the hook), sized off the position's own liquidity/tick math to fully cross the thin ask
-        // band and leave the position holding terminal token as principal.
-        uint256 costToFullyCrossAsk = SqrtPriceMath.getAmount0Delta({
-            sqrtPriceAX96: TickMath.getSqrtPriceAtTick(seedTickLower),
-            sqrtPriceBX96: TickMath.getSqrtPriceAtTick(seedTickUpper),
-            liquidity: seedLiquidity,
-            roundUp: true
-        });
-        // Deliberately UNDER, not over, the full crossing cost: this pool has zero liquidity outside the seed
-        // position's thin ask band, so any swap that fully exhausts it sends the spot rocketing to the tick-space
-        // extreme (no interposing liquidity to absorb the remainder) instead of settling near the band's edge. 90%
-        // of the crossing cost lands spot just inside the band, near its floor, with the position already holding
-        // real accrued terminal token — a realistic partial buy, not a liquidity-draining edge case.
-        uint256 buyAmountIn = (costToFullyCrossAsk * 90) / 100;
-        vm.deal(realBuyer, buyAmountIn + 1 ether);
-
+        // ── 4. A real buyer fills part of the ask through the live pool: the ask now holds terminal tokens.
         BuySwapHelper swapHelper = new BuySwapHelper(V4_POOL_MANAGER);
-        vm.prank(realBuyer);
-        // zeroForOne = true: sell terminal (currency0), buy project token (currency1) — a real buy.
-        // forge-lint: disable-next-line(unsafe-typecast)
-        swapHelper.swap{value: buyAmountIn}({key: key, zeroForOne: true, amountSpecified: -int256(buyAmountIn)});
+        {
+            (int24 askLower, int24 askUpper) = _ticksOf(seedAskId);
+            uint256 buyAmountIn = SqrtPriceMath.getAmount0Delta({
+                sqrtPriceAX96: TickMath.getSqrtPriceAtTick(askLower),
+                sqrtPriceBX96: TickMath.getSqrtPriceAtTick(askUpper),
+                liquidity: V4_POSITION_MANAGER.getPositionLiquidity(seedAskId),
+                roundUp: true
+            }) / 4;
+            vm.deal(realBuyer, buyAmountIn);
+            vm.prank(realBuyer);
+            // forge-lint: disable-next-line(unsafe-typecast)
+            swapHelper.swap{value: buyAmountIn}({key: key, zeroForOne: true, amountSpecified: -int256(buyAmountIn)});
+        }
+        (uint256 filledAsk0,) = _principalOf(seedAskId, key);
+        assertTrue(filledAsk0 > 0, "the partly filled ask must hold terminal tokens");
 
-        (uint160 spotAfterBuy,,,) = V4_POOL_MANAGER.getSlot0(key.toId());
-        assertTrue(spotAfterBuy < seedSpot, "a real buy of the project token must push spot down (toward the floor)");
-
-        (uint256 postBuyAmount0,) = _positionPrincipal({
-            sqrtPriceX96: spotAfterBuy, tickLower: seedTickLower, tickUpper: seedTickUpper, liquidity: seedLiquidity
-        });
-        assertTrue(postBuyAmount0 > 0, "position must now hold terminal token accrued from the real buy");
-
-        // A real Uniswap swap never touches the JB terminal — the project's terminal balance is untouched.
-        uint256 balAfterBuy = jbTerminalStore.balanceOf(address(jbMultiTerminal), pid, JBConstants.NATIVE_TOKEN);
-        assertEq(balAfterBuy, balAfterDeploy, "a real AMM swap must never move the project's terminal balance");
-
-        // ── 5. Shift the economic corridor with a genuine ruleset-weight-decay cycle (revnet norm), then
-        // permissionlessly rebalance from a DIFFERENT non-owner address.
-        _queueHalvedWeightRuleset(pid);
-        vm.warp(block.timestamp + 1 days + 1);
+        // ── 5. The next reserved distribution recycles both sides from a random caller: the ask's terminal moves
+        // into a fresh bid above the spot, every project token into a fresh ask below it.
+        _accumulateTokens(pid, address(pToken), 100_000e18);
         _mockOracleTwapEqualsSpot(hook.oracleHook(), V4_POOL_MANAGER, key);
+        vm.prank(randomRecycler);
+        hook.addLiquidity(pid, JBConstants.NATIVE_TOKEN);
 
-        vm.expectEmit({
-            checkTopic1: true, checkTopic2: true, checkTopic3: false, checkData: false, emitter: address(hook)
-        });
-        emit IJBUniswapV4LPSplitHook.PermissionlessRebalanced({
-            projectId: pid, terminalToken: JBConstants.NATIVE_TOKEN, tickLower: 0, tickUpper: 0, caller: address(0)
-        });
-        vm.prank(randomRebalancer);
-        hook.rebalanceLiquidity(pid, JBConstants.NATIVE_TOKEN);
+        uint256 askId = hook.askTokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+        uint256 bidId = hook.bidTokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+        assertEq(V4_POSITION_MANAGER.getPositionLiquidity(seedAskId), 0, "the seed ask must be burned");
+        assertTrue(askId != 0 && bidId != 0, "both positions must exist after recycling a filled ask");
+        (uint256 ask0, uint256 ask1) = _principalOf(askId, key);
+        (uint256 bid0, uint256 bid1) = _principalOf(bidId, key);
+        assertEq(ask0, 0, "the ask is single-sided project tokens");
+        assertEq(bid1, 0, "the bid is single-sided terminal tokens");
+        assertApproxEqRel(bid0, filledAsk0, 0.01e18, "the bid carries the ask's filled terminal (+ fee remainder)");
+        assertTrue(ask1 > 100_000e18, "the ask carries the unfilled seed plus the new distribution");
+        _assertAskBelowSpot(askId, key, ascLower, ascUpper);
+        _assertBidAboveSpot(bidId, key, ascLower, ascUpper);
 
-        // ── 6. Assert: single tracked position (old NFT retired, exactly one new tokenId tracked), two-sided
-        // (now holds terminal as a bid), non-zero liquidity, and the terminal balance was never drained (only ever
-        // added to, from routed LP fees).
-        uint256 rebalancedTokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
-        assertTrue(rebalancedTokenId != 0, "rebalanced position must exist");
-        assertTrue(rebalancedTokenId != seedTokenId, "rebalance must burn-and-re-mint a fresh tokenId");
-        assertEq(V4_POSITION_MANAGER.getPositionLiquidity(seedTokenId), 0, "the old seed position must be fully burned");
+        // ── 6. The buyer sells back into the hook's bid: the bid now holds project tokens.
+        {
+            uint256 sellAmount = IERC20(address(pToken)).balanceOf(realBuyer) / 2;
+            vm.startPrank(realBuyer);
+            IERC20(address(pToken)).approve(address(swapHelper), sellAmount);
+            // forge-lint: disable-next-line(unsafe-typecast)
+            swapHelper.swap({key: key, zeroForOne: false, amountSpecified: -int256(sellAmount)});
+            vm.stopPrank();
+        }
+        (, uint256 filledBid1) = _principalOf(bidId, key);
+        assertTrue(filledBid1 > 0, "the partly filled bid must hold project tokens");
 
-        uint128 rebalancedLiquidity = V4_POSITION_MANAGER.getPositionLiquidity(rebalancedTokenId);
-        assertTrue(rebalancedLiquidity > 0, "rebalanced position must have liquidity");
+        // ── 7. The next distribution recycles again: the project tokens the bid bought go back into the ask.
+        _accumulateTokens(pid, address(pToken), 100_000e18);
+        _mockOracleTwapEqualsSpot(hook.oracleHook(), V4_POOL_MANAGER, key);
+        vm.prank(randomRecycler);
+        hook.addLiquidity(pid, JBConstants.NATIVE_TOKEN);
 
-        int24 newTickLower = hook.activeTickLowerOf(pid, JBConstants.NATIVE_TOKEN);
-        int24 newTickUpper = hook.activeTickUpperOf(pid, JBConstants.NATIVE_TOKEN);
-        (uint160 spotAfterRebalance,,,) = V4_POOL_MANAGER.getSlot0(key.toId());
-        (uint256 rebalancedAmount0, uint256 rebalancedAmount1) = _positionPrincipal({
-            sqrtPriceX96: spotAfterRebalance,
-            tickLower: newTickLower,
-            tickUpper: newTickUpper,
-            liquidity: rebalancedLiquidity
-        });
-        assertTrue(rebalancedAmount0 > 0, "rebalanced position must hold terminal token as a bid (two-sided)");
-        assertTrue(rebalancedAmount1 > 0, "rebalanced position must still hold project token as an ask (two-sided)");
-
-        uint256 balAfterRebalance = jbTerminalStore.balanceOf(address(jbMultiTerminal), pid, JBConstants.NATIVE_TOKEN);
-        assertGe(
-            balAfterRebalance,
-            balAfterBuy,
-            "rebalanceLiquidity must never reduce the project's terminal balance (only routed LP fees may add to it)"
+        uint256 askId2 = hook.askTokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+        uint256 bidId2 = hook.bidTokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+        (uint256 ask0After, uint256 ask1After) = _principalOf(askId2, key);
+        (uint256 bid0After, uint256 bid1After) = _principalOf(bidId2, key);
+        assertEq(ask0After, 0, "the ask stays single-sided");
+        assertEq(bid1After, 0, "the bid stays single-sided");
+        assertTrue(bid0After > 0, "the bid keeps its unfilled terminal");
+        assertApproxEqRel(
+            ask1After, ask1 + 100_000e18 + filledBid1, 0.01e18, "the ask absorbs the bid's fills and the distribution"
         );
+        _assertAskBelowSpot(askId2, key, ascLower, ascUpper);
+        _assertBidAboveSpot(bidId2, key, ascLower, ascUpper);
 
-        // Full monotonic chain across the whole lifecycle, restated for clarity.
-        assertGe(balAfterDeploy, balAfterPay, "deploy: never drains");
-        assertGe(balAfterBuy, balAfterDeploy, "real swap: never drains (unchanged)");
-        assertGe(balAfterRebalance, balAfterBuy, "rebalance: never drains (fees may add)");
+        // Ledgers only hold rounding dust, and the hook never drained the treasury.
+        assertLt(hook.accumulatedProjectTokens(pid), 1e12, "project ledger must be (near) empty after a recycle");
+        assertLt(hook.accumulatedTerminalTokens(pid, JBConstants.NATIVE_TOKEN), 1e9, "terminal ledger near empty");
+        assertGe(
+            jbTerminalStore.balanceOf(address(jbMultiTerminal), pid, JBConstants.NATIVE_TOKEN),
+            balAfterDeploy,
+            "recycling must never reduce the project's terminal balance"
+        );
+    }
 
-        emit log_named_int("  seed tickLower", seedTickLower);
-        emit log_named_int("  seed tickUpper", seedTickUpper);
-        emit log_named_uint("  seed liquidity", seedLiquidity);
-        emit log_named_uint("  spot before buy", seedSpot);
-        emit log_named_uint("  spot after buy", spotAfterBuy);
-        emit log_named_uint("  buy amount in (wei)", buyAmountIn);
-        emit log_named_int("  rebalanced tickLower", newTickLower);
-        emit log_named_int("  rebalanced tickUpper", newTickUpper);
-        emit log_named_uint("  rebalanced liquidity", rebalancedLiquidity);
-        emit log_named_uint("  terminal balance after pay", balAfterPay);
-        emit log_named_uint("  terminal balance after deploy", balAfterDeploy);
-        emit log_named_uint("  terminal balance after buy", balAfterBuy);
-        emit log_named_uint("  terminal balance after rebalance", balAfterRebalance);
+    /// @notice The live tick range of a hook position, read from the PositionManager.
+    function _ticksOf(uint256 tokenId) internal view returns (int24 tickLower, int24 tickUpper) {
+        (, PositionInfo info) = V4_POSITION_MANAGER.getPoolAndPositionInfo(tokenId);
+        return (info.tickLower(), info.tickUpper());
+    }
+
+    /// @notice A hook position's principal at the live spot.
+    function _principalOf(uint256 tokenId, PoolKey memory key) internal view returns (uint256, uint256) {
+        (int24 tickLower, int24 tickUpper) = _ticksOf(tokenId);
+        (uint160 spot,,,) = V4_POOL_MANAGER.getSlot0(key.toId());
+        return _positionPrincipal({
+            sqrtPriceX96: spot,
+            tickLower: tickLower,
+            tickUpper: tickUpper,
+            liquidity: V4_POSITION_MANAGER.getPositionLiquidity(tokenId)
+        });
+    }
+
+    /// @notice The ask (project = currency1) rests at or below the spot and never past the cash-out floor.
+    function _assertAskBelowSpot(uint256 tokenId, PoolKey memory key, int24 ascLower, int24 ascUpper) internal view {
+        (int24 tickLower, int24 tickUpper) = _ticksOf(tokenId);
+        (, int24 spotTick,,) = V4_POOL_MANAGER.getSlot0(key.toId());
+        assertLe(tickUpper, spotTick, "ask must rest at or below the spot");
+        assertGe(tickLower, ascLower, "ask must not reach past the issuance ceiling");
+        assertLe(tickUpper, ascUpper, "ask must not sell below the cash-out floor");
+    }
+
+    /// @notice The bid (terminal = currency0) rests above the spot and never past the issuance ceiling.
+    function _assertBidAboveSpot(uint256 tokenId, PoolKey memory key, int24 ascLower, int24 ascUpper) internal view {
+        (int24 tickLower, int24 tickUpper) = _ticksOf(tokenId);
+        (, int24 spotTick,,) = V4_POOL_MANAGER.getSlot0(key.toId());
+        assertGt(tickLower, spotTick, "bid must rest above the spot");
+        assertGe(tickLower, ascLower, "bid must not buy above the issuance ceiling");
+        assertLe(tickUpper, ascUpper, "bid must not reach past the cash-out floor");
     }
 
     /// @notice The token0/token1 amounts a position of `liquidity` across `[tickLower, tickUpper]` holds at
@@ -413,44 +390,6 @@ contract Integration_SingleSidedRevnet is ForkDeployHelper {
                 sqrtPriceAX96: sqrtA, sqrtPriceBX96: sqrtB, liquidity: liquidity, roundUp: false
             });
         }
-    }
-
-    /// @notice Queue a second ruleset cycle with a halved weight (a real revnet-style decay), starting right after
-    /// the first cycle's 1-day duration elapses. Used to genuinely shift the issuance/cash-out corridor so
-    /// `rebalanceLiquidity`'s anti-churn drift guard clears.
-    function _queueHalvedWeightRuleset(uint256 pid) internal {
-        JBRulesetMetadata memory newMeta = JBRulesetMetadata({
-            reservedPercent: 3000,
-            cashOutTaxRate: 4000,
-            baseCurrency: uint32(uint160(JBConstants.NATIVE_TOKEN)),
-            pausePay: false,
-            pauseCreditTransfers: false,
-            allowOwnerMinting: true,
-            allowSetCustomToken: true,
-            allowTerminalMigration: false,
-            allowSetTerminals: false,
-            allowSetController: false,
-            allowAddAccountingContext: false,
-            allowAddPriceFeed: false,
-            ownerMustSendPayouts: false,
-            holdFees: false,
-            scopeCashOutsToLocalBalances: true,
-            useDataHookForPay: false,
-            useDataHookForCashOut: false,
-            dataHook: address(0),
-            metadata: 0
-        });
-        JBRulesetConfig[] memory newConfigs = new JBRulesetConfig[](1);
-        newConfigs[0].mustStartAtOrAfter = 0;
-        newConfigs[0].duration = 1 days;
-        newConfigs[0].weight = 500_000e18;
-        newConfigs[0].weightCutPercent = 0;
-        newConfigs[0].approvalHook = IJBRulesetApprovalHook(address(0));
-        newConfigs[0].metadata = newMeta;
-        newConfigs[0].splitGroups = new JBSplitGroup[](0);
-        newConfigs[0].fundAccessLimitGroups = new JBFundAccessLimitGroup[](0);
-        vm.prank(multisig);
-        jbController.queueRulesetsOf({projectId: pid, rulesetConfigurations: newConfigs, memo: ""});
     }
 
     function _launchProject(

@@ -123,7 +123,7 @@ contract RegressionFixM4Test is LPSplitHookV4TestBase {
 
         // Verify deployment succeeded.
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "project should have a deployed pool");
-        assertGt(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "LP position should be created");
+        assertGt(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "LP position should be created");
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -178,7 +178,7 @@ contract RegressionFixM4Test is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
 
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "project should have a deployed pool");
-        assertGt(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "LP position should be created");
+        assertGt(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "LP position should be created");
     }
 
     // ─────────────────────────────────────────────────────────────────────

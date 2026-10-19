@@ -102,7 +102,7 @@ contract TickBoundsFork is ForkDeployHelper {
         vm.prank(multisig);
         hook.deployPool(pid);
         assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "Pool should deploy with low weight");
-        uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+        uint256 tokenId = hook.askTokenIdOf(pid, JBConstants.NATIVE_TOKEN);
         uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         assertTrue(posLiq > 0, "Position should have liquidity");
         emit log_named_uint("  position liquidity", posLiq);

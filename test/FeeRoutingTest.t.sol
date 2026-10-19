@@ -22,7 +22,7 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
 
         // Accumulate and deploy a pool for PROJECT_ID
         _accumulateAndDeploy(PROJECT_ID, 100e18);
-        poolTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        poolTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
         // Determine token ordering for this pool
         terminalTokenIsToken0 = address(terminalToken) < address(projectToken);
@@ -200,9 +200,9 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
 
     /// @notice collectAndRouteLPFees should revert when tokenIdOf is cleared.
     function test_CollectFees_RevertsIfNoTokenId() public {
-        // tokenIdOf is: mapping(uint256 => mapping(address => uint256)) at `SLOT_TOKEN_ID_OF` (see TestBaseV4 for the
+        // tokenIdOf is: mapping(uint256 => mapping(address => uint256)) at `SLOT_ASK_TOKEN_ID_OF` (see TestBaseV4 for the
         // full hook storage layout).
-        bytes32 outerSlot = keccak256(abi.encode(PROJECT_ID, SLOT_TOKEN_ID_OF));
+        bytes32 outerSlot = keccak256(abi.encode(PROJECT_ID, SLOT_ASK_TOKEN_ID_OF));
         bytes32 slot = keccak256(abi.encode(address(terminalToken), outerSlot));
         vm.store(address(hook), slot, bytes32(0));
 

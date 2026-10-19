@@ -214,7 +214,7 @@ contract GeomeanLPForkTest is ForkDeployHelper {
                 hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN),
                 string.concat("pool not deployed at index ", vm.toString(i))
             );
-            uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+            uint256 tokenId = hook.askTokenIdOf(pid, JBConstants.NATIVE_TOKEN);
             assertTrue(tokenId != 0, string.concat("no position NFT at index ", vm.toString(i)));
             uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
             assertTrue(posLiq > 0, string.concat("zero liquidity at index ", vm.toString(i)));
@@ -255,7 +255,7 @@ contract GeomeanLPForkTest is ForkDeployHelper {
             PoolId poolId = key.toId();
             (uint160 sqrtPriceX96,,,) = V4_POOL_MANAGER.getSlot0(poolId);
             assertTrue(sqrtPriceX96 > 0, "pool should have nonzero price");
-            uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+            uint256 tokenId = hook.askTokenIdOf(pid, JBConstants.NATIVE_TOKEN);
             uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
             assertTrue(posLiq > 0, "position should have liquidity");
             emit log_named_uint("  ETH paid", ethAmounts[i]);
@@ -273,7 +273,7 @@ contract GeomeanLPForkTest is ForkDeployHelper {
         vm.prank(multisig);
         hook.deployPool(projectId);
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should be deployed");
-        uint256 originalTokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+        uint256 originalTokenId = hook.askTokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         uint128 originalLiq = V4_POSITION_MANAGER.getPositionLiquidity(originalTokenId);
         assertTrue(originalLiq > 0, "original position should have liquidity");
         PoolKey memory key = hook.poolKeyOf(projectId, JBConstants.NATIVE_TOKEN);
@@ -312,7 +312,7 @@ contract GeomeanLPForkTest is ForkDeployHelper {
         // Permissionless: any non-owner stranger may rebalance once the corridor has genuinely drifted.
         vm.prank(address(0xB0BB1E));
         hook.rebalanceLiquidity(projectId, JBConstants.NATIVE_TOKEN);
-        uint256 newTokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+        uint256 newTokenId = hook.askTokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         assertTrue(newTokenId != 0, "new position should exist after rebalance");
         assertTrue(newTokenId != originalTokenId, "tokenId should change after rebalance");
         uint128 newLiq = V4_POSITION_MANAGER.getPositionLiquidity(newTokenId);
@@ -379,7 +379,7 @@ contract GeomeanLPForkTest is ForkDeployHelper {
                 hook.isPoolDeployed(pid, address(usdc)),
                 string.concat("USDC pool not deployed at index ", vm.toString(i))
             );
-            uint256 tokenId = hook.tokenIdOf(pid, address(usdc));
+            uint256 tokenId = hook.askTokenIdOf(pid, address(usdc));
             assertTrue(tokenId != 0, string.concat("no USDC position NFT at index ", vm.toString(i)));
             uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
             assertTrue(posLiq > 0, string.concat("zero USDC liquidity at index ", vm.toString(i)));
@@ -410,7 +410,7 @@ contract GeomeanLPForkTest is ForkDeployHelper {
             _accumulateTokens(pid, address(pToken), tokenAmount);
             vm.prank(multisig);
             hook.deployPool(pid);
-            uint256 tokenId = hook.tokenIdOf(pid, address(usdc));
+            uint256 tokenId = hook.askTokenIdOf(pid, address(usdc));
             assertTrue(tokenId != 0, "position should exist");
             liquidities[i] = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
             assertTrue(liquidities[i] > 0, "position should have liquidity");
@@ -449,7 +449,7 @@ contract GeomeanLPForkTest is ForkDeployHelper {
             assertTrue(sqrtPriceX96 > 0, "pool should be initialized");
             assertTrue(currentTick >= TickMath.MIN_TICK, "tick below MIN_TICK");
             assertTrue(currentTick <= TickMath.MAX_TICK, "tick above MAX_TICK");
-            uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+            uint256 tokenId = hook.askTokenIdOf(pid, JBConstants.NATIVE_TOKEN);
             uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
             assertTrue(posLiq > 0, "position should have liquidity");
             emit log_named_uint("  weight", weights[i]);

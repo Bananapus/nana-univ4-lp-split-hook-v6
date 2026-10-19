@@ -396,7 +396,7 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
         _setDirectoryTerminal(FEE_PROJECT_ID, address(terminalToken), address(malFeeTerminal));
 
         // 4. Set up LP fees to collect.
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         (address token0,) = _sortForTest(address(projectToken), address(terminalToken));
 
         uint256 feeAmount = 50e18;
@@ -434,7 +434,7 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
         );
 
         // 8. Verify: position still exists (rebalance completed successfully) despite the blocked re-entry.
-        uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(newTokenId, 0, "Position should exist after successful rebalance");
     }
 
@@ -457,7 +457,7 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
         _setDirectoryTerminal(FEE_PROJECT_ID, address(terminalToken), address(malFeeTerminal));
 
         // 4. Set up LP fees to collect.
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         (address token0,) = _sortForTest(address(projectToken), address(terminalToken));
 
         uint256 feeAmount = 50e18;

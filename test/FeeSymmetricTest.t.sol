@@ -66,7 +66,7 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
 
     function _deployA() internal returns (uint256 tokenId) {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
-        tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
     }
 
     function _corridorA() internal view returns (int24 floorTick, int24 ceilingTick) {
@@ -109,7 +109,7 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, projectAmount);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
-        tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
     }
 
     /// @dev Sets the terminal-token side of a pool's collectable fees, ordering-aware against `projectTok` (which pool
@@ -181,7 +181,7 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
         vm.stopPrank();
         vm.prank(owner);
         hook.deployPool(PROJECT_B);
-        tokenId = hook.tokenIdOf(PROJECT_B, address(terminalToken));
+        tokenId = hook.askTokenIdOf(PROJECT_B, address(terminalToken));
     }
 
     // ─── Project-token side
@@ -253,8 +253,8 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
         );
     }
 
-    /// @notice A forgiven terminal cut routes the whole terminal fee into the ledger, and a subsequent mint consumes
-    /// that ledger into the position's bid leg.
+    /// @notice A forgiven terminal cut routes the whole terminal fee into the ledger, and a subsequent recycle consumes
+    /// that ledger into the bid position.
     function test_TerminalSide_Forgiven_FundsBidOnNextMint() public {
         uint256 tokenId = _deployAAtMid(0.5e18);
         // Forgive the terminal cut by removing the fee project's terminal for the terminal token.
@@ -280,8 +280,8 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
             termFee,
             "the terminal ledger is drawn down into the mint"
         );
-        (, uint256 terminalSide) = _lockedSides(hook.tokenIdOf(PROJECT_ID, address(terminalToken)));
-        assertGt(terminalSide, 0, "the bid leg is funded from the terminal ledger");
+        (, uint256 terminalSide) = _lockedSides(hook.bidTokenIdOf(PROJECT_ID, address(terminalToken)));
+        assertGt(terminalSide, 0, "the bid position is funded from the terminal ledger");
     }
 
     // ─── Best-effort (try/catch)
@@ -347,7 +347,7 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 100e18);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
-        tokenId = hook.tokenIdOf(PROJECT_ID, NATIVE);
+        tokenId = hook.askTokenIdOf(PROJECT_ID, NATIVE);
     }
 
     /// @notice A PAID native-terminal cut is forwarded with msg.value and the non-cut remainder is carried into the
@@ -418,7 +418,7 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
-        (, uint256 aTerminalSide) = _lockedSides(hook.tokenIdOf(PROJECT_ID, address(terminalToken)));
+        (, uint256 aTerminalSide) = _lockedSides(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)));
         assertEq(aTerminalSide, 0, "A consumed zero terminal: neither B's ledger nor the donation was swept");
         assertEq(
             hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)),

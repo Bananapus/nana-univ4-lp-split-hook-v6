@@ -17,7 +17,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
 
         // Deploy a pool so we have a position to work with
         _accumulateAndDeploy(PROJECT_ID, 100e18);
-        poolTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        poolTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
         // Ensure PositionManager has tokens for collect/burn operations
         projectToken.mint(address(positionManager), 100e18);
@@ -81,7 +81,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
     ///         A sandwich attacker cannot interfere between these steps since they happen
     ///         within one tx. Verify the position ID changes and both operations occur.
     function test_Rebalance_AtomicNFTSwap() public {
-        uint256 originalTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 originalTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         uint256 burnCountBefore = positionManager.burnCallCount();
         uint256 mintCountBefore = positionManager.mintCallCount();
 
@@ -91,7 +91,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
-        uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
         // Both burn and mint must have occurred
         assertEq(positionManager.burnCallCount(), burnCountBefore + 1, "Burn must occur exactly once");
@@ -141,7 +141,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         assertTrue(feesRouted, "Fees should be collected and routed during rebalance");
 
         // Verify a new position was still minted after fee routing
-        uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(newTokenId, 0, "New position should be minted after fee routing");
         assertNotEq(newTokenId, poolTokenId, "New token ID should differ from original");
     }
@@ -174,7 +174,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
-        uint256 tokenIdAfterFirst = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenIdAfterFirst = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(tokenIdAfterFirst, 0, "Token ID should be nonzero after first rebalance");
 
         // Ensure PM has tokens for the second rebalance
@@ -188,7 +188,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
-        uint256 tokenIdAfterSecond = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenIdAfterSecond = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(tokenIdAfterSecond, 0, "Token ID should be nonzero after second rebalance");
         assertNotEq(tokenIdAfterSecond, tokenIdAfterFirst, "Token ID should differ between consecutive rebalances");
     }
@@ -217,7 +217,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         assertEq(terminal.payCallCount(), payCountBefore, "No pay calls when zero fees");
 
         // Position should still be updated
-        uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(newTokenId, poolTokenId, "Position should still be rebalanced with zero fees");
     }
 
@@ -248,7 +248,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         assertTrue(leftoversHandled, "Leftover tokens should be handled after partial usage rebalance");
 
         // Position should still be valid
-        uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(newTokenId, 0, "Position should exist after partial-usage rebalance");
     }
 
@@ -341,7 +341,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         vm.prank(owner);
         vm.expectRevert();
         hook.deployPool(zeroSurplusProject);
-        assertEq(hook.tokenIdOf(zeroSurplusProject, address(terminalToken)), 0, "no position should be minted");
+        assertEq(hook.askTokenIdOf(zeroSurplusProject, address(terminalToken)), 0, "no position should be minted");
     }
 
     // -----------------------------------------------------------------------
@@ -368,7 +368,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(fullRangeProject);
 
-        assertNotEq(hook.tokenIdOf(fullRangeProject, address(terminalToken)), 0, "a single-sided position should mint");
+        assertNotEq(hook.askTokenIdOf(fullRangeProject, address(terminalToken)), 0, "a single-sided position should mint");
         assertEq(terminal.cashOutCallCount(), 0, "deployPool must never call cashOutTokensOf");
     }
 
@@ -474,7 +474,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
-        uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(newTokenId, 0, "Rebalance should succeed after weight change");
         assertNotEq(newTokenId, poolTokenId, "Token ID should change after rebalance");
     }
@@ -495,7 +495,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         // This might revert due to zero liquidity, but should not panic
         try hook.deployPool(dustProject) {
             // If it succeeds, verify state is consistent
-            uint256 tokenId = hook.tokenIdOf(dustProject, address(terminalToken));
+            uint256 tokenId = hook.askTokenIdOf(dustProject, address(terminalToken));
             assertNotEq(tokenId, 0, "Token ID should be nonzero if deploy succeeded");
         } catch (bytes memory reason) {
             // Acceptable reverts for dust amounts
@@ -520,7 +520,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(largeProject);
 
-        uint256 tokenId = hook.tokenIdOf(largeProject, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(largeProject, address(terminalToken));
         assertNotEq(tokenId, 0, "Pool should deploy with large token amount");
     }
 
@@ -544,7 +544,7 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
-        uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(newTokenId, 0, "Rebalance should succeed with narrow tick range");
     }
 

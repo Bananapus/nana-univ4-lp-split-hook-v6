@@ -49,12 +49,12 @@ contract RegressionMultiTerminalRegression is LPSplitHookV4TestBase {
 
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "deployment should succeed");
         assertGt(
-            hook.tokenIdOf(PROJECT_ID, address(terminalToken)),
+            hook.askTokenIdOf(PROJECT_ID, address(terminalToken)),
             0,
             "auto-select should deploy the highest-value terminal token"
         );
         assertEq(
-            hook.tokenIdOf(PROJECT_ID, address(altTerminalToken)),
+            hook.askTokenIdOf(PROJECT_ID, address(altTerminalToken)),
             0,
             "attacker's low-value token should NOT be deployed"
         );

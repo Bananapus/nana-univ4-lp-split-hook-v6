@@ -19,7 +19,7 @@ contract NextTokenIdAfterMintRegression is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
-        uint256 storedTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 storedTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         uint256 nextIdAfter = positionManager.nextTokenId();
 
         // The mint assigned ID 1 then incremented to 2.
@@ -43,7 +43,7 @@ contract NextTokenIdAfterMintRegression is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
-        uint256 storedTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 storedTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertEq(storedTokenId, 6, "tokenIdOf should be 6 (the minted position)");
         assertEq(storedTokenId, positionManager.lastMintTokenId(), "should match mock's tracking");
         assertEq(positionManager.nextTokenId(), 7, "nextTokenId should have incremented to 7");
@@ -116,7 +116,7 @@ contract NextTokenIdAfterMintRegression is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
-        uint256 storedTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 storedTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertEq(storedTokenId, 1000, "should store position ID 1000");
         assertEq(positionManager.nextTokenId(), 1001, "nextTokenId should be 1001");
         assertEq(storedTokenId, positionManager.lastMintTokenId(), "should match mock tracking");
@@ -127,7 +127,7 @@ contract NextTokenIdAfterMintRegression is LPSplitHookV4TestBase {
     function test_rebalance_storesCorrectTokenId() public {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
 
-        uint256 firstTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 firstTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertEq(firstTokenId, 1, "first position should be ID 1");
 
         // Change weight to trigger rebalance.
@@ -136,7 +136,7 @@ contract NextTokenIdAfterMintRegression is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
-        uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertGt(newTokenId, firstTokenId, "rebalance should create a new position with higher ID");
         assertEq(newTokenId, positionManager.lastMintTokenId(), "rebalance tokenIdOf should match actual minted ID");
         assertEq(newTokenId, positionManager.nextTokenId() - 1, "should equal nextTokenId() - 1 after rebalance");
@@ -147,7 +147,7 @@ contract NextTokenIdAfterMintRegression is LPSplitHookV4TestBase {
     function test_rebalance_afterPriorMints_storesCorrectTokenId() public {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
 
-        uint256 firstTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 firstTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
         // Simulate external mints between deploy and rebalance.
         uint256 currentNext = positionManager.nextTokenId();
@@ -159,7 +159,7 @@ contract NextTokenIdAfterMintRegression is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
-        uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertEq(newTokenId, positionManager.lastMintTokenId(), "rebalance after external mints: correct ID");
         assertEq(newTokenId, positionManager.nextTokenId() - 1, "equals nextTokenId() - 1");
         assertGt(newTokenId, firstTokenId + 10, "new ID accounts for the 10 external mints");
@@ -173,7 +173,7 @@ contract NextTokenIdAfterMintRegression is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
         assertEq(
-            hook.tokenIdOf(PROJECT_ID, address(terminalToken)), positionManager.lastMintTokenId(), "invariant: deploy"
+            hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), positionManager.lastMintTokenId(), "invariant: deploy"
         );
 
         // Rebalance 1
@@ -181,7 +181,7 @@ contract NextTokenIdAfterMintRegression is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
         assertEq(
-            hook.tokenIdOf(PROJECT_ID, address(terminalToken)),
+            hook.askTokenIdOf(PROJECT_ID, address(terminalToken)),
             positionManager.lastMintTokenId(),
             "invariant: rebalance 1"
         );
@@ -194,7 +194,7 @@ contract NextTokenIdAfterMintRegression is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
         assertEq(
-            hook.tokenIdOf(PROJECT_ID, address(terminalToken)),
+            hook.askTokenIdOf(PROJECT_ID, address(terminalToken)),
             positionManager.lastMintTokenId(),
             "invariant: rebalance 2 after external bump"
         );

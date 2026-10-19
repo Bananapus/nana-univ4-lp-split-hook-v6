@@ -118,7 +118,7 @@ contract Integration_BurnPathCrossProject is ForkDeployHelper {
         vm.prank(multisig);
         hook.deployPool(pidB);
         assertTrue(hook.isPoolDeployed(pidB, JBConstants.NATIVE_TOKEN), "B deployed");
-        uint256 bTokenId = hook.tokenIdOf(pidB, JBConstants.NATIVE_TOKEN);
+        uint256 bTokenId = hook.askTokenIdOf(pidB, JBConstants.NATIVE_TOKEN);
         uint128 bLiq = V4_POSITION_MANAGER.getPositionLiquidity(bTokenId);
         assertTrue(bLiq > 0, "B has liquidity");
         // B's accumulation is consumed by its deploy; only an unpaired remainder is carried forward (never burned).

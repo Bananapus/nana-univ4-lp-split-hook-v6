@@ -8,7 +8,7 @@ contract RegressionFreshRound is LPSplitHookV4TestBase {
     function test_claimsUseSnapshottedFeeTokenAfterMigration() public {
         _accumulateAndDeploy(PROJECT_ID, 1000e18);
 
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         positionManager.setCollectableFees(tokenId, 100e18, 100e18);
         // Fund mock with terminal tokens to cover fees (simulates swap revenue).
         terminalToken.mint(address(positionManager), 100e18);

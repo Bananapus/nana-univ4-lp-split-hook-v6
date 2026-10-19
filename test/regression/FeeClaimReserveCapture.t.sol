@@ -163,7 +163,7 @@ contract FeeClaimReserveCaptureRegression is LPSplitHookV4TestBase {
 
         // 2. Project A's LP position accrues fees, which are collected and routed — reserving a claimable
         // fee-token balance for project A.
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(feeProjectToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(feeProjectToken));
         bool feeTokenIsToken0 = address(feeProjectToken) < address(projectToken);
 
         if (feeTokenIsToken0) {

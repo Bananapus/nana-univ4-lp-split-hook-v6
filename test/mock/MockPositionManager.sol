@@ -8,7 +8,7 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {Actions} from "@uniswap/v4-periphery/src/libraries/Actions.sol";
-import {PositionInfo} from "@uniswap/v4-periphery/src/libraries/PositionInfoLibrary.sol";
+import {PositionInfo, PositionInfoLibrary} from "@uniswap/v4-periphery/src/libraries/PositionInfoLibrary.sol";
 import {MockPoolManager} from "./MockPoolManager.sol";
 
 /// @notice Mock PositionManager for testing JBUniswapV4LPSplitHook
@@ -143,8 +143,7 @@ contract MockPositionManager {
     /// @notice IPositionManager.getPoolAndPositionInfo
     function getPoolAndPositionInfo(uint256 tokenId) external view returns (PoolKey memory, PositionInfo) {
         Position memory pos = _positions[tokenId];
-        // Return PoolKey; PositionInfo is packed — return empty for mock
-        return (pos.poolKey, PositionInfo.wrap(0));
+        return (pos.poolKey, PositionInfoLibrary.initialize(pos.poolKey, pos.tickLower, pos.tickUpper));
     }
 
     /// @notice IPositionManager.modifyLiquidities — the main entry point

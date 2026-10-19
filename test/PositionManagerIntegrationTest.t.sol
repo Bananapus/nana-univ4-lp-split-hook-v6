@@ -57,7 +57,7 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
     function test_Rebalance_TokensReturnedAndRedeposited() public {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
 
-        uint256 oldTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 oldTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(oldTokenId, 0, "should have a position");
 
         // Seed PM with extra tokens so the burn can return them.
@@ -70,7 +70,7 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
-        uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(newTokenId, oldTokenId, "tokenId should change after rebalance");
 
         // After rebalance, the hook should have processed tokens through burn → take → settle → mint.
@@ -83,7 +83,7 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
     function test_FeeCollection_FeesTransferFromPM() public {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
 
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
         // Sort tokens to know which is currency0/currency1.
         (address token0,) = _sortTokens(address(projectToken), address(terminalToken));
@@ -142,7 +142,7 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
     function test_Rebalance_FullCycleWithFees() public {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
 
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
         // Configure fees on the old position.
         (address token0,) = _sortTokens(address(projectToken), address(terminalToken));
@@ -170,7 +170,7 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         assertTrue(feesRouted, "Fees from old position should be routed during rebalance");
 
         // Verify new position was created.
-        uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(newTokenId, tokenId, "New position should be minted");
     }
 
@@ -188,7 +188,7 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
 
         // Position should still be created successfully.
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(tokenId, 0, "Position should be created even with partial usage");
 
         // SWEEP should have returned unused tokens — verify hook still has some.

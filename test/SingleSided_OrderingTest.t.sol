@@ -93,7 +93,7 @@ contract SingleSided_OrderingTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PID);
 
-        uint256 tokenId = hook.tokenIdOf(PID, address(term));
+        uint256 tokenId = hook.askTokenIdOf(PID, address(term));
         term.mint(address(positionManager), 0.05e18);
         positionManager.injectPositionBalance(tokenId, address(term), 0.05e18);
         proj.mint(address(positionManager), 1000e18);
@@ -105,7 +105,7 @@ contract SingleSided_OrderingTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.rebalanceLiquidity(PID, address(term));
 
-        tokenId = hook.tokenIdOf(PID, address(term));
+        tokenId = hook.askTokenIdOf(PID, address(term));
         assertGt(positionManager.getPositionLiquidity(tokenId), 0, "liquidity must be nonzero");
 
         // Re-derive the ceiling after the corridor move.
@@ -174,7 +174,7 @@ contract SingleSided_OrderingTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, NATIVE);
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, NATIVE);
         vm.deal(address(positionManager), address(positionManager).balance + 0.05 ether);
         positionManager.injectPositionBalance(tokenId, address(0), 0.05 ether);
         projectToken.mint(address(positionManager), 1000e18);
@@ -185,7 +185,7 @@ contract SingleSided_OrderingTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, NATIVE);
 
-        tokenId = hook.tokenIdOf(PROJECT_ID, NATIVE);
+        tokenId = hook.askTokenIdOf(PROJECT_ID, NATIVE);
         assertGt(positionManager.getPositionLiquidity(tokenId), 0, "liquidity must be nonzero");
 
         // Re-derive the ceiling after the corridor move (project=token1 → ceiling is the corridor LOWER tick).

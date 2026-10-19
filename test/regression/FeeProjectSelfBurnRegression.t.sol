@@ -234,7 +234,7 @@ contract FeeProjectSelfBurnRegression is LPSplitHookV4TestBase {
 
         _accumulateAndDeploy(PROJECT_ID, 100e18);
 
-        uint256 projectOneTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 projectOneTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         bool terminalIsToken0 = address(terminalToken) < address(projectToken);
         uint256 terminalFeeAmount = 100e18;
 
@@ -289,7 +289,7 @@ contract FeeProjectSelfBurnRegression is LPSplitHookV4TestBase {
     function test_ClaimThenBurn_NoUnderflow() public {
         // Deploy pool and generate fee tokens for PROJECT_ID.
         _accumulateAndDeploy(PROJECT_ID, 100e18);
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         bool terminalIsToken0 = address(terminalToken) < address(projectToken);
 
         // First fee collection: generates claimable fee tokens.
@@ -358,7 +358,7 @@ contract FeeProjectSelfBurnRegression is LPSplitHookV4TestBase {
         bool terminalIsToken0 = address(terminalToken) < address(projectToken);
 
         // Generate fee tokens for PROJECT_ID.
-        uint256 tokenIdA = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenIdA = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         uint256 feeA = 60e18;
         if (terminalIsToken0) {
             positionManager.setCollectableFees(tokenIdA, feeA, 0);
@@ -369,7 +369,7 @@ contract FeeProjectSelfBurnRegression is LPSplitHookV4TestBase {
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
 
         // Generate fee tokens for PROJECT_B.
-        uint256 tokenIdB = hook.tokenIdOf(PROJECT_B, address(terminalToken));
+        uint256 tokenIdB = hook.askTokenIdOf(PROJECT_B, address(terminalToken));
         uint256 feeB = 40e18;
         if (terminalIsToken0) {
             positionManager.setCollectableFees(tokenIdB, feeB, 0);
@@ -413,7 +413,7 @@ contract FeeProjectSelfBurnRegression is LPSplitHookV4TestBase {
     function test_TerminalTokenLeftoverSweepPreservesOutstandingFeeClaims() public {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
 
-        uint256 tokenIdA = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenIdA = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         bool terminalIsToken0 = address(terminalToken) < address(projectToken);
         uint256 feeAmount = 100e18;
 
@@ -473,7 +473,7 @@ contract FeeProjectSelfBurnRegression is LPSplitHookV4TestBase {
     ///         burn (triggered by collectAndRouteLPFees) must leave the reserved fee tokens intact.
     function test_BurnExcludesReservedFeeTokens() public {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         bool terminalIsToken0 = address(terminalToken) < address(projectToken);
 
         // Generate fee tokens via LP fee collection.

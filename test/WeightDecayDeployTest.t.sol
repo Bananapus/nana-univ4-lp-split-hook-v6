@@ -55,7 +55,7 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
         vm.prank(randomUser);
         hook.deployPool(PROJECT_ID);
 
-        assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "random user seeds pool at any weight");
+        assertNotEq(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "random user seeds pool at any weight");
     }
 
     /// @notice A random caller can also deploy after the weight has decayed — the behavior is identical
@@ -68,7 +68,7 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
         vm.prank(randomUser);
         hook.deployPool(PROJECT_ID);
 
-        assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "random user seeds pool after decay too");
+        assertNotEq(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "random user seeds pool after decay too");
     }
 
     /// @notice A random caller can deploy even with no initialWeightOf snapshot (deploy without a prior accumulation is
@@ -100,11 +100,11 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
         // Seeding project A does not seed project B; each is independently, permissionlessly deployable.
         vm.prank(randomUser);
         hook.deployPool(PROJECT_ID);
-        assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "A seeded");
-        assertEq(hook.tokenIdOf(projectB, address(terminalToken)), 0, "B not seeded by A's deploy");
+        assertNotEq(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "A seeded");
+        assertEq(hook.askTokenIdOf(projectB, address(terminalToken)), 0, "B not seeded by A's deploy");
 
         vm.prank(randomUser);
         hook.deployPool(projectB);
-        assertNotEq(hook.tokenIdOf(projectB, address(terminalToken)), 0, "B independently seeded");
+        assertNotEq(hook.askTokenIdOf(projectB, address(terminalToken)), 0, "B independently seeded");
     }
 }

@@ -232,7 +232,7 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
 
         // The pool should now exist (tokenIdOf != 0).
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertGt(tokenId, 0, "pool should be deployed with scopeCashOutsToLocalBalances=false");
 
         // Accumulated project tokens should be cleared after deployment.
@@ -247,7 +247,7 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
         _accumulateViaController(PROJECT_ID, 100e18);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
-        uint256 tokenIdLocal = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenIdLocal = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertGt(tokenIdLocal, 0, "local surplus path should deploy successfully");
 
         // ── Path B: total surplus (flag is true) ──
@@ -287,7 +287,7 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
 
         vm.prank(owner);
         hook.deployPool(projectB);
-        uint256 tokenIdTotal = hook.tokenIdOf(projectB, address(terminalToken));
+        uint256 tokenIdTotal = hook.askTokenIdOf(projectB, address(terminalToken));
         assertGt(tokenIdTotal, 0, "total surplus path should deploy successfully");
     }
 }
@@ -365,7 +365,7 @@ contract FeeTokensExcludedFromRebalanceTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
 
         // Step 2: generate LP fees and collect them.
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         bool terminalIsToken0 = address(terminalToken) < address(projectToken);
         uint256 feeAmount = 50e18;
 
@@ -482,7 +482,7 @@ contract FeeTokensExcludedFromSplitBalanceCheckTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
 
         // Generate LP fees for project 1 so that claimableFeeTokens > 0.
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         bool terminalIsToken0 = address(terminalToken) < address(projectToken);
         uint256 feeAmount = 80e18;
         if (terminalIsToken0) {

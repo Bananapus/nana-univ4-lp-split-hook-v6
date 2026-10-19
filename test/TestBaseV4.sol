@@ -66,7 +66,7 @@ contract LPSplitHookV4TestBase is Test {
     MockPositionManager public positionManager;
     MockPoolManager public poolManager;
     /// @notice Spot-tracking oracle wired into the base `hook`. Subclasses that re-deploy the hook should reuse this
-    /// (it tracks the base `poolManager`) so the spot-vs-TWAP guard on addLiquidity/rebalanceLiquidity passes.
+    /// (it tracks the base `poolManager`) so the spot-vs-TWAP guard on addLiquidity passes.
     MockGeomeanOracle public baseOracleHook;
     MockJBProjects public jbProjects;
     MockJBPermissions public permissions;
@@ -89,27 +89,25 @@ contract LPSplitHookV4TestBase is Test {
     // ─── Hook Storage Slots
     // `JBUniswapV4LPSplitHook` declares its stored properties alphabetically (STYLE_GUIDE) and none of them pack, so
     // each occupies one slot in declaration order. Verified against `forge inspect ... storageLayout`:
-    //   0 accumulatedProjectCredits   7 claimableFeeTokenOf   14 oracleHook
-    //   1 accumulatedProjectTokens    8 claimableFeeTokens    15 poolKeysOf
+    //   0 accumulatedProjectCredits   7 claimableFeeTokenOf      14 oracleHook
+    //   1 accumulatedProjectTokens    8 claimableFeeTokens       15 poolKeysOf
     //   2 accumulatedTerminalTokens   9 deployedTerminalTokenOf  16 poolManager
-    //   3 activeTickLowerOf          10 feePercent            17 positionManager
-    //   4 activeTickUpperOf          11 feeProjectId          18 rangedCorridorLowerOf
-    //   5 buybackHook                12 hasDeployedPool       19 rangedCorridorUpperOf
-    //   6 claimableFeeCredits        13 initialWeightOf       20 tokenIdOf
-    //  21 _inflightFeeRoutingCount   22 _totalOutstandingFeeCreditClaims
-    //  23 _totalOutstandingFeeTokenClaims
+    //   3 askTokenIdOf               10 feePercent               17 positionManager
+    //   4 bidTokenIdOf               11 feeProjectId             18 _inflightFeeRoutingCount
+    //   5 buybackHook                12 hasDeployedPool          19 _totalOutstandingFeeCreditClaims
+    //   6 claimableFeeCredits        13 initialWeightOf          20 _totalOutstandingFeeTokenClaims
 
     /// @notice Storage slot of the hook's `oracleHook`.
     uint256 internal constant SLOT_ORACLE_HOOK = 14;
 
-    /// @notice Storage slot of the hook's `tokenIdOf` mapping.
-    uint256 internal constant SLOT_TOKEN_ID_OF = 20;
+    /// @notice Storage slot of the hook's `askTokenIdOf` mapping.
+    uint256 internal constant SLOT_ASK_TOKEN_ID_OF = 3;
 
     /// @notice Storage slot of the hook's `_inflightFeeRoutingCount` mapping.
-    uint256 internal constant SLOT_INFLIGHT_FEE_ROUTING_COUNT = 21;
+    uint256 internal constant SLOT_INFLIGHT_FEE_ROUTING_COUNT = 18;
 
     /// @notice Storage slot of the hook's `_totalOutstandingFeeTokenClaims` mapping.
-    uint256 internal constant SLOT_OUTSTANDING_FEE_TOKEN_CLAIMS = 23;
+    uint256 internal constant SLOT_OUTSTANDING_FEE_TOKEN_CLAIMS = 20;
 
     address public owner;
     address public user;
@@ -206,7 +204,7 @@ contract LPSplitHookV4TestBase is Test {
         );
         hook = JBUniswapV4LPSplitHook(payable(LibClone.clone(address(hookImpl))));
 
-        // Wire a spot-tracking oracle so the hook's spot-vs-TWAP guard (on addLiquidity AND rebalanceLiquidity) passes
+        // Wire a spot-tracking oracle so the hook's spot-vs-TWAP guard (on addLiquidity) passes
         // by default: it reports a TWAP equal to the pool's live spot tick. Tests that exercise TWAP deviation or an
         // un-warmed oracle override `oracleHook` (see `_overrideOracleHook`) with their own fixed-tick
         // MockGeomeanOracle.

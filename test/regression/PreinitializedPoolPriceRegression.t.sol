@@ -197,6 +197,6 @@ contract RegressionPreinitializedPoolPriceRegression is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
 
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "the project should deploy successfully with an in-band price");
-        assertGt(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "an LP position should be created");
+        assertGt(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "an LP position should be created");
     }
 }

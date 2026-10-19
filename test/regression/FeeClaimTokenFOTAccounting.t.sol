@@ -105,7 +105,7 @@ contract FeeClaimTokenFOTAccountingTest is LPSplitHookV4TestBase {
         super.setUp();
 
         _accumulateAndDeploy(PROJECT_ID, 100e18);
-        poolTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        poolTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         terminalTokenIsToken0 = address(terminalToken) < address(projectToken);
 
         fotFeeToken = new FeeOnTransferFeeToken();

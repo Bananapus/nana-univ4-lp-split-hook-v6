@@ -171,7 +171,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         hook.deployPool(projectId);
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "project should be deployed");
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should be deployed");
-        uint256 tokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+        uint256 tokenId = hook.askTokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         assertTrue(tokenId != 0, "should hold a position NFT");
         // Only unpaired dust (carried forward, never burned) may remain after the optimal-cashout add.
         assertLt(hook.accumulatedProjectTokens(projectId), 1e12, "at most dust should remain accumulated after deploy");
@@ -255,7 +255,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         // Real Permit2 treats expiration 0 as end-of-block, so the production fork must show the cleanup wrote an
         // already-expired nonzero timestamp.
         assertEq(permitExpiration, 1, "hook should expire Permit2 allowance to PositionManager after deploy");
-        uint256 tokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+        uint256 tokenId = hook.askTokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         uint128 liq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         assertTrue(liq > 0, "position should have liquidity via Permit2 flow");
     }
@@ -365,7 +365,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         vm.prank(multisig);
         hook.deployPool(projectId);
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should deploy successfully");
-        assertGt(hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN), 0, "position NFT should be minted");
+        assertGt(hook.askTokenIdOf(projectId, JBConstants.NATIVE_TOKEN), 0, "position NFT should be minted");
         // Only unpaired dust (carried forward, never burned) may remain after the optimal-cashout add.
         assertLt(hook.accumulatedProjectTokens(projectId), 1e12, "at most dust should remain accumulated");
         (uint160 sqrtPriceAfter,,,) = V4_POOL_MANAGER.getSlot0(poolId);
@@ -415,7 +415,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         vm.prank(randomUser);
         hook.deployPool(projectId);
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should be deployed by random user");
-        uint256 tokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+        uint256 tokenId = hook.askTokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         assertTrue(tokenId != 0, "should hold a position NFT");
         assertEq(hook.initialWeightOf(projectId), currentRuleset.weight, "weight should snapshot on first processing");
     }
@@ -429,7 +429,7 @@ contract LPSplitHookForkTest is ForkDeployHelper {
         assertTrue(
             hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "pool should be deployed by a random caller"
         );
-        uint256 tokenId = hook.tokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+        uint256 tokenId = hook.askTokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
         assertTrue(tokenId != 0, "should hold a position NFT");
     }
 }

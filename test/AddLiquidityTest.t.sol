@@ -56,7 +56,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
     function test_AddLiquidity_Consolidates_BurnsAndReMints_NoCashOut() public {
         _deployAndAccumulateMore(40e18);
 
-        uint256 activeTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 activeTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         uint256 mintsBefore = positionManager.mintCallCount();
         uint256 positionBurnsBefore = positionManager.burnCallCount();
         uint256 tokenBurnsBefore = controller.burnCallCount();
@@ -69,7 +69,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         assertEq(positionManager.burnCallCount(), positionBurnsBefore + 1, "the live position must be burned");
         assertEq(positionManager.mintCallCount(), mintsBefore + 1, "a single fresh position must be minted");
         assertNotEq(
-            hook.tokenIdOf(PROJECT_ID, address(terminalToken)), activeTokenId, "the tracked position id must change"
+            hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), activeTokenId, "the tracked position id must change"
         );
         // The hook never burns project tokens and never funds the add via a cash-out.
         assertEq(controller.burnCallCount(), tokenBurnsBefore, "addLiquidity never burns project tokens");
@@ -108,7 +108,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
     function test_AddLiquidity_RerangesByBurningAndReminting() public {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
 
-        uint256 oldTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 oldTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
         // Drop the issuance weight ~10% so the issuance-ceiling tick drifts ~1000 ticks (> the 400-tick re-range
         // threshold) while the cash-out floor (surplus-based) stays put and the spot price stays inside the new band.
@@ -131,7 +131,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         );
         assertEq(positionManager.mintCallCount(), mintsBefore + 1, "a single fresh position should be minted");
         assertEq(controller.burnCallCount(), tokenBurnsBefore, "re-range never burns project tokens");
-        uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertTrue(newTokenId != oldTokenId, "active position id should change on re-range");
 
         // Fees are collected from the single (new) position and routed.
@@ -239,12 +239,12 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
     function test_AddLiquidity_Permissionless_AnyCallerCanExtend() public {
         _deployAndAccumulateMore(40e18);
 
-        uint256 firstId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 firstId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         vm.prank(makeAddr("randomUser"));
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
         assertNotEq(
-            hook.tokenIdOf(PROJECT_ID, address(terminalToken)), firstId, "a permissionless caller consolidates the add"
+            hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), firstId, "a permissionless caller consolidates the add"
         );
     }
 

@@ -90,7 +90,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
         _accumulateAndDeploy(PROJECT_ID, 1000e18);
 
         // Step 2: Set up collectable fees on the PositionManager mock
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         (address token0,) = _sortForTest(address(projectToken), address(terminalToken));
 
         uint256 feeAmount = 50e18;
@@ -154,7 +154,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
         // Accumulate and deploy pool (deployPool called as owner inside helper)
         _accumulateAndDeploy(PROJECT_ID, 1000e18);
 
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         (address token0,) = _sortForTest(address(projectToken), address(terminalToken));
 
         uint256 feeAmount = 50e18;
@@ -271,7 +271,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
         _accumulateAndDeploy(PROJECT_ID, 1000e18);
 
         // Set up collectable fees on PositionManager
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         (address token0,) = _sortForTest(address(projectToken), address(terminalToken));
 
         uint256 feeAmount = 10e18;
@@ -313,7 +313,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
 
         // The deploy succeeds and mints a position NFT.
         assertNotEq(
-            hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "a permissionless caller can deploy the pool"
+            hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "a permissionless caller can deploy the pool"
         );
     }
 
@@ -335,7 +335,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
 
         // Verify pool was deployed
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(tokenId, 0, "Pool should have been deployed by owner");
 
         // Verify the PositionManager mint was called

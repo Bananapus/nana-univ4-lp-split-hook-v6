@@ -147,7 +147,7 @@ contract DurableIntakeCoreIntegration is ForkDeployHelper {
         assertEq(jbController.pendingReservedTokenBalanceOf(pid), 0, "pending reserves must clear");
         assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "the pool should deploy inline");
         assertEq(hook.deployedTerminalTokenOf(pid), JBConstants.NATIVE_TOKEN, "the pairing should be recorded");
-        assertTrue(hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN) != 0, "a position should exist");
+        assertTrue(hook.askTokenIdOf(pid, JBConstants.NATIVE_TOKEN) != 0, "a position should exist");
     }
 
     /// @notice A downstream failure (un-warmed TWAP on a pre-initialized pool) cannot touch the accepted inventory:
@@ -233,7 +233,7 @@ contract DurableIntakeCoreIntegration is ForkDeployHelper {
         if (ok) {
             assertEq(jbController.pendingReservedTokenBalanceOf(pid), 0, "success must clear pending reserves");
             bool represented = hook.accumulatedProjectTokens(pid) == reservedAmount
-                || hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN) != 0;
+                || hook.askTokenIdOf(pid, JBConstants.NATIVE_TOKEN) != 0;
             assertTrue(represented, "success must leave the split represented in the ledger or an LP position");
         }
 

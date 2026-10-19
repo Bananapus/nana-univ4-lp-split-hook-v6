@@ -17,7 +17,7 @@ contract StaleTokenIdOfTest is LPSplitHookV4TestBase {
 
         // Deploy a pool so we have a position to rebalance
         _accumulateAndDeploy(PROJECT_ID, 100e18);
-        poolTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        poolTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(poolTokenId, 0, "Initial tokenId should be nonzero");
 
         // Move the economic corridor (drop issuance ~10%) so every rebalance below clears its corridor-drift guard.
@@ -53,7 +53,7 @@ contract StaleTokenIdOfTest is LPSplitHookV4TestBase {
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
         // tokenIdOf should remain unchanged (revert rolled back state)
-        uint256 tokenIdAfter = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenIdAfter = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertEq(tokenIdAfter, poolTokenId, "tokenIdOf should remain unchanged after revert");
     }
 
@@ -63,12 +63,12 @@ contract StaleTokenIdOfTest is LPSplitHookV4TestBase {
         projectToken.mint(address(positionManager), 50e18);
         terminalToken.mint(address(positionManager), 50e18);
 
-        uint256 originalTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 originalTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
         vm.prank(owner);
         hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
 
-        uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(newTokenId, 0, "tokenIdOf should be nonzero after normal rebalance");
         assertNotEq(newTokenId, originalTokenId, "tokenIdOf should change after rebalance");
     }

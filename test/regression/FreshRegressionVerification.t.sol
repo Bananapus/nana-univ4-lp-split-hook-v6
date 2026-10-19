@@ -10,7 +10,7 @@ contract RegressionFreshRegressionVerification is LPSplitHookV4TestBase {
     function test_collectFeesSucceedsAfterProjectTerminalRemoval() public {
         _accumulateAndDeploy(PROJECT_ID, 1000e18);
 
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         uint256 fee = 100e18;
         if (address(terminalToken) < address(projectToken)) {
             positionManager.setCollectableFees(tokenId, fee, 0);
