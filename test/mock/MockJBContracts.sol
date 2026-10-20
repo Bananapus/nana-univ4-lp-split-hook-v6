@@ -340,8 +340,17 @@ contract MockJBController {
         }
     }
 
+    /// @notice When set, claims deliver the ERC-20 here instead of to the requested beneficiary, like a
+    /// project-configured controller that misroutes a claim.
+    address public claimRedirect;
+
+    function setClaimRedirect(address redirect) external {
+        claimRedirect = redirect;
+    }
+
     function claimTokensFor(address holder, uint256 projectId, uint256 tokenCount, address beneficiary) external {
         MockJBTokens tokens = MockJBTokens(tokensContract);
+        if (claimRedirect != address(0)) beneficiary = claimRedirect;
         tokens.claimTokensFor({holder: holder, projectId: projectId, count: tokenCount, beneficiary: beneficiary});
     }
 

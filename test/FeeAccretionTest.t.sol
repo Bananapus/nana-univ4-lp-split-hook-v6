@@ -115,6 +115,32 @@ contract MisbehavingBurnController {
     }
 }
 
+/// @notice A token that debits the sender a surcharge on top of every `transferFrom` that `surchargeSpender` makes and
+/// every `transfer` it sends: the amount (and any allowance) moves exactly, but the sender loses more.
+contract SurchargeERC20 is MockERC20 {
+    address public surchargeSpender;
+    uint256 public surchargeBps;
+
+    constructor() MockERC20("Surcharge", "S", 18) {}
+
+    function setSurcharge(address spender, uint256 bps) external {
+        surchargeSpender = spender;
+        surchargeBps = bps;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) public override returns (bool) {
+        super.transferFrom(from, to, amount);
+        if (msg.sender == surchargeSpender) this.burn(from, amount * surchargeBps / 10_000);
+        return true;
+    }
+
+    function transfer(address to, uint256 amount) public override returns (bool) {
+        super.transfer(to, amount);
+        if (msg.sender == surchargeSpender) this.burn(msg.sender, amount * surchargeBps / 10_000);
+        return true;
+    }
+}
+
 /// @notice LP fees accrue to the project and raise its cash-out floor: after the unchanged fee-project cut, the
 /// terminal-token remainder is added to the project's balance in its primary terminal and the project-token remainder
 /// is burned. Either route that fails falls back to that side's ledger exactly, without blocking the other side or the
@@ -342,6 +368,139 @@ contract FeeAccretionTest is SingleProjectHarness {
         assertEq(a.projectLedger, b.projectLedger + 7e18, "the claimed credits are ask inventory");
         assertEq(a.hookProject, b.hookProject + 7e18, "and held as ERC-20");
         assertEq(a.projTerminalHeld - b.projTerminalHeld, TERMINAL_FEE, "the terminal side is still added");
+    }
+
+    // ─── Sender surcharge: a terminal token that debits the hook more than it sends falls back to the ledger
+    // ─────────────────────────────────────────────────────
+
+    uint256 internal constant SURCHARGED_PAYOUT = 1000e18;
+    uint256 internal constant SURCHARGED_FEE = 100e18;
+
+    /// @notice Swap the terminal token's code for one that surcharges the sender 10% on `spender`'s pulls. Balances and
+    /// allowances carry over (same storage layout).
+    function _surchargeTerminalToken(address spender) internal {
+        vm.etch(term, address(new SurchargeERC20()).code);
+        SurchargeERC20(term).setSurcharge({spender: spender, bps: 1000});
+    }
+
+    /// @notice Accept a payout of `amount` from the project's terminal, intake only.
+    function _acceptPayout(uint256 amount) internal {
+        MockERC20(term).mint(address(projTerminal), amount);
+        vm.startPrank(address(projTerminal));
+        MockERC20(term).approve(address(hook), amount);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(_buildContext(PID, term, amount, uint256(uint160(term))));
+        vm.stopPrank();
+    }
+
+    /// @notice The project's terminal surcharges the hook on the fee add: the add would debit 110 for 100 sent and
+    /// leave the payout ledger underbacked, so it is not exact, rolls back, and the whole fee joins the bid ledger.
+    function _runSurchargedAdd(bool wantProjectToken0) internal {
+        _wireDefault(wantProjectToken0, false);
+        _surchargeTerminalToken(address(projTerminal));
+        _acceptPayout(SURCHARGED_PAYOUT);
+        _setFees(0, SURCHARGED_FEE);
+        Books memory b = _books();
+        assertEq(b.terminalLedger, SURCHARGED_PAYOUT, "precondition: the payout is ledgered");
+
+        _collect();
+
+        Books memory a = _books();
+        assertEq(a.projTerminalHeld, b.projTerminalHeld, "the surcharged add rolled back");
+        assertEq(a.terminalLedger, SURCHARGED_PAYOUT + SURCHARGED_FEE, "the whole fee joins the bid ledger");
+        assertEq(a.hookTerminal, a.terminalLedger, "the hook holds exactly its ledger");
+        assertEq(MockERC20(term).allowance(address(hook), address(projTerminal)), 0, "no allowance left");
+    }
+
+    function test_SurchargedAdd_FallsBack_ProjectToken0() public {
+        _runSurchargedAdd(true);
+    }
+
+    function test_SurchargedAdd_FallsBack_ProjectToken1() public {
+        _runSurchargedAdd(false);
+    }
+
+    /// @notice The fee project's terminal surcharges the hook on the cut: the cut is not exact, so it is forgiven, and
+    /// the whole fee is added to the project's balance through its own (exact) terminal.
+    function _runSurchargedCut(bool wantProjectToken0) internal {
+        _wireDefault(wantProjectToken0, false);
+        _setDirectoryTerminal(FEE_PROJECT_ID, term, address(terminal));
+        _surchargeTerminalToken(address(terminal));
+        _acceptPayout(SURCHARGED_PAYOUT);
+        _setFees(0, SURCHARGED_FEE);
+        uint256 feeTerminalBefore = MockERC20(term).balanceOf(address(terminal));
+        uint256 claimsBefore = hook.claimableFeeTokens(PID);
+        Books memory b = _books();
+
+        _collect();
+
+        Books memory a = _books();
+        assertEq(MockERC20(term).balanceOf(address(terminal)), feeTerminalBefore, "the surcharged cut rolled back");
+        assertEq(hook.claimableFeeTokens(PID), claimsBefore, "no claim for a forgiven cut");
+        assertEq(a.projTerminalHeld - b.projTerminalHeld, SURCHARGED_FEE, "the whole fee is added to the project");
+        assertEq(a.terminalLedger, b.terminalLedger, "bid ledger unchanged");
+        assertEq(a.hookTerminal, a.terminalLedger, "the hook holds exactly its ledger");
+        assertEq(MockERC20(term).allowance(address(hook), address(terminal)), 0, "no allowance left");
+    }
+
+    function test_SurchargedCut_Forgiven_ProjectToken0() public {
+        _runSurchargedCut(true);
+    }
+
+    function test_SurchargedCut_Forgiven_ProjectToken1() public {
+        _runSurchargedCut(false);
+    }
+
+    /// @notice The fee project's token surcharges the hook on the claim's send: the debit would exceed the claim and
+    /// take the rest from the fee project's own ask ledger on this clone, so the claim reverts and stays intact.
+    function test_SurchargedFeeTokenClaim_RevertsAndOtherLedgerStaysBacked() public {
+        _wireDefault(true, false);
+        _setDirectoryTerminal(FEE_PROJECT_ID, term, address(terminal));
+        _setDirectoryTerminal(FEE_PROJECT_ID, address(proj), address(terminal));
+        _setFees(PROJECT_FEE, TERMINAL_FEE);
+        _collect();
+        uint256 claim = hook.claimableFeeTokens(PID);
+        assertGt(claim, 0, "precondition: a fee-token claim accrued");
+
+        // The fee project also uses this clone: 1,000 of its own tokens back its ask ledger here.
+        uint256 feeLedger = 1000e18;
+        vm.store(address(hook), keccak256(abi.encode(FEE_PROJECT_ID, uint256(1))), bytes32(feeLedger));
+        feeProjectToken.mint(address(hook), feeLedger);
+        bytes32 reserveSlot = keccak256(abi.encode(address(feeProjectToken), uint256(20)));
+        uint256 reserve = uint256(vm.load(address(hook), reserveSlot));
+        assertEq(reserve, claim, "precondition: the claim is reserved");
+        assertEq(feeProjectToken.balanceOf(address(hook)), claim + feeLedger, "precondition: both fully backed");
+
+        vm.etch(address(feeProjectToken), address(new SurchargeERC20()).code);
+        SurchargeERC20(address(feeProjectToken)).setSurcharge({spender: address(hook), bps: 1000});
+
+        vm.prank(owner);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_TransferNotExact.selector);
+        hook.claimFeeTokensFor(PID, address(0xCAFE));
+
+        assertEq(hook.claimableFeeTokens(PID), claim, "the claim is intact");
+        assertEq(hook.claimableFeeTokenOf(PID), address(feeProjectToken), "the claim token is intact");
+        assertEq(uint256(vm.load(address(hook), reserveSlot)), reserve, "the reserve is intact");
+        assertEq(hook.accumulatedProjectTokens(FEE_PROJECT_ID), feeLedger, "the fee project's ledger is untouched");
+        assertEq(feeProjectToken.balanceOf(address(hook)), claim + feeLedger, "the hook still backs both");
+        assertEq(feeProjectToken.balanceOf(address(0xCAFE)), 0, "nothing was sent");
+    }
+
+    /// @notice A controller that delivers a claim elsewhere gives the hook nothing, so the ledger gains nothing: it
+    /// records only the ERC-20 this hook received, and every ledger stays backed.
+    function test_MisroutedClaim_LedgersOnlyWhatArrived() public {
+        _wireDefault(true, false);
+        jbTokens.setCreditBalance({holder: address(hook), projectId: PID, creditCount: 7e18});
+        controller.setClaimRedirect(address(0xBEEF));
+        _setFees(PROJECT_FEE, TERMINAL_FEE);
+        Books memory b = _books();
+
+        _collect();
+
+        Books memory a = _books();
+        assertEq(controller.lastBurnAmount(), PROJECT_FEE, "the burn was exactly the fee remainder");
+        assertEq(a.projectLedger, b.projectLedger, "nothing arrived, so nothing was ledgered");
+        assertEq(a.hookProject, b.hookProject, "the hook received none of the claim");
+        assertLe(a.projectLedger, a.hookProject, "the project-token ledger stays backed");
     }
 
     /// @notice Fee-credit claims the hook owes (a fee project that holds claims from before it tokenized) are never

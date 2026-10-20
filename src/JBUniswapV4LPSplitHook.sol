@@ -170,6 +170,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// price cannot be validated and liquidity must not be added.
     error JBUniswapV4LPSplitHook_TwapUnavailable(uint256 projectId, address terminalToken);
 
+    /// @notice Thrown when sending `amount` of `token` (to a terminal, a fee claimant, or a mint) debited this hook by
+    /// more than `amount`.
+    error JBUniswapV4LPSplitHook_TransferNotExact(address token, uint256 amount);
+
     /// @notice Thrown when the best-effort fee-cut payment helper is called by anyone other than this contract itself.
     error JBUniswapV4LPSplitHook_Unauthorized();
 
@@ -198,22 +202,24 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     // ----------------------- internal constants ------------------------ //
     //*********************************************************************//
 
-    /// @notice The minimum gas an inline automation attempt is worth starting with. Below this, `processSplitWith`
-    /// skips automation entirely rather than burning the caller's gas on an attempt that cannot reach a mint.
-    /// @dev A full recycle (two fee collections with fee-project payments, the fee adds and burns with their credit
-    /// claim, two position burns, corridor math, oracle reads, and two mints) measured ~857k to ~1.39M gas across the
-    /// mainnet fork suite (most at or below ~1.25M); a first deploy costs less. The floor sits above the heaviest
-    /// measured recycle so a started attempt has room to finish; one that still runs out of gas inside the self-call
-    /// is reported like any failed attempt and keeps the intake. The permissionless `deployPool`/`addLiquidity`
-    /// retries are NOT bound by this floor.
-    uint256 internal constant _AUTOMATION_ATTEMPT_MIN_GAS = 1_500_000;
+    /// @notice The gas an inline automation attempt starts with and may use: the minimum below which
+    /// `processSplitWith` skips automation, and the cap it forwards, so a failing attempt never costs the caller more.
+    /// @dev A cold full two-position recycle through real Core (two fee collections with fee-project payments, the fee
+    /// adds and burns with their credit claim, the surplus read, two position burns, corridor math, oracle reads, and
+    /// two mints) measured ~1.28M gas with one terminal, ~1.37M with four, ~1.43M with six, and ~1.49M with eight; the
+    /// surplus read adds ~30k per terminal, so the budget covers about 20 terminals. A first deploy costs less. An
+    /// attempt that still runs out of gas inside the self-call is reported like any failed attempt and keeps the
+    /// intake. Capping the attempt keeps the caller's own work after the split (the terminal's remaining payout
+    /// recipients, the controller's remaining reserved splits) safe: a caller that supplies this budget plus the
+    /// reserve plus its own needs always finishes. The permissionless `deployPool`/`addLiquidity` retries are NOT bound
+    /// by this budget.
+    uint256 internal constant _AUTOMATION_GAS_BUDGET = 2_000_000;
 
     /// @notice The gas reserved for `processSplitWith` to finish (emit the failure event and return to the
     /// Controller) after an inline automation attempt, successful or not.
-    /// @dev The attempt is a self-call given `gasleft() - _AUTOMATION_GAS_RESERVE`, and EIP-150 keeps another 1/64
-    /// back on top. Even an attempt that burns its whole budget (an out-of-gas revert) therefore leaves this frame
-    /// enough to log `LiquidityAutomationFailed` and return, so the Controller's distribution never fails because of
-    /// the attempt.
+    /// @dev The attempt starts only with at least `_AUTOMATION_GAS_BUDGET + _AUTOMATION_GAS_RESERVE` left and is given
+    /// at most the budget, so even an attempt that burns its whole budget (an out-of-gas revert) leaves this frame the
+    /// reserve to log `LiquidityAutomationFailed` and return.
     uint256 internal constant _AUTOMATION_GAS_RESERVE = 64_000;
 
     /// @notice The slippage floor, out of `BPS`, applied to a burned position's contract-derived principal read.
@@ -884,13 +890,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         // Skip when the remaining gas cannot cover a meaningful attempt plus the reserve this frame needs to finish
         // and return to the Controller. The permissionless retries are not bound by this floor.
-        if (gasleft() < _AUTOMATION_ATTEMPT_MIN_GAS + _AUTOMATION_GAS_RESERVE) return;
+        if (gasleft() < _AUTOMATION_GAS_BUDGET + _AUTOMATION_GAS_RESERVE) return;
 
         // The external self-call is the rollback boundary: a revert inside the attempt rolls back the attempt's
         // state changes while this frame's accepted inventory stays intact. Only the error selector is captured, so
         // a revert-data bomb downstream cannot blow up this frame's memory.
         (bool success, bytes4 reasonSelector) = _boundedSelfCall({
-            data: abi.encodeCall(this.executeAutomationFor, (projectId)), gasLimit: gasleft() - _AUTOMATION_GAS_RESERVE
+            data: abi.encodeCall(this.executeAutomationFor, (projectId)), gasLimit: _AUTOMATION_GAS_BUDGET
         });
 
         if (!success) {
@@ -1178,6 +1184,16 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint256 postTermBal = _getTerminalTokenBalance(terminalToken);
         uint256 projConsumed = projBalBefore > postProjBal ? projBalBefore - postProjBal : 0;
         uint256 termConsumed = termBalBefore > postTermBal ? termBalBefore - postTermBal : 0;
+
+        // The mints cap each settle at the offered amount, so losing more than that means the token charged the sender
+        // on top of the transfer. That extra would come out of another project's balance on a shared clone: revert.
+        if (projConsumed > intendedProjectAmount) {
+            revert JBUniswapV4LPSplitHook_TransferNotExact({token: projectToken, amount: intendedProjectAmount});
+        }
+        if (termConsumed > intendedTerminalAmount) {
+            revert JBUniswapV4LPSplitHook_TransferNotExact({token: terminalToken, amount: intendedTerminalAmount});
+        }
+
         uint256 projLeftover = intendedProjectAmount > projConsumed ? intendedProjectAmount - projConsumed : 0;
         uint256 termLeftover = intendedTerminalAmount > termConsumed ? intendedTerminalAmount - termConsumed : 0;
 
@@ -1231,7 +1247,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         // Emit the claim after bookkeeping so the event only survives if the downstream transfer does too.
         emit FeeTokensClaimed({projectId: projectId, beneficiary: beneficiary, amount: tokenAmount, caller: msg.sender});
+        // A token that charges the sender on top of the transfer would take the extra from balances backing other
+        // claims or ledgers on this clone: measure the debit and revert, restoring the claim.
+        uint256 balanceBefore = IERC20(feeProjectToken).balanceOf(address(this));
         IERC20(feeProjectToken).safeTransfer({to: beneficiary, value: tokenAmount});
+        if (balanceBefore - IERC20(feeProjectToken).balanceOf(address(this)) > tokenAmount) {
+            revert JBUniswapV4LPSplitHook_TransferNotExact({token: feeProjectToken, amount: tokenAmount});
+        }
     }
 
     /// @notice Converts every credit this hook holds for a project, except the fee-credit claims it owes, into the
@@ -1244,7 +1266,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// rest of the frame.
     /// @param projectId The Juicebox project whose credits are being normalized.
     /// @param controller The project's controller.
-    /// @return creditCount The number of credits claimed into ERC-20 project tokens.
+    /// @return creditCount The ERC-20 project tokens this hook received for its claimed credits.
     function _claimHookCreditsFor(uint256 projectId, address controller) internal returns (uint256 creditCount) {
         uint256 held = IJBTokens(TOKENS).creditBalanceOf({holder: address(this), projectId: projectId});
         uint256 owed = _totalOutstandingFeeCreditClaims[projectId];
@@ -1253,13 +1275,15 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         accumulatedProjectCredits[projectId] = 0;
         if (creditCount == 0) return 0;
 
-        // The hook is the holder, so no external permission is needed for this claim.
+        // The hook is the holder, so no external permission is needed for this claim. The controller is the
+        // project's own and could deliver the ERC-20 elsewhere, so the ledger takes only what this hook received.
+        IERC20 projectToken = IERC20(_tokenOf(projectId));
+        uint256 balanceBefore = projectToken.balanceOf(address(this));
         IJBController(controller)
             .claimTokensFor({
             holder: address(this), projectId: projectId, tokenCount: creditCount, beneficiary: address(this)
         });
-
-        return creditCount;
+        return projectToken.balanceOf(address(this)) - balanceBefore;
     }
 
     /// @notice Clear both Permit2's internal spender allowance and the ERC-20 allowance granted to Permit2.
@@ -2106,6 +2130,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // fully consumed (a leftover allowance is live spend authority and reverts — caught upstream as a forgive).
         bool isNative = _isNativeToken(token);
         uint256 value = isNative ? amount : 0;
+        uint256 balanceBefore = _getTerminalTokenBalance(token);
         if (!isNative) IERC20(token).forceApprove({spender: terminal, value: amount});
 
         if (shouldPay) {
@@ -2125,6 +2150,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
 
         if (!isNative) _requireTemporaryAllowanceConsumed({token: token, spender: terminal});
+
+        // A token that charges the sender on top of the transfer would debit more than `amount` and underback the
+        // other ledgers; revert so the caller's catch keeps the whole amount ledgered instead.
+        uint256 balanceAfter = _getTerminalTokenBalance(token);
+        if (balanceBefore > balanceAfter && balanceBefore - balanceAfter > amount) {
+            revert JBUniswapV4LPSplitHook_TransferNotExact({token: token, amount: amount});
+        }
     }
 
     /// @notice Sort two token addresses into the canonical Uniswap V4 ordering (lower address = token0).

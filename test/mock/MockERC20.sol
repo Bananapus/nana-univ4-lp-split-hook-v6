@@ -42,7 +42,7 @@ contract MockERC20 is IERC20, IERC20Metadata {
         return _allowances[owner][spender];
     }
 
-    function transfer(address to, uint256 amount) external override returns (bool) {
+    function transfer(address to, uint256 amount) public virtual override returns (bool) {
         _balances[msg.sender] -= amount;
         _balances[to] += amount;
         emit Transfer(msg.sender, to, amount);
@@ -55,7 +55,7 @@ contract MockERC20 is IERC20, IERC20Metadata {
         return true;
     }
 
-    function transferFrom(address from, address to, uint256 amount) external override returns (bool) {
+    function transferFrom(address from, address to, uint256 amount) public virtual override returns (bool) {
         if (_allowances[from][msg.sender] != type(uint256).max) {
             _allowances[from][msg.sender] -= amount;
         }

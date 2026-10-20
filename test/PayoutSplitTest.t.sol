@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {IJBSplitHook} from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
+import {IJBSplits} from "@bananapus/core-v6/src/interfaces/IJBSplits.sol";
 import {IJBTerminalStore} from "@bananapus/core-v6/src/interfaces/IJBTerminalStore.sol";
 import {JBPayoutSplitGroupLib} from "@bananapus/core-v6/src/libraries/JBPayoutSplitGroupLib.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
@@ -53,6 +54,63 @@ contract LibPayoutTerminal is MockJBMultiTerminal {
             netPayoutAmount: amount,
             store: IJBTerminalStore(address(PAYOUT_STORE))
         });
+    }
+}
+
+/// @notice A terminal that distributes a whole payout split group the way `JBMultiTerminal` does: Core's
+/// `JBPayoutSplitGroupLib.sendPayoutsToSplitGroupOf` loop, calling back into `executePayout` per split. Hook splits go
+/// through Core's partial-pull path; every other split is an ERC-20 transfer to its beneficiary.
+contract PayoutLoopTerminal is LibPayoutTerminal {
+    JBSplit[] internal _splits;
+
+    function setSplits(JBSplit[] memory splits) external {
+        delete _splits;
+        for (uint256 i; i < splits.length; i++) {
+            _splits.push(splits[i]);
+        }
+    }
+
+    function splitsOf(uint256, uint256, uint256) external view returns (JBSplit[] memory) {
+        return _splits;
+    }
+
+    function distribute(uint256 projectId, address token, uint256 amount) external returns (uint256 leftover) {
+        (leftover,) = JBPayoutSplitGroupLib.sendPayoutsToSplitGroupOf({
+            splits: IJBSplits(address(this)),
+            store: IJBTerminalStore(address(PAYOUT_STORE)),
+            projectId: projectId,
+            token: token,
+            rulesetId: 0,
+            amount: amount,
+            caller: msg.sender
+        });
+    }
+
+    function executePayout(
+        JBSplit calldata split,
+        uint256 projectId,
+        address token,
+        uint256 amount,
+        address
+    )
+        external
+        returns (uint256 netPayoutAmount, uint256 feeEligibleAmount)
+    {
+        require(msg.sender == address(this), "ONLY_SELF");
+        if (address(split.hook) != address(0)) {
+            (netPayoutAmount,) = JBPayoutSplitGroupLib.invokeSplitHookWithPartial({
+                split: split,
+                projectId: projectId,
+                token: token,
+                amount: amount,
+                netPayoutAmount: amount,
+                store: IJBTerminalStore(address(PAYOUT_STORE))
+            });
+        } else {
+            require(MockERC20(token).transfer(split.beneficiary, amount), "TRANSFER_FAILED");
+            netPayoutAmount = amount;
+        }
+        feeEligibleAmount = 0;
     }
 }
 
@@ -195,6 +253,69 @@ contract PayoutSplitTest is SingleProjectHarness {
         assertEq(_termBalanceOf(address(hook)), PAYOUT, "and held");
         assertEq(hook.askTokenIdOf(PID, term), askBefore, "the failed attempt rolled back");
         assertEq(hook.bidTokenIdOf(PID, term), 0, "no bid");
+    }
+
+    // ─── Automation budget: an attempt never takes more than its budget from the payout loop
+    // ─────────────────────────────────────────────────────
+
+    /// @dev Mirrors the hook's `_AUTOMATION_GAS_BUDGET`.
+    uint256 internal constant AUTOMATION_GAS_BUDGET = 2_000_000;
+
+    /// @notice An attempt whose dependency burns every unit of gas it is given costs the caller at most the budget,
+    /// however much gas the caller supplied: the payout is still taken and ledgered.
+    function test_Payout_AutomationGasIsCapped() public {
+        _deployed(false, false);
+        baseOracleHook.setBurnGas(true);
+
+        vm.expectEmit(true, false, false, false, address(hook));
+        emit IJBUniswapV4LPSplitHook.LiquidityAutomationFailed({
+            projectId: PID, reasonSelector: bytes4(0), caller: address(payer)
+        });
+        uint256 gasBefore = gasleft();
+        uint256 sent = payer.sendPayout{gas: 10_000_000}(_split(), PID, term, PAYOUT);
+        uint256 gasUsed = gasBefore - gasleft();
+
+        assertEq(sent, PAYOUT, "the payout was taken");
+        assertEq(hook.accumulatedTerminalTokens(PID, term), PAYOUT, "and stays ledgered");
+        assertLt(gasUsed, AUTOMATION_GAS_BUDGET + INTAKE_ONLY_GAS, "the attempt used at most its budget");
+    }
+
+    /// @notice Core's payout loop with the hook first and 20 ordinary recipients after it, where the hook's attempt
+    /// exhausts its budget: with the budget plus the loop's own needs, every later recipient is still paid.
+    function test_Payout_AutomationBudget_LaterRecipientsPaid() public {
+        _wire(false, false, new MockJBMultiTerminal());
+        PayoutLoopTerminal loop = new PayoutLoopTerminal();
+        _addDirectoryTerminal(PID, address(loop));
+        MockERC20(term).mint(address(loop), 100e18);
+
+        uint256 count = 21;
+        uint32 percent = JBConstants.SPLITS_TOTAL_PERCENT / 21;
+        JBSplit[] memory splits = new JBSplit[](count);
+        splits[0] = _split();
+        splits[0].percent = percent;
+        for (uint256 i = 1; i < count; i++) {
+            splits[i] = JBSplit({
+                percent: percent,
+                projectId: 0,
+                beneficiary: payable(vm.addr(0xB0B0000 + i)),
+                preferAddToBalance: false,
+                lockedUntil: 0,
+                hook: IJBSplitHook(address(0))
+            });
+        }
+        loop.setSplits(splits);
+        baseOracleHook.setBurnGas(true);
+
+        vm.expectEmit(true, false, false, false, address(hook));
+        emit IJBUniswapV4LPSplitHook.LiquidityAutomationFailed({
+            projectId: PID, reasonSelector: bytes4(0), caller: address(loop)
+        });
+        loop.distribute{gas: 3_500_000}(PID, term, 21e18);
+
+        assertGt(hook.accumulatedTerminalTokens(PID, term), 0, "the hook's payout was taken and ledgered");
+        for (uint256 i = 1; i < count; i++) {
+            assertGt(MockERC20(term).balanceOf(splits[i].beneficiary), 0, "every later recipient is paid");
+        }
     }
 
     // ─── Rejections: each reverts and Core refunds the whole payout to the project's balance

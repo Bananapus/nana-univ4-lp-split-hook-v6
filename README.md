@@ -19,7 +19,7 @@
 The hook has a two-stage lifecycle:
 
 - before pool deployment, it accumulates reserved project tokens
-- after deployment, every reserved-token distribution recycles the project's positions inline (best-effort, gas permitting), and anyone can run the same recycle through `addLiquidity` at any time; fee collection is also permissionless
+- after deployment, every reserved-token distribution recycles the project's positions inline (best-effort, within a fixed 2,000,000-gas budget that is both the minimum to start and the most the attempt can take, so a distribution that supplies the budget plus its other splits' gas always finishes), and anyone can run the same recycle through `addLiquidity` at any time; fee collection is also permissionless
 - after deployment, the hook also accepts payout splits in the pool's terminal token from the project's terminals; each payout funds the bid and triggers the same best-effort inline recycle
 
 Each project holds at most two positions on its pool:
@@ -67,7 +67,7 @@ It does not own the project's issuance logic itself.
 - the normal reserved-token path requires a deployed project ERC-20; if the hook also holds internal project credits, deploy/add liquidity claims them into that ERC-20 before minting so accounting remains tied to transferable tokens
 - the hook never cashes out: the bid is funded only from this project's terminal-token ledger, which holds the terminal tokens recovered by burning its own positions, its own mint leftovers, its own payout splits, and its own LP-fee remainders whose add to the project's balance failed, never by redeeming project tokens against the terminal
 - a payout split must arrive under the token's group (`uint256(uint160(token))`) from a terminal of the project, after pool deployment, in the deployed pool's terminal token; any rejection reverts and Core returns the whole payout to the project's balance. Core charges its normal fee on payouts to split hooks unless the project is feeless
-- LP-fee collection takes a best-effort `feeProjectId` cut symmetrically on both the project-token and terminal-token sides (each paid to the fee project's primary terminal for that token when one exists, forgiven otherwise); the non-cut remainder accrues to the project and raises its cash-out floor: the terminal-token side is added to the project's balance in its primary terminal for that token (more surplus) and the project-token side is burned through the controller (less supply). A side whose add or burn fails stays in its ledger and becomes liquidity at the next recycle
+- LP-fee collection takes a best-effort `feeProjectId` cut symmetrically on both the project-token and terminal-token sides (each paid to the fee project's primary terminal for that token when one exists, forgiven otherwise); the non-cut remainder accrues to the project and raises its cash-out floor: the terminal-token side is added to the project's balance in its primary terminal for that token (more surplus) and the project-token side is burned through the controller (less supply). A side whose add or burn fails stays in its ledger and becomes liquidity at the next recycle; so does a side whose terminal token charges the hook more than it sent (`TransferNotExact`)
 - fee-project credits owed to claimants are reserved from that credit normalization, so a fee project cannot consume other projects' claimable fee credits as its own LP principal
 
 ## Where state lives

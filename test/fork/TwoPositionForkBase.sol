@@ -7,6 +7,7 @@ import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
 import {IJBRulesetApprovalHook} from "@bananapus/core-v6/src/interfaces/IJBRulesetApprovalHook.sol";
 import {IJBSplitHook} from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
+import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
 import {JBFundAccessLimitGroup} from "@bananapus/core-v6/src/structs/JBFundAccessLimitGroup.sol";
@@ -222,6 +223,28 @@ abstract contract TwoPositionForkBase is ForkDeployHelper {
         internal
         returns (uint256 id)
     {
+        IJBTerminal[] memory terminals = new IJBTerminal[](1);
+        terminals[0] = jbMultiTerminal;
+        return _launchProjectOn({
+            reservedPercent: reservedPercent,
+            weight: weight,
+            splitGroups: splitGroups,
+            fundAccessLimitGroups: fundAccessLimitGroups,
+            terminals: terminals
+        });
+    }
+
+    /// @notice `_launchProjectWith` on the given terminals, each accepting native ETH.
+    function _launchProjectOn(
+        uint16 reservedPercent,
+        uint112 weight,
+        JBSplitGroup[] memory splitGroups,
+        JBFundAccessLimitGroup[] memory fundAccessLimitGroups,
+        IJBTerminal[] memory terminals
+    )
+        internal
+        returns (uint256 id)
+    {
         JBRulesetConfig[] memory rulesetConfigs = new JBRulesetConfig[](1);
         rulesetConfigs[0].weight = weight;
         rulesetConfigs[0].approvalHook = IJBRulesetApprovalHook(address(0));
@@ -252,8 +275,10 @@ abstract contract TwoPositionForkBase is ForkDeployHelper {
         JBAccountingContext[] memory tokensToAccept = new JBAccountingContext[](1);
         // forge-lint: disable-next-line(unsafe-typecast)
         tokensToAccept[0] = JBAccountingContext({token: NATIVE, decimals: 18, currency: uint32(uint160(NATIVE))});
-        JBTerminalConfig[] memory terminalConfigs = new JBTerminalConfig[](1);
-        terminalConfigs[0] = JBTerminalConfig({terminal: jbMultiTerminal, accountingContextsToAccept: tokensToAccept});
+        JBTerminalConfig[] memory terminalConfigs = new JBTerminalConfig[](terminals.length);
+        for (uint256 i; i < terminals.length; i++) {
+            terminalConfigs[i] = JBTerminalConfig({terminal: terminals[i], accountingContextsToAccept: tokensToAccept});
+        }
         id = jbController.launchProjectFor({
             owner: multisig,
             projectUri: "",

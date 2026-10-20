@@ -319,7 +319,7 @@ contract LPSplitHookV4TestBase is Test {
     // ─── Accumulation & Deployment Helpers
 
     /// @notice Gas cap that covers intake but sits below the hook's inline-automation attempt floor
-    /// (`_AUTOMATION_ATTEMPT_MIN_GAS` + `_AUTOMATION_GAS_RESERVE`), so the accumulate helpers keep their
+    /// (`_AUTOMATION_GAS_BUDGET` + `_AUTOMATION_GAS_RESERVE`), so the accumulate helpers keep their
     /// accumulate-only semantics: intake completes and automation skips, exactly like a distribution that arrives
     /// without enough gas for inline automation. Tests that want inline automation call `processSplitWith` with full
     /// gas themselves (see DurableIntakeTest).

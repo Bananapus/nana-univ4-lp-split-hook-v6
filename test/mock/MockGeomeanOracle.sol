@@ -33,6 +33,13 @@ contract MockGeomeanOracle {
     bool public shouldRevert;
     IPoolManager public poolManager;
     bool public trackSpot;
+    /// @notice When set, `observe` burns every unit of gas it is given, modeling a dependency that exhausts the
+    /// caller's budget.
+    bool public burnGas;
+
+    function setBurnGas(bool value) external {
+        burnGas = value;
+    }
 
     function setTwapTick(int24 tick) external {
         twapTick = tick;
@@ -60,6 +67,9 @@ contract MockGeomeanOracle {
         returns (int56[] memory tickCumulatives, uint160[] memory secondsPerLiquidityCumulativeX128s)
     {
         if (shouldRevert) revert("MockGeomeanOracle: insufficient history");
+        if (burnGas) {
+            while (true) {}
+        }
 
         uint256 n = secondsAgos.length;
         tickCumulatives = new int56[](n);

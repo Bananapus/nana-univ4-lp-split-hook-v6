@@ -28,6 +28,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 
 import {LibClone} from "solady/src/utils/LibClone.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
+import {IJBUniswapV4LPSplitHook} from "../../src/interfaces/IJBUniswapV4LPSplitHook.sol";
 import {JBUniswapV4LPSplitHookMath} from "../../src/libraries/JBUniswapV4LPSplitHookMath.sol";
 import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
@@ -246,11 +247,78 @@ contract DurableIntakeCoreIntegration is ForkDeployHelper {
         vm.revertToState(snapshot);
     }
 
+    // ─── Automation budget
+    // ─────────────────────────────────────────────────
+
+    /// @notice The real reserved distribution with the hook first and 20 ordinary recipients after it, where the
+    /// hook's inline attempt exhausts its budget: with the budget plus the controller's own needs, the distribution
+    /// finishes, every later recipient is minted its share, and the hook keeps its accepted tokens.
+    function test_realCore_automationBudget_laterReservedRecipientsPaid() public {
+        uint256 count = 21;
+        uint32 percent = JBConstants.SPLITS_TOTAL_PERCENT / 21;
+        JBSplit[] memory splits = new JBSplit[](count);
+        splits[0] = _hookSplit(percent);
+        for (uint256 i = 1; i < count; i++) {
+            splits[i] = JBSplit({
+                percent: percent,
+                projectId: 0,
+                beneficiary: payable(vm.addr(0xB0B0000 + i)),
+                preferAddToBalance: false,
+                lockedUntil: 0,
+                hook: IJBSplitHook(address(0))
+            });
+        }
+        uint256 pid = _launchProjectWithSplits({reservedPercent: 5000, splits: splits});
+        vm.prank(multisig);
+        IJBToken token = jbController.deployERC20For(pid, "Project Token", "TOK", bytes32(0));
+        _payProject(pid, 10 ether);
+
+        // Pre-initialize the pool so the deploy attempt reads the TWAP, and make that read burn all its gas.
+        positionManager.initializePool(_poolKey(pid, address(token)), _midCorridorSqrtPrice(pid, address(token)));
+        oracle.setBurnGas(true);
+        _mintReserved(pid, 100e18);
+
+        vm.expectEmit(true, false, false, false, address(hook));
+        emit IJBUniswapV4LPSplitHook.LiquidityAutomationFailed({
+            projectId: pid, reasonSelector: bytes4(0), caller: address(jbController)
+        });
+        jbController.sendReservedTokensToSplitsOf{gas: 3_500_000}(pid);
+
+        assertEq(jbController.pendingReservedTokenBalanceOf(pid), 0, "the distribution finished");
+        assertFalse(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "the attempt failed");
+        assertGt(hook.accumulatedProjectTokens(pid), 0, "the hook keeps its accepted tokens");
+        for (uint256 i = 1; i < count; i++) {
+            assertGt(IERC20(address(token)).balanceOf(splits[i].beneficiary), 0, "every later recipient is paid");
+        }
+    }
+
     // ─── Helpers
     // ────────────────────────────────────────────────────────
 
     /// @notice Launch a project accepting native ETH, optionally routing 100% of its reserved group to the hook.
     function _launchProject(uint16 reservedPercent, bool withHookSplit) internal returns (uint256 id) {
+        JBSplit[] memory splits;
+        if (withHookSplit) {
+            splits = new JBSplit[](1);
+            splits[0] = _hookSplit(JBConstants.SPLITS_TOTAL_PERCENT);
+        }
+        id = _launchProjectWithSplits(reservedPercent, splits);
+    }
+
+    /// @notice A reserved split to the hook for `percent`.
+    function _hookSplit(uint32 percent) internal view returns (JBSplit memory) {
+        return JBSplit({
+            percent: percent,
+            projectId: 0,
+            beneficiary: payable(address(0)),
+            preferAddToBalance: false,
+            lockedUntil: 0,
+            hook: IJBSplitHook(address(hook))
+        });
+    }
+
+    /// @notice Launch a project accepting native ETH whose reserved group is `splits` (none when empty).
+    function _launchProjectWithSplits(uint16 reservedPercent, JBSplit[] memory splits) internal returns (uint256 id) {
         JBRulesetMetadata memory metadata = JBRulesetMetadata({
             reservedPercent: reservedPercent,
             cashOutTaxRate: 4000,
@@ -282,16 +350,7 @@ contract DurableIntakeCoreIntegration is ForkDeployHelper {
         rulesetConfigs[0].metadata = metadata;
         rulesetConfigs[0].fundAccessLimitGroups = new JBFundAccessLimitGroup[](0);
 
-        if (withHookSplit) {
-            JBSplit[] memory splits = new JBSplit[](1);
-            splits[0] = JBSplit({
-                percent: JBConstants.SPLITS_TOTAL_PERCENT,
-                projectId: 0,
-                beneficiary: payable(address(0)),
-                preferAddToBalance: false,
-                lockedUntil: 0,
-                hook: IJBSplitHook(address(hook))
-            });
+        if (splits.length != 0) {
             JBSplitGroup[] memory splitGroups = new JBSplitGroup[](1);
             splitGroups[0] = JBSplitGroup({groupId: 1, splits: splits});
             rulesetConfigs[0].splitGroups = splitGroups;

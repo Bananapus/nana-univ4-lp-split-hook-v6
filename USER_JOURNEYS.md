@@ -89,7 +89,7 @@ This repo takes reserved Juicebox token issuance and turns it into managed UniV4
 
 **Main Flow**
 
-1. Distribute reserved tokens. The hook accepts them, then attempts a recycle inline if at least 1,500,000 gas (plus a 64,000 reserve) remains.
+1. Distribute reserved tokens. The hook accepts them, then attempts a recycle inline if at least its 2,000,000-gas budget (plus a 64,000 reserve) remains. The attempt is given at most the budget, so a distribution that supplies the budget plus the gas for its other splits always finishes.
 2. The recycle collects and routes each position's fees, burns both, claims hook-held credits, recomputes the corridor, and re-mints the ask from every project token the hook holds for the project and the bid from every terminal token.
 3. Between recycles, buys convert the ask into terminal tokens and sells convert the bid into project tokens; the next recycle moves them back to the side they belong on.
 4. If the inline attempt was skipped or emitted `LiquidityAutomationFailed`, call `addLiquidity(projectId, terminalToken)` to run the same recycle.
@@ -120,7 +120,7 @@ This repo takes reserved Juicebox token issuance and turns it into managed UniV4
 **Main Flow**
 
 1. Send payouts (`sendPayoutsOf`). The terminal calls `processSplitWith` with the net payout: native ETH as value, an ERC-20 as an allowance the hook pulls.
-2. The hook credits the received amount to `accumulatedTerminalTokens`, emits `PayoutAccepted`, then attempts a recycle inline at any size if at least 1,500,000 gas (plus a 64,000 reserve) remains.
+2. The hook credits the received amount to `accumulatedTerminalTokens`, emits `PayoutAccepted`, then attempts a recycle inline at any size if at least its 2,000,000-gas budget (plus a 64,000 reserve) remains. The attempt is given at most the budget, so the terminal's later payout recipients are still paid when the caller supplies the budget plus their gas.
 3. If the inline attempt was skipped or failed, call `addLiquidity(projectId, terminalToken)`.
 
 **Failure Modes**
