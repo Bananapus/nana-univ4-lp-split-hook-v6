@@ -8,9 +8,10 @@ import {CustomRevert} from "@uniswap/v4-core/src/libraries/CustomRevert.sol";
 import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {DeltaResolver} from "@uniswap/v4-periphery/src/base/DeltaResolver.sol";
+import {ActionConstants} from "@uniswap/v4-periphery/src/libraries/ActionConstants.sol";
 import {Actions} from "@uniswap/v4-periphery/src/libraries/Actions.sol";
 
 import {MockERC20} from "./mock/MockERC20.sol";
@@ -18,14 +19,24 @@ import {MockPoolManager} from "./mock/MockPoolManager.sol";
 import {MockPositionManager} from "./mock/MockPositionManager.sol";
 import {MockPermit2} from "./TestBaseV4.sol";
 
-/// @notice An ERC-20 that keeps `taxBps` of every `transferFrom` and returns nothing from `transfer` (USDT-style).
+/// @notice An ERC-20 that keeps `taxBps` of every transfer, returns nothing from `transfer` (USDT-style), and returns
+/// `true`, `false` (after moving the tokens) or nothing from `transferFrom`, per `transferFromReturn`.
 contract QuirkToken {
+    uint8 internal constant RETURN_TRUE = 0;
+    uint8 internal constant RETURN_FALSE = 1;
+    uint8 internal constant RETURN_NOTHING = 2;
+
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
     uint256 public taxBps;
+    uint8 public transferFromReturn;
 
     function setTaxBps(uint256 bps) external {
         taxBps = bps;
+    }
+
+    function setTransferFromReturn(uint8 mode) external {
+        transferFromReturn = mode;
     }
 
     function mint(address to, uint256 amount) external {
@@ -39,14 +50,19 @@ contract QuirkToken {
 
     function transfer(address to, uint256 amount) external {
         balanceOf[msg.sender] -= amount;
-        balanceOf[to] += amount;
+        balanceOf[to] += amount - amount * taxBps / 10_000;
     }
 
     function transferFrom(address from, address to, uint256 amount) external returns (bool) {
         allowance[from][msg.sender] -= amount;
         balanceOf[from] -= amount;
         balanceOf[to] += amount - amount * taxBps / 10_000;
-        return true;
+        if (transferFromReturn == RETURN_NOTHING) {
+            assembly ("memory-safe") {
+                return(0, 0)
+            }
+        }
+        return transferFromReturn == RETURN_TRUE;
     }
 }
 
@@ -316,7 +332,15 @@ contract MockPositionManagerConformanceTest is Test {
         vm.revertToState(snapshot);
 
         vm.mockCall(address(tokenA), abi.encodeWithSelector(MockERC20.transfer.selector), abi.encode(false));
-        vm.expectPartialRevert(CustomRevert.WrappedError.selector);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CustomRevert.WrappedError.selector,
+                address(tokenA),
+                MockERC20.transfer.selector,
+                abi.encode(false),
+                abi.encodePacked(CurrencyLibrary.ERC20TransferFailed.selector)
+            )
+        );
         _burnThen(
             tokenId,
             bytes1(uint8(Actions.TAKE_PAIR)),
@@ -356,6 +380,83 @@ contract MockPositionManagerConformanceTest is Test {
             bytes1(uint8(Actions.CLOSE_CURRENCY)),
             abi.encode(key.currency1)
         );
+    }
+
+    /// @notice A pool-hook take on a collect-only decrease (V4 dispatches `afterRemoveLiquidity` for it too) leaves a
+    /// negative fee-excluded delta that `validateMinOut` rejects with `SafeCastOverflow`, even though the collected
+    /// fees would cover it. With collect-only takes off (the default) the same collect pays the fees in full.
+    function test_CollectOnlyTake_IsSignedAndValidated() public {
+        PoolKey memory key = _pool(address(new MockERC20("B", "B", 18)));
+        _fundOther(key);
+        _settlePair(key);
+        uint256 tokenId = positionManager.lastMintTokenId();
+        MockERC20(Currency.unwrap(key.currency0)).mint(address(positionManager), 10);
+        positionManager.setCollectableFees(tokenId, 10, 0);
+        positionManager.setHookTakeOnRemove(tokenId, 1, 0);
+
+        bytes memory actions =
+            abi.encodePacked(bytes1(uint8(Actions.DECREASE_LIQUIDITY)), bytes1(uint8(Actions.TAKE_PAIR)));
+        bytes[] memory params = new bytes[](2);
+        params[0] = abi.encode(tokenId, uint256(0), uint128(0), uint128(0), bytes(""));
+        params[1] = abi.encode(key.currency0, key.currency1, recipient);
+        bytes memory unlockData = abi.encode(actions, params);
+
+        uint256 snapshot = vm.snapshotState();
+        positionManager.modifyLiquidities(unlockData, block.timestamp);
+        assertEq(_balance(key.currency0, recipient), 10, "default: the collect pays every fee");
+        vm.revertToState(snapshot);
+
+        positionManager.setHookTakesOnCollect(true);
+        vm.expectRevert(SafeCast.SafeCastOverflow.selector);
+        positionManager.modifyLiquidities(unlockData, block.timestamp);
+    }
+
+    /// @notice Permit2 pulls with safe-transfer semantics: a `transferFrom` that moves the tokens but returns `false`
+    /// reverts `TRANSFER_FROM_FAILED`, while one that returns nothing settles the exact cost.
+    function test_Permit2Pull_TransferFromReturnHandling() public {
+        PoolKey memory key = _pool(address(quirk));
+        uint256 cost = address(quirk) < address(tokenA) ? _amount(true) : _amount1(true);
+
+        quirk.setTransferFromReturn(1);
+        vm.expectRevert(bytes("TRANSFER_FROM_FAILED"));
+        _settlePair(key);
+
+        quirk.setTransferFromReturn(2);
+        uint256 before = quirk.balanceOf(address(this));
+        _settlePair(key);
+        assertEq(before - quirk.balanceOf(address(this)), cost, "empty return pays the cost");
+        assertEq(positionManager.poolLocked(address(quirk)), cost, "empty return settles the cost");
+    }
+
+    /// @notice A self-payer SETTLE pays from the PositionManager's own balance with a measured transfer, as V4's
+    /// `_pay` does: a token that keeps a transfer tax leaves debt and the batch reverts, while an untaxed one settles
+    /// the exact cost from the loose balance and nothing from the caller.
+    function test_SelfPayerSettle_CreditsMeasuredTransfer() public {
+        PoolKey memory key = _pool(address(quirk));
+        quirk.mint(address(positionManager), 10e18);
+        Currency quirkCurrency = Currency.wrap(address(quirk));
+        Currency other = key.currency0 == quirkCurrency ? key.currency1 : key.currency0;
+        uint256 cost = address(quirk) < address(tokenA) ? _amount(true) : _amount1(true);
+        bytes memory selfSettle = abi.encode(quirkCurrency, ActionConstants.OPEN_DELTA, false);
+
+        quirk.setTaxBps(100);
+        vm.expectRevert(IPoolManager.CurrencyNotSettled.selector);
+        _mintThen(
+            key, bytes1(uint8(Actions.SETTLE)), selfSettle, bytes1(uint8(Actions.CLOSE_CURRENCY)), abi.encode(other)
+        );
+
+        quirk.setTaxBps(0);
+        uint256 callerBefore = quirk.balanceOf(address(this));
+        _mintThen(
+            key, bytes1(uint8(Actions.SETTLE)), selfSettle, bytes1(uint8(Actions.CLOSE_CURRENCY)), abi.encode(other)
+        );
+        assertEq(positionManager.poolLocked(address(quirk)), cost, "the reserves hold the cost");
+        assertEq(
+            quirk.balanceOf(address(positionManager)) - positionManager.poolLocked(address(quirk)),
+            10e18 - cost,
+            "paid from the loose balance"
+        );
+        assertEq(quirk.balanceOf(address(this)), callerBefore, "nothing pulled from the caller");
     }
 
     /// @notice Fund and approve the pool's other (non-`tokenA`) plain ERC-20.

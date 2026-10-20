@@ -4,7 +4,8 @@ pragma solidity 0.8.28;
 import {Test} from "forge-std/Test.sol";
 import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/IJBBuybackHookRegistry.sol";
 
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {ERC20} from "solmate/src/tokens/ERC20.sol";
+import {SafeTransferLib} from "solmate/src/utils/SafeTransferLib.sol";
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
 import {JBSplit} from "@bananapus/core-v6/src/structs/JBSplit.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
@@ -54,11 +55,11 @@ contract MockPermit2 {
         expirations[msg.sender][token][spender] = expiration;
     }
 
+    /// @dev Like `AllowanceTransfer._transfer`, pulls with solmate's `safeTransferFrom`: a `false` return reverts
+    /// `TRANSFER_FROM_FAILED` and an empty return is accepted.
     function transferFrom(address from, address to, uint160 amount, address token) external {
         allowances[from][token][msg.sender] -= amount;
-        // Test mock: return value not checked intentionally.
-        // forge-lint: disable-next-line(erc20-unchecked-transfer)
-        IERC20(token).transferFrom(from, to, amount);
+        SafeTransferLib.safeTransferFrom(ERC20(token), from, to, amount);
     }
 }
 

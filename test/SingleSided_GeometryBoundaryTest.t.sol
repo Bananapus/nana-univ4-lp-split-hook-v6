@@ -1058,6 +1058,11 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         _runCeilingBelowPayer(false);
     }
 
+    function test_Corridor_CeilingAtOrBelowPayerPrice_Native() public {
+        nativeTerminal = true;
+        _runCeilingBelowPayer(false);
+    }
+
     /// @notice Under a cash-out tax the 1-token preview truncates twice, so the floor bound is the preview plus two. A
     /// 21% tax, a supply of 1000e18 and a surplus of 5900 wei preview 3 per token, yet burning 0.7e18 tokens returns 3
     /// (about 4.29 per token), above a bound of 4. The floor encodes 5 (tick -398,4xx, rounded inward to -398,200).
@@ -1132,6 +1137,11 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
     }
 
     function test_Corridor_RoundedZeroIssuanceIsBounded_ProjectToken1() public {
+        _runRoundedZeroIssuance(false);
+    }
+
+    function test_Corridor_RoundedZeroIssuanceIsBounded_Native() public {
+        nativeTerminal = true;
         _runRoundedZeroIssuance(false);
     }
 

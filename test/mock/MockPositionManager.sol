@@ -30,11 +30,14 @@ import {MockPoolManager} from "./MockPoolManager.sol";
 ///      - BURN_POSITION / DECREASE_LIQUIDITY remove principal from the same math rounded down, owner-only. A pool
 ///        hook's take is subtracted from the signed principal delta, and `validateMinOut` semantics apply to it (fees
 ///        excluded): a negative principal delta reverts `SafeCastOverflow`, one below a minimum reverts
-///        `MinimumAmountInsufficient`.
+///        `MinimumAmountInsufficient`. By default the synthetic hook charges only removals that move liquidity;
+///        `setHookTakesOnCollect` makes it charge collect-only decreases too, as a V4 hook may.
 ///      - Each batch tracks a delta per currency: SETTLE / SETTLE_PAIR pay debt (honoring amount and payer, crediting
 ///        what a user payer's transfer actually delivered), TAKE_PAIR takes credit, CLOSE_CURRENCY does whichever
-///        applies, and the batch reverts with `CurrencyNotSettled` unless every delta ends at zero. Outgoing transfers
-///        use v4's `CurrencyLibrary.transfer` (a false or failed ERC-20 transfer reverts). Unsupported actions revert
+///        applies, and the batch reverts with `CurrencyNotSettled` unless every delta ends at zero. A self-payer
+///        ERC-20 settle pays with a measured `CurrencyLibrary.transfer` from this contract's loose balance. Outgoing
+/// transfers use v4's `CurrencyLibrary.transfer` (a false or failed ERC-20 transfer reverts). Unsupported actions
+/// revert
 ///        with `UnsupportedAction`.
 ///      - The pool's reserves (`poolLocked`) are kept apart from this contract's own loose balance, which is all SWEEP
 ///        ever moves (the whole loose balance of the currency, native or ERC-20).
@@ -69,6 +72,9 @@ contract MockPositionManager {
     // Part of the removed principal a pool hook keeps on each removal (a V4 `afterRemoveLiquidity` return delta).
     mapping(uint256 tokenId => uint256 amount0) public hookTakeOnRemove0;
     mapping(uint256 tokenId => uint256 amount1) public hookTakeOnRemove1;
+
+    // Whether the synthetic pool hook also takes from collect-only (zero-liquidity) decreases.
+    bool public hookTakesOnCollect;
 
     // Initialized pools
     mapping(bytes32 poolId => bool) public poolInitialized;
@@ -137,6 +143,13 @@ contract MockPositionManager {
     function setHookTakeOnRemove(uint256 tokenId, uint256 amount0, uint256 amount1) external {
         hookTakeOnRemove0[tokenId] = amount0;
         hookTakeOnRemove1[tokenId] = amount1;
+    }
+
+    /// @notice Test helper: make the synthetic pool hook also charge its take on collect-only decreases. V4 dispatches
+    /// `afterRemoveLiquidity` for a zero-liquidity decrease too, so a positive take there leaves a negative
+    /// fee-excluded delta, which `validateMinOut` rejects even when the collected fees would cover it.
+    function setHookTakesOnCollect(bool takes) external {
+        hookTakesOnCollect = takes;
     }
 
     /// @notice Test helper: liquidity other LPs already hold at `tick`, which counts against V4's per-tick cap.
@@ -371,10 +384,10 @@ contract MockPositionManager {
         pos.liquidity -= liquidity;
         _shrinkTicks(pos, liquidity);
 
-        // The synthetic pool hook takes only from removals that move liquidity (a fee-only collect returns its own
-        // signed delta of zero principal).
+        // By default the synthetic pool hook takes only from removals that move liquidity (a fee-only collect then
+        // returns a zero principal delta); `hookTakesOnCollect` charges collect-only decreases as well.
         (uint256 take0, uint256 take1) =
-            liquidity == 0 ? (0, 0) : (hookTakeOnRemove0[tokenId], hookTakeOnRemove1[tokenId]);
+            liquidity == 0 && !hookTakesOnCollect ? (0, 0) : (hookTakeOnRemove0[tokenId], hookTakeOnRemove1[tokenId]);
         // Principal and takes are token amounts far below 2^255.
         // forge-lint: disable-next-line(unsafe-typecast)
         int256 out0 = int256(principal0) - int256(take0);
@@ -490,15 +503,23 @@ contract MockPositionManager {
         return uint256(delta);
     }
 
-    /// @dev Pays `amount` into the pool's reserves: native and payer-is-this-contract come out of the loose balance
-    /// (as V4 pays them from the PositionManager's own balance); a user payer is pulled through Permit2. Like
-    /// `PoolManager.settle`, the credit is what the reserves actually received, so a short transfer leaves debt.
+    /// @dev Pays `amount` into the pool's reserves. Like `PoolManager.settle`, the credit is what the reserves actually
+    /// received, so a short transfer leaves debt. Native comes out of the loose balance (V4 forwards it as
+    /// `msg.value`). A self payer pays an ERC-20 from the loose balance with `CurrencyLibrary.transfer`, as V4's
+    /// `PositionManager._pay` does to the PoolManager; the pool's reserves share this address, so the transfer is to
+    /// self and the reserves are credited the amount less what the transfer cost this contract (a token that treats
+    /// self-transfers specially would diverge). A user payer is pulled through Permit2.
     function _settle(Currency currency, address payer, uint256 amount) internal {
         if (amount == 0) return;
         address token = Currency.unwrap(currency);
         uint256 received = amount;
-        if (currency.isAddressZero() || payer == address(this)) {
+        if (currency.isAddressZero()) {
             require(_looseBalance(currency) >= amount, "settle: insufficient balance");
+        } else if (payer == address(this)) {
+            require(_looseBalance(currency) >= amount, "settle: insufficient balance");
+            uint256 balanceBefore = currency.balanceOfSelf();
+            currency.transfer(address(this), amount);
+            received = amount - (balanceBefore - currency.balanceOfSelf());
         } else {
             uint256 balanceBefore = currency.balanceOfSelf();
             PERMIT2.transferFrom(payer, address(this), _toUint160(amount), token);
