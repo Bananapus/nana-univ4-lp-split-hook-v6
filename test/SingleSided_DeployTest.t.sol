@@ -23,7 +23,7 @@ contract SingleSided_DeployTest is LPSplitHookV4TestBase {
         // Realistic corridor: a real bonding-curve floor via the mock store's taxed-curve model (nonzero
         // cashOutTaxRate), so `getCashOutRate` returns an actual floor rather than falling back to a degenerate
         // band.
-        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
+        _setWideTaxedCurve(PROJECT_ID);
 
         // Compute the project's economic corridor via the same math helper `deployPool` uses internally, so the
         // pre-initialized spot below is guaranteed to land strictly between the floor and the ceiling.
@@ -67,19 +67,27 @@ contract SingleSided_DeployTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
 
         // (a) A position was minted.
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         assertNotEq(tokenId, 0, "tokenIdOf should be nonzero after deployPool");
 
         // (b) The minted position holds ZERO terminal tokens (asks-only) and the full accumulated project-token
         // side — proving the mint really is single-sided, not just "some cash-out happened to round to zero".
+        // The project-token side is the full accumulated amount but V4 rounding, which stays ledgered.
+        _assertPlacedExactly({
+            projectId: PROJECT_ID,
+            projectTokenAddr: address(projectToken),
+            terminalTokenAddr: address(terminalToken),
+            projectIn: 0.5e18,
+            terminalIn: 0
+        });
         (,,,, uint256 amount0Locked, uint256 amount1Locked,) = positionManager._positions(tokenId);
         bool terminalIsToken0 = address(terminalToken) < address(projectToken);
         if (terminalIsToken0) {
             assertEq(amount0Locked, 0, "terminal-token side must be zero (asks-only)");
-            assertEq(amount1Locked, 0.5e18, "project-token side should equal the full accumulated amount");
+            assertGt(amount1Locked, 0, "project-token side holds the accumulation");
         } else {
             assertEq(amount1Locked, 0, "terminal-token side must be zero (asks-only)");
-            assertEq(amount0Locked, 0.5e18, "project-token side should equal the full accumulated amount");
+            assertGt(amount0Locked, 0, "project-token side holds the accumulation");
         }
 
         // (c) The hook never cashed out to fund the deploy.
@@ -88,8 +96,12 @@ contract SingleSided_DeployTest is LPSplitHookV4TestBase {
         // (d) The store's surplus is left untouched (no reclaim ran against the bonding curve).
         assertEq(store.surplusPerToken(PROJECT_ID), surplusBefore, "surplus must be unchanged by a single-sided deploy");
 
-        // The ledger is fully cleared: the mock PositionManager consumes 100% of the offered amount by default, so
-        // there is no leftover to carry forward.
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "no leftover expected at 100% PositionManager usage");
+        // (e) Only V4 rounding is carried forward in the ledger (checked by `_assertPlacedExactly` above), and the hook
+        // holds exactly that ledger.
+        assertEq(
+            projectToken.balanceOf(address(hook)),
+            hook.accumulatedProjectTokens(PROJECT_ID),
+            "the hook holds exactly its ledger"
+        );
     }
 }

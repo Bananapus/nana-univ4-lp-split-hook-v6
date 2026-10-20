@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
+import {LPSplitHookV4TestBase, DEFAULT_SURPLUS_PER_TOKEN} from "./TestBaseV4.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 
-/// @notice `deployPool` is fully permissionless — the weight-decay owner gate has been removed. `initialWeightOf` is
-/// still snapshotted on first accumulation (retained as an informational per-project value), but it no longer gates
-/// anything: any caller can seed the pool at any weight. The economic spot-below-ceiling gate (covered by
-/// `SingleSided_PermissionlessGateTest`) is the only remaining gate.
+/// @notice `deployPool` is fully permissionless: no weight-decay or owner gate applies. `initialWeightOf` is an
+/// informational per-project snapshot, recorded lazily on the first successful deploy/add processing attempt (intake
+/// never reads rulesets), and it gates nothing: any caller can seed the pool at any weight. The economic
+/// spot-below-ceiling gate (covered by `SingleSided_PermissionlessGateTest`) is the only gate.
 contract WeightDecayDeployTest is LPSplitHookV4TestBase {
     address internal randomUser;
 
@@ -16,23 +16,37 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
         randomUser = makeAddr("randomUser");
     }
 
-    // ─── initialWeightOf snapshot (still recorded)
+    // ─── initialWeightOf snapshot (recorded lazily)
     // ──────────────────────────────────────────────
 
-    /// @notice initialWeightOf is recorded on the first processSplitWith accumulation.
-    function test_initialWeightOf_recordedOnFirstAccumulation() public {
+    /// @notice initialWeightOf is not read during intake (intake must not touch rulesets); it is recorded on the
+    /// first successful deploy/add processing attempt.
+    function test_initialWeightOf_recordedOnFirstProcessingAttempt() public {
+        // No snapshot exists before any activity.
         assertEq(hook.initialWeightOf(PROJECT_ID), 0, "should be 0 before any accumulation");
-        _accumulateTokens(PROJECT_ID, 100e18);
-        assertEq(hook.initialWeightOf(PROJECT_ID), DEFAULT_WEIGHT, "should record initial weight");
+
+        // Intake alone leaves the snapshot unset because it never reads rulesets.
+        _accumulateTokens({projectId: PROJECT_ID, amount: 100e18});
+        assertEq(hook.initialWeightOf(PROJECT_ID), 0, "intake should NOT read rulesets");
+
+        // The first deploy reads the ruleset and records its weight.
+        vm.prank(owner);
+        hook.deployPool(PROJECT_ID);
+        assertEq(hook.initialWeightOf(PROJECT_ID), DEFAULT_WEIGHT, "should record weight on first processing");
     }
 
-    /// @notice initialWeightOf is NOT overwritten on subsequent accumulations.
-    function test_initialWeightOf_notOverwrittenOnSubsequentAccumulations() public {
-        _accumulateTokens(PROJECT_ID, 100e18);
+    /// @notice initialWeightOf is NOT overwritten by later processing attempts.
+    function test_initialWeightOf_notOverwrittenOnSubsequentProcessing() public {
+        // The first deploy records the default weight.
+        _accumulateTokens({projectId: PROJECT_ID, amount: 100e18});
+        vm.prank(owner);
+        hook.deployPool(PROJECT_ID);
         assertEq(hook.initialWeightOf(PROJECT_ID), DEFAULT_WEIGHT);
 
-        controller.setWeight(PROJECT_ID, DEFAULT_WEIGHT / 2);
-        _accumulateTokens(PROJECT_ID, 50e18);
+        // Halve the weight, then process again through addLiquidity: the first snapshot must survive.
+        controller.setWeight({projectId: PROJECT_ID, weight: DEFAULT_WEIGHT / 2});
+        _accumulateTokens({projectId: PROJECT_ID, amount: 50e18});
+        hook.addLiquidity({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         assertEq(hook.initialWeightOf(PROJECT_ID), DEFAULT_WEIGHT, "should NOT overwrite initial weight");
     }
 
@@ -46,7 +60,11 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
         vm.prank(randomUser);
         hook.deployPool(PROJECT_ID);
 
-        assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "random user seeds pool at any weight");
+        assertNotEq(
+            hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            0,
+            "random user seeds pool at any weight"
+        );
     }
 
     /// @notice A random caller can also deploy after the weight has decayed — the behavior is identical
@@ -59,7 +77,11 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
         vm.prank(randomUser);
         hook.deployPool(PROJECT_ID);
 
-        assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "random user seeds pool after decay too");
+        assertNotEq(
+            hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            0,
+            "random user seeds pool after decay too"
+        );
     }
 
     /// @notice A random caller can deploy even with no initialWeightOf snapshot (deploy without a prior accumulation is
@@ -82,7 +104,7 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
                 token: address(terminalToken), decimals: 18, currency: uint32(uint160(address(terminalToken)))
             })
         );
-        store.setSurplus(projectB, 0.5e18);
+        store.setSurplus({projectId: projectB, surplus: DEFAULT_SURPLUS_PER_TOKEN});
         store.setBalance(address(terminal), projectB, address(terminalToken), 10e18);
 
         _accumulateTokens(PROJECT_ID, 100e18);
@@ -91,11 +113,17 @@ contract WeightDecayDeployTest is LPSplitHookV4TestBase {
         // Seeding project A does not seed project B; each is independently, permissionlessly deployable.
         vm.prank(randomUser);
         hook.deployPool(PROJECT_ID);
-        assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "A seeded");
-        assertEq(hook.tokenIdOf(projectB, address(terminalToken)), 0, "B not seeded by A's deploy");
+        assertNotEq(hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}), 0, "A seeded");
+        assertEq(
+            hook.askTokenIdOf({projectId: projectB, terminalToken: address(terminalToken)}),
+            0,
+            "B not seeded by A's deploy"
+        );
 
         vm.prank(randomUser);
         hook.deployPool(projectB);
-        assertNotEq(hook.tokenIdOf(projectB, address(terminalToken)), 0, "B independently seeded");
+        assertNotEq(
+            hook.askTokenIdOf({projectId: projectB, terminalToken: address(terminalToken)}), 0, "B independently seeded"
+        );
     }
 }

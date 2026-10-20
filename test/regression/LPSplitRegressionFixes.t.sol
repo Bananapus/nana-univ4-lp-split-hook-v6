@@ -2,94 +2,20 @@
 pragma solidity 0.8.28;
 
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
-import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/IJBBuybackHookRegistry.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
-import {JBUniswapV4LPSplitHookMath} from "../../src/libraries/JBUniswapV4LPSplitHookMath.sol";
-import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
-import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
-import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
-import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
 import {JBSplit} from "@bananapus/core-v6/src/structs/JBSplit.sol";
 import {IJBSplitHook} from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
-import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
-import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
-import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
-import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
-import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
-import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
-/// @notice Harness that exposes _computeOptimalCashOutAmount for edge-case testing.
-contract OutOfRangeAmountHarness is JBUniswapV4LPSplitHook {
-    constructor(
-        address _directory,
-        IJBPermissions _permissions,
-        address _tokens,
-        IAllowanceTransfer _permit2
-    )
-        JBUniswapV4LPSplitHook(_directory, _permissions, _tokens, _permit2, IJBSuckerRegistry(address(0)))
-    {}
-
-    // forge-lint: disable-next-line(mixed-case-function)
-    function exposed_computeOptimalCashOutAmount(
-        uint256 projectId,
-        address terminalToken,
-        address _projectToken,
-        uint256 totalProjectTokens,
-        uint160 sqrtPriceInit,
-        int24 tickLower,
-        int24 tickUpper
-    )
-        external
-        view
-        returns (uint256)
-    {
-        address controller = address(IJBDirectory(DIRECTORY).controllerOf(projectId));
-        (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
-        return JBUniswapV4LPSplitHookMath.computeOptimalCashOutAmount(
-            IJBDirectory(DIRECTORY),
-            SUCKER_REGISTRY,
-            projectId,
-            terminalToken,
-            _projectToken,
-            totalProjectTokens,
-            0,
-            sqrtPriceInit,
-            tickLower,
-            tickUpper,
-            controller,
-            ruleset
-        );
-    }
-}
-
-/// @notice Tests out-of-range token ordering and credit-only split regressions.
+/// @notice Tests the credit-only split regression.
 contract LPSplitRegressionFixes is LPSplitHookV4TestBase {
-    OutOfRangeAmountHarness internal harness;
-
-    // A new project ID with no ERC-20 token set (for test).
+    // A project ID with no ERC-20 token set, so its splits take the credits path.
     uint256 constant NO_TOKEN_PROJECT_ID = 99;
 
     function setUp() public override {
         super.setUp();
 
-        // Deploy harness for tests.
-        harness = new OutOfRangeAmountHarness(
-            address(directory),
-            IJBPermissions(address(permissions)),
-            address(jbTokens),
-            IAllowanceTransfer(address(hook.PERMIT2()))
-        );
-        harness.initialize({
-            initialFeeProjectId: 0,
-            initialFeePercent: 0,
-            newPoolManager: IPoolManager(address(poolManager)),
-            newPositionManager: IPositionManager(address(positionManager)),
-            newOracleHook: IHooks(address(0)),
-            newBuybackHook: IJBBuybackHookRegistry(address(0))
-        });
-
-        // Set up project 99 with a controller but NO ERC-20 token (for ).
+        // Set up project 99 with a controller but NO ERC-20 token.
         _setDirectoryController(NO_TOKEN_PROJECT_ID, address(controller));
         controller.setWeight(NO_TOKEN_PROJECT_ID, DEFAULT_WEIGHT);
         controller.setFirstWeight(NO_TOKEN_PROJECT_ID, DEFAULT_WEIGHT);
@@ -98,88 +24,12 @@ contract LPSplitRegressionFixes is LPSplitHookV4TestBase {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Out-of-range token ordering — below range
+    // Credit-only splits — unbacked claims revert before any ledger write
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice When sqrtPriceInit <= sqrtPriceA (below range), only token0 has value.
-    ///         If the terminal IS token0, all project tokens should be cashed out.
-    ///         If the terminal is NOT token0, zero tokens should be cashed out.
-    function test_M40_fix_belowRange_correct_cashout() public view {
-        uint256 totalProjectTokens = 100e18;
-
-        // Use narrow tick range near the top so that a low sqrtPriceInit is below range.
-        int24 tickLower = 60;
-        int24 tickUpper = 120;
-        // sqrtPriceInit below the lower bound.
-        uint160 sqrtPriceA = TickMath.getSqrtPriceAtTick(tickLower);
-        uint160 sqrtPriceInit = sqrtPriceA - 1; // strictly below range
-
-        // Determine which ordering our test tokens have.
-        bool terminalIsToken0 = address(terminalToken) < address(projectToken);
-
-        uint256 result = harness.exposed_computeOptimalCashOutAmount(
-            PROJECT_ID,
-            address(terminalToken),
-            address(projectToken),
-            totalProjectTokens,
-            sqrtPriceInit,
-            tickLower,
-            tickUpper
-        );
-
-        if (terminalIsToken0) {
-            // Below range: only token0 has value. Terminal IS token0, so cash out everything.
-            assertEq(result, totalProjectTokens, "below range: terminalIsToken0 should return all tokens");
-        } else {
-            // Below range: only token0 has value. Terminal is NOT token0, so cash out nothing.
-            assertEq(result, 0, "below range: terminal is token1 should return 0");
-        }
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // Out-of-range token ordering — above range
-    // ═══════════════════════════════════════════════════════════════════════
-
-    /// @notice When sqrtPriceInit >= sqrtPriceB (above range), only token1 has value.
-    ///         If the terminal IS token0, zero tokens should be cashed out.
-    ///         If the terminal is NOT token0, all project tokens should be cashed out.
-    function test_M40_fix_aboveRange_correct_cashout() public view {
-        uint256 totalProjectTokens = 100e18;
-
-        // Use narrow tick range near the bottom so that a high sqrtPriceInit is above range.
-        int24 tickLower = -120;
-        int24 tickUpper = -60;
-        // sqrtPriceInit above the upper bound.
-        uint160 sqrtPriceB = TickMath.getSqrtPriceAtTick(tickUpper);
-        uint160 sqrtPriceInit = sqrtPriceB; // at or above range (>= triggers the branch)
-
-        bool terminalIsToken0 = address(terminalToken) < address(projectToken);
-
-        uint256 result = harness.exposed_computeOptimalCashOutAmount(
-            PROJECT_ID,
-            address(terminalToken),
-            address(projectToken),
-            totalProjectTokens,
-            sqrtPriceInit,
-            tickLower,
-            tickUpper
-        );
-
-        if (terminalIsToken0) {
-            // Above range: only token1 has value. Terminal is token0, so cash out nothing.
-            assertEq(result, 0, "above range: terminalIsToken0 should return 0");
-        } else {
-            // Above range: only token1 has value. Terminal IS token1, so cash out everything.
-            assertEq(result, totalProjectTokens, "above range: terminal is token1 should return all tokens");
-        }
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════
-    // Credit-only splits strand — revert before accumulation
-    // ═══════════════════════════════════════════════════════════════════════
-
-    /// @notice processSplitWith should revert with JBUniswapV4LPSplitHook_InvalidProjectId
-    ///         BEFORE updating accumulatedProjectTokens when the project has no ERC-20 token.
+    /// @notice For a project with no ERC-20 token, processSplitWith takes the credits path. When no credits were
+    ///         actually transferred to the hook (a lying controller), the backing check reverts with
+    ///         JBUniswapV4LPSplitHook_InsufficientBalance BEFORE any ledger write.
     function test_M41_fix_reverts_before_accumulate() public {
         // Verify the project has no ERC-20 token set.
         assertEq(address(jbTokens.tokenOf(NO_TOKEN_PROJECT_ID)), address(0), "precondition: no ERC-20 token");
@@ -204,12 +54,13 @@ contract LPSplitRegressionFixes is LPSplitHookV4TestBase {
             })
         });
 
-        // Call processSplitWith from the controller — should revert.
+        // Call processSplitWith from the controller — the unbacked credits claim must revert.
         vm.prank(address(controller));
-        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidProjectId.selector);
-        hook.processSplitWith(context);
+        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientBalance.selector);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
 
-        // Accumulator should still be zero (revert happened before _accumulateTokens).
+        // Neither ledger is written, because the revert happens before any accounting.
         assertEq(hook.accumulatedProjectTokens(NO_TOKEN_PROJECT_ID), 0, "accumulator must remain zero after revert");
+        assertEq(hook.accumulatedProjectCredits(NO_TOKEN_PROJECT_ID), 0, "credit ledger must remain zero after revert");
     }
 }

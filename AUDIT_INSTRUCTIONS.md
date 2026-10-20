@@ -1,6 +1,6 @@
 # Audit Instructions
 
-This repo turns reserved project tokens into a Uniswap V4 LP position. Audit it as a treasury-management hook with meaningful external-call, pricing, and lifecycle risk.
+This repo turns reserved project tokens into Uniswap V4 liquidity held as at most two single-sided positions per project (an ask and a bid). Audit it as a treasury-management hook with meaningful external-call, pricing, and lifecycle risk.
 
 ## Audit objective
 
@@ -9,9 +9,10 @@ There is a billion dollars of well-meaning projects' money in the Juicebox Money
 Suggestions of where to look:
 
 - misprice or misbound the LP position relative to Juicebox economics
-- let callers extract value during deployment, fee collection, rebalancing, or fee claiming
+- let callers extract value during deployment, a recycle, fee collection, or fee claiming
 - accumulate, route, add-as-liquidity, or claim the wrong project or terminal-token amounts
-- manipulate the pool price to make `addLiquidity` mint at a bad ratio, or route its funding cash-out through the AMM
+- time a recycle (reserved distribution and `addLiquidity` are permissionless) around a manipulated spot inside the TWAP band to re-center the ask and bid at a bad price, or make either position quote outside the corridor
+- make a recycle burn a position for less than its principal, or mint a position that is not single-sided
 - break clone initialization or redeploy safety
 - leave stale position or fee-accounting state that later calls trust incorrectly
 
@@ -39,16 +40,19 @@ Key integrations:
 Lifecycle:
 
 - before pool deployment, reserved project tokens accumulate in the hook
-- `deployPool(...)` creates or joins a V4 pool and mints one managed LP position
-- after deployment, later reserved tokens keep accumulating; `addLiquidity(...)` converts them into more liquidity (top-up or re-range), guarded by an oracle-TWAP deviation check and a force-direct bonding-curve cash-out. The hook never burns.
-- fees can be collected from the single active position, routed, and claimed through separate accounting paths
+- after deployment, payout splits from the project's terminals in the pool's terminal token fund the bid ledger and attempt the same inline recycle
+- `deployPool(...)` (or the inline attempt on a distribution) creates or joins a V4 pool and runs the first recycle, which mints the ask
+- every later recycle (inline on each reserved distribution, or permissionless `addLiquidity(...)` at any time) runs under a 30-minute spot-vs-TWAP guard (200 ticks): for each live position, collect and route fees, burn with a contract-derived slippage floor, credit recovered principal; claim credits; recompute the corridor; mint the ask from the whole project ledger on `[max(spotCeil, floor), ceiling]` (`spotCeil` = first aligned tick at or above the spot) and the bid from the whole terminal ledger on `[floor, min(spotFloor, ceiling)]` (in token0/token1 tick terms). If neither side mints the recycle reverts `NoDeployableLiquidityAtSpot`. The hook never cashes out and never burns reserved tokens.
+- fees can be collected from both positions, routed, and claimed through separate accounting paths; after the best-effort fee-project cut, the terminal-token remainder is added to the project's balance and the project-token remainder is burned (`sendToTerminal`, `burnFeeRemainder` self-calls), each falling back to its ledger when it reverts
 
 ## Roles and privileges
 
 | Role | Powers | How constrained |
 |------|--------|-----------------|
-| Project owner or delegate | Deploy pool, rebalance, and claim tracked fee value | Must hold `SET_BUYBACK_POOL` or meet the documented decay exception |
-| Permissionless caller | Deploy a fresh clone or trigger some fee collection paths | Must stay inside lifecycle and accounting bounds |
+| Project owner or delegate | Claim tracked fee value | Must hold `SET_BUYBACK_POOL` |
+| Permissionless caller | Deploy a fresh clone, deploy the pool, recycle (`addLiquidity`, reserved distribution, or payout distribution), collect fees | Spot-vs-TWAP guard, TWAP-anchored quotes, corridor caps, contract-derived burn floor |
+| Project controller | Deliver reserved-token splits (group 1) | `msg.sender` must be the project's controller |
+| Project terminal | Deliver payout splits | Must be a terminal of the project, under the token's group, after deployment, in the pool's terminal token |
 | Hook contract | Hold tokens, manage LP state, and route fees | Must preserve treasury value and claim segregation |
 
 ## Integration assumptions
@@ -57,33 +61,41 @@ Lifecycle:
 |------------|------------|----------------------|
 | `nana-core-v6` | Reserved-token issuance and cash-out economics match the hook's pricing model | LP bounds and cash-out math drift |
 | `univ4-router-v6` or selected oracle hook | Market-side assumptions stay coherent enough for pool behavior | Pool behavior and price reasoning drift |
-| Uniswap V4 managers | Position and liquidity operations behave as expected | Burn, mint, collect, or rebalance paths break |
+| Project terminal and controller | `addToBalanceOf` and `burnTokensOf` move exactly the fee remainder or revert | A remainder is lost or double counted |
+| Uniswap V4 managers | Position and liquidity operations behave as expected | Burn, mint, collect, or recycle paths break |
 
 ## Critical invariants
 
 1. One project path transitions from accumulation mode to deployed-LP mode exactly once.
-2. Tick bounds remain valid and inside the intended economic envelope.
+2. Tick bounds remain valid and inside the intended economic envelope: each rounds inward against its exact price, and a band with no aligned spacing between the cash-out value and the issuance price is an empty corridor, never a reopened band.
 3. Fee-token claims stay segregated from freely spendable or routable balances.
-4. Rebalance must not destroy tracked fee claims or silently mint value.
-5. Clone initialization must not allow configuration drift after deployment.
-6. `addLiquidity` never adds at a manipulated ratio: it reverts when spot deviates from the oracle TWAP beyond the bound (or the TWAP is unavailable), and cashes out only directly through the bonding curve, never through the AMM it feeds.
+4. A recycle must not destroy tracked fee claims or silently mint value.
+5. At most two positions exist per project and terminal token; the ask never sits below the cash-out floor and the bid never above the issuance ceiling; both are single-sided with the spot in the gap between them, and neither crosses the validated TWAP (the ask never sells below it, the bid never buys above it).
+6. Clone initialization must not allow configuration drift after deployment.
+7. A recycle never runs at a spot beyond the TWAP bound (it reverts when spot deviates from the oracle TWAP beyond 200 ticks, or the TWAP is unavailable), and the hook never cashes out.
 
 ## Attack surfaces
 
 - first pool deployment and outsider initialization
-- price-bound and optimal-cash-out math
-- remove-collect-recompute-mint rebalance flow
+- price-bound math and the ask/bid range geometry in `_recycle`
+- the collect, burn, recompute, mint recycle flow across two positions (`_recycle`, `_retirePosition`, `_mintSingleSided`)
+- best-effort inline automation (`_attemptAutomation`, `executeAutomationFor`) and its rollback boundary
 - fee-token and fee-credit bookkeeping
+- fee remainder routing (`_routeCollectedFees`, `sendToTerminal`, `burnFeeRemainder`) and its ledger fallback, including the credit-first burn order
+- payout intake (`_acceptPayout`): sender, group, stage, token, and value checks
 - clone initialization and project-path identity
 
 ## Accepted risks or behaviors
 
 - Some fee collection paths are intentionally permissionless.
-- Newly received reserved tokens are intentionally re-accumulated after deployment and later added as liquidity via `addLiquidity`. The hook never burns; supply-reducing burns are a protocol-layer split-routing decision (`{projectId:0, hook:0, beneficiary:0xdead}`).
-- `addLiquidity` is permissionless once the ruleset weight has decayed 10x; it can revert (TWAP unavailable / deviation) and is expected to be retried as the oracle warms up or the price settles.
+- Newly received reserved tokens are intentionally re-accumulated after deployment and later added as liquidity via `addLiquidity`. The hook never burns reserved tokens; supply-reducing burns of reserved tokens are a protocol-layer split-routing decision (`{projectId:0, hook:0, beneficiary:0xdead}`). Only collected project-token LP fees are burned.
+- Recycles are permissionless at any time, so a caller controls their timing, down to the block. Both quotes are anchored to the validated TWAP, so a manipulation inside the band only widens the gap between the positions; neither quote crosses the TWAP price, and the corridor caps bound both positions. `test_fork_twoPositionRecycle_bandEdgeCycling_notProfitable` runs the gap-walk attack (dust-cross a boundary, recycle, cross the empty gap free, trade only at the band edges) on real Uniswap V4 and requires it to lose.
+- Credits sent to the hook from outside are claimed into the ask ledger before a fee burn and at every recycle; only fee-credit claims the hook owes (a fee project with pre-tokenization claims) keep that project's fee burns in the ledger fallback (no loss; the remainder becomes ask liquidity).
+- A recycle can revert (TWAP unavailable or deviated, nothing deployable at spot) and is expected to be retried; the inline attempt reports failures with `LiquidityAutomationFailed` and never reverts intake.
 
 ## Verification
 
 - `npm install`
 - `forge build`
 - `forge test`
+- the real-swap two-position lifecycle: `forge test --match-path test/fork/Integration_SingleSidedRevnet.t.sol`

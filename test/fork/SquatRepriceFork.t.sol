@@ -381,7 +381,8 @@ contract SquatRepriceFork is ForkDeployHelper {
         vm.prank(multisig);
         hook.deployPool(pid);
         assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "pool should deploy after reprice");
-        uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+        // Read the ask position that the deploy minted.
+        uint256 tokenId = hook.askTokenIdOf({projectId: pid, terminalToken: JBConstants.NATIVE_TOKEN});
         assertTrue(tokenId != 0, "no LP position NFT after reprice + deploy");
         uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         emit log_named_uint("deployed LP position liquidity", posLiq);
@@ -516,7 +517,8 @@ contract SquatRepriceFork is ForkDeployHelper {
         });
         vm.startPrank(address(jbController));
         IERC20(tokenAddr).approve(address(hook), amount);
-        hook.processSplitWith(context);
+        // Cap the gas so the split is only taken in and the hook skips its inline automation.
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
     }
 

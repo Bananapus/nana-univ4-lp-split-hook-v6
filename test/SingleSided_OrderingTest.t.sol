@@ -12,14 +12,45 @@ import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingCo
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {JBLPSplitHookHelpers} from "../src/libraries/JBLPSplitHookHelpers.sol";
 
-/// @notice The adaptive seed must produce a valid two-sided position in BOTH Uniswap currency orderings: project =
-/// token0 (a fresh ERC-20 pair where the project token sorts lower) and native ETH as the terminal (address(0) =
-/// token0, so project = token1). Each case asserts nonzero liquidity, asks anchored to the issuance ceiling with the
-/// full project balance, and a bid leg on the correct single side of spot.
+/// @notice A recycle must place a project-only ask and a terminal-only bid on the correct sides of spot in BOTH Uniswap
+/// currency orderings: project = token0 (a fresh ERC-20 pair where the project token sorts lower) and native ETH as the
+/// terminal (address(0) = token0, so project = token1). Each case asserts the exact ask/bid ranges against the spot and
+/// the (moved) corridor, the full project balance in the ask, and the full recovered terminal in the bid (each at its
+/// exact V4 cost, any rounding remainder ledgered).
 contract SingleSided_OrderingTest is LPSplitHookV4TestBase {
+    using PoolIdLibrary for PoolKey;
+
     uint256 internal constant PID = 7;
     address internal constant NATIVE = JBConstants.NATIVE_TOKEN;
+
+    /// @notice Buyers fill part of `tokenId`, moving the spot into it: returns the new spot tick and the project and
+    /// terminal the burn will recover.
+    /// @param tokenId The position to fill.
+    /// @param proj The project token, used to map token0/token1 onto the project and terminal sides.
+    /// @return spotTick The pool's spot tick after the fill.
+    /// @return recoveredProject The project-token principal the position holds after the fill.
+    /// @return recoveredTerminal The terminal-token principal the position holds after the fill.
+    function _fill(
+        uint256 tokenId,
+        address proj
+    )
+        internal
+        returns (int24 spotTick, uint256 recoveredProject, uint256 recoveredTerminal)
+    {
+        // Move the spot to the range's midpoint and re-mark the position's reserves to it.
+        (uint256 amount0, uint256 amount1) = _fillHalfOf(tokenId);
+        // Read the moved spot from the position's own pool.
+        (PoolKey memory key,,,,,,) = positionManager._positions(tokenId);
+        (, spotTick,,) = StateLibrary.getSlot0(IPoolManager(address(poolManager)), key.toId());
+        // Map token0/token1 onto the project and terminal sides by the pool's currency order.
+        (recoveredProject, recoveredTerminal) =
+            Currency.unwrap(key.currency0) == proj ? (amount0, amount1) : (amount1, amount0);
+    }
 
     /// @notice Wire a fresh project (id `PID`) whose ERC-20 project token sorts BELOW the ERC-20 terminal token, so the
     /// project is Uniswap currency0 — the mirror of the default harness ordering.
@@ -50,14 +81,29 @@ contract SingleSided_OrderingTest is LPSplitHookV4TestBase {
             PID, JBAccountingContext({token: address(term), decimals: 18, currency: uint32(uint160(address(term)))})
         );
         jbTokens.setToken(PID, address(proj));
-        store.setTaxedCashOutCurve({projectId: PID, surplus: 100e18, supply: 2e18, taxRate: 4000});
+        _setWideTaxedCurve(PID);
         store.setBalance(address(terminal), PID, address(term), 10e18);
         _addDirectoryTerminal(PID, address(terminal));
     }
 
-    function test_ProjectIsToken0_AdaptiveTwoSided() public {
+    /// @notice Assert a position's exact range.
+    /// @param tokenId The position to check.
+    /// @param tickLower The expected lower tick.
+    /// @param tickUpper The expected upper tick.
+    function _assertPosition(uint256 tokenId, int24 tickLower, int24 tickUpper) internal view {
+        // A live position holds liquidity on exactly the expected range.
+        (, int24 lower, int24 upper, uint128 liquidity,,,) = positionManager._positions(tokenId);
+        assertGt(liquidity, 0, "liquidity must be nonzero");
+        assertEq(lower, tickLower, "tickLower");
+        assertEq(upper, tickUpper, "tickUpper");
+    }
+
+    /// @notice With project = token0, a recycle after a partial fill places the ask above spot up to the moved
+    /// ceiling and the bid from the moved floor up to spot, each holding exactly its inventory.
+    function test_ProjectIsToken0_RecycleAskAboveBidBelow() public {
         (MockERC20 proj, MockERC20 term) = _wireProjectToken0();
 
+        // Compute the corridor with the same math and inputs the hook uses.
         (JBRuleset memory ruleset,) = controller.currentRulesetOf(PID);
         (int24 corridorLower, int24 corridorUpper) = JBUniswapV4LPSplitHookMath.calculateTickBounds({
             directory: IJBDirectory(address(directory)),
@@ -79,38 +125,44 @@ contract SingleSided_OrderingTest is LPSplitHookV4TestBase {
             tickSpacing: hook.TICK_SPACING(),
             hooks: hook.oracleHook()
         });
-        positionManager.initializePool(key, TickMath.getSqrtPriceAtTick(spotTick));
+        positionManager.initializePool({key: key, sqrtPriceX96: TickMath.getSqrtPriceAtTick(spotTick)});
 
-        // Deploy the project ask capital (asks-only — no hook-held terminal is ever paired after the cross-project
-        // fix), then inject bid capital INTO the position (as buyers filling asks would) so the rebalance burn recovers
-        // it as the two-sided bid.
-        proj.mint(address(controller), 1e18);
+        // Deploy the project ask capital (asks-only: no hook-held terminal is ever paired into a deploy), then let
+        // buyers fill part of it (moving the spot into it) so the recycle burn recovers bid capital. The controller is
+        // funded for both splits up front.
+        proj.mint({to: address(controller), amount: 2e18});
         vm.prank(address(controller));
-        proj.approve(address(hook), 1e18);
+        proj.approve({spender: address(hook), amount: 2e18});
+        // Cap gas below the inline-automation floor so the split only records intake.
         vm.prank(address(controller));
-        hook.processSplitWith(_buildContext(PID, address(proj), 1e18, 1));
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(
+            _buildContext({projectId: PID, token: address(proj), amount: 1e18, groupId: 1})
+        );
 
         vm.prank(owner);
         hook.deployPool(PID);
 
-        uint256 tokenId = hook.tokenIdOf(PID, address(term));
-        term.mint(address(positionManager), 0.05e18);
-        positionManager.injectPositionBalance(tokenId, address(term), 0.05e18);
-        proj.mint(address(positionManager), 1000e18);
-        term.mint(address(positionManager), 1000e18);
+        // Fill the ask and track the moved spot the recycle prices against.
+        (int24 filledSpot, uint256 recoveredProject, uint256 recoveredTerminal) =
+            _fill({tokenId: hook.askTokenIdOf({projectId: PID, terminalToken: address(term)}), proj: address(proj)});
+        spotTick = filledSpot;
 
-        // Move the corridor (drop issuance) so the rebalance clears its drift guard; this shifts the issuance ceiling
-        // but leaves the cash-out floor and spot, so the recovered-terminal bid leg is exercised.
-        controller.setWeight(PID, (DEFAULT_WEIGHT * 9) / 10);
-        vm.prank(owner);
-        hook.rebalanceLiquidity(PID, address(term));
+        // Move the corridor (drop the weight) so the recycle must re-derive it; the spot stays.
+        controller.setWeight({projectId: PID, weight: (DEFAULT_WEIGHT * 9) / 10});
+        // Accumulate the second split with intake-only gas so the recycle runs only when triggered below.
+        vm.prank(address(controller));
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(
+            _buildContext({projectId: PID, token: address(proj), amount: 1e18, groupId: 1})
+        );
+        // The re-minted ask may place the recovered project principal plus the whole project ledger.
+        uint256 projectIn = recoveredProject + hook.accumulatedProjectTokens(PID);
+        // Any account may trigger the recycle.
+        vm.prank(user);
+        hook.addLiquidity({projectId: PID, terminalToken: address(term)});
 
-        tokenId = hook.tokenIdOf(PID, address(term));
-        assertGt(positionManager.getPositionLiquidity(tokenId), 0, "liquidity must be nonzero");
-
-        // Re-derive the ceiling after the corridor move.
+        // Re-derive the corridor after the weight change, as the recycle did.
         (JBRuleset memory movedRuleset,) = controller.currentRulesetOf(PID);
-        (, int24 movedCorridorUpper) = JBUniswapV4LPSplitHookMath.calculateTickBounds({
+        (int24 movedLower, int24 movedUpper) = JBUniswapV4LPSplitHookMath.calculateTickBounds({
             directory: IJBDirectory(address(directory)),
             suckerRegistry: IJBSuckerRegistry(address(0)),
             projectId: PID,
@@ -119,30 +171,51 @@ contract SingleSided_OrderingTest is LPSplitHookV4TestBase {
             controller: address(controller),
             ruleset: movedRuleset
         });
+        // Align the spot down to the tick spacing, matching how the hook bounds positions around spot.
+        int24 spotFloor = JBLPSplitHookHelpers.alignTickToSpacing({tick: spotTick, spacing: hook.TICK_SPACING()});
+        // The spot sits exactly on `spotTick`, so token0 starts at it when aligned, else one spacing up.
+        int24 spotCeil = spotTick == spotFloor ? spotFloor : spotFloor + hook.TICK_SPACING();
+        assertGt(spotFloor + hook.TICK_SPACING(), movedLower, "precondition: spot sits above the floor");
+        assertLt(spotFloor, movedUpper, "precondition: spot sits below the ceiling");
 
-        int24 activeLower = hook.activeTickLowerOf(PID, address(term));
-        int24 activeUpper = hook.activeTickUpperOf(PID, address(term));
-        assertEq(activeUpper, movedCorridorUpper, "project=token0: asks anchor at the corridor ceiling (upper tick)");
-        assertGt(activeLower, corridorLower - 1, "the bid bound must not dip below the corridor floor");
-        assertLt(activeLower, spotTick, "the bid bound (lower tick) must sit below spot: a real bid leg");
-
-        (,,,, uint256 amount0Locked, uint256 amount1Locked,) = positionManager._positions(tokenId);
-        assertEq(amount0Locked, 1e18, "project (token0) asks must be fully deployed");
-        assertGt(amount1Locked, 0, "terminal (token1) must seed a nonzero bid");
+        // project = token0: the ask (token0) rests above spot up to the ceiling, the bid (token1) from the floor to
+        // spot.
+        _assertPosition({
+            tokenId: hook.askTokenIdOf({projectId: PID, terminalToken: address(term)}),
+            tickLower: spotCeil,
+            tickUpper: movedUpper
+        });
+        _assertPosition({
+            tokenId: hook.bidTokenIdOf({projectId: PID, terminalToken: address(term)}),
+            tickLower: movedLower,
+            tickUpper: spotFloor
+        });
+        // Each position holds exactly its inventory at its V4 cost.
+        _assertPlacedExactly(PID, address(proj), address(term), projectIn, recoveredTerminal);
+        assertTrue(movedLower != corridorLower || movedUpper != corridorUpper, "the recycle used the moved corridor");
     }
 
-    function test_NativeEthTerminal_AdaptiveTwoSided() public {
+    /// @notice With native ETH as the terminal (project = token1), a recycle after a partial fill places the ask from
+    /// the moved ceiling up to spot and the bid above spot up to the moved floor, each holding exactly its inventory.
+    function test_NativeEthTerminal_RecycleAskBelowBidAbove() public {
         // Wire the base PROJECT_ID against native ETH as the terminal token (address(0) = token0, project = token1).
-        _setDirectoryTerminal(PROJECT_ID, NATIVE, address(terminal));
-        terminal.setAccountingContext(PROJECT_ID, NATIVE, uint32(uint160(NATIVE)), 18);
-        terminal.addAccountingContext(
-            PROJECT_ID, JBAccountingContext({token: NATIVE, decimals: 18, currency: uint32(uint160(NATIVE))})
-        );
-        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
-        store.setBalance(address(terminal), PROJECT_ID, NATIVE, 10e18);
+        _setDirectoryTerminal({projectId: PROJECT_ID, token: NATIVE, term: address(terminal)});
+        terminal.setAccountingContext({
+            projectId: PROJECT_ID, token: NATIVE, currency: uint32(uint160(NATIVE)), decimals: 18
+        });
+        terminal.addAccountingContext({
+            projectId: PROJECT_ID,
+            ctx: JBAccountingContext({token: NATIVE, decimals: 18, currency: uint32(uint160(NATIVE))})
+        });
+        // Widen the cash-out curve so the corridor spans enough ticks for both positions.
+        _setWideTaxedCurve(PROJECT_ID);
+        store.setBalance({terminal: address(terminal), projectId: PROJECT_ID, token: NATIVE, balance: 10e18});
         // Zero the base ERC-20 terminal's balance so `findHighestValueTerminalTokenOf` auto-selects native ETH.
-        store.setBalance(address(terminal), PROJECT_ID, address(terminalToken), 0);
+        store.setBalance({
+            terminal: address(terminal), projectId: PROJECT_ID, token: address(terminalToken), balance: 0
+        });
 
+        // Compute the corridor with the same math and inputs the hook uses.
         (JBRuleset memory ruleset,) = controller.currentRulesetOf(PROJECT_ID);
         (int24 corridorLower, int24 corridorUpper) = JBUniswapV4LPSplitHookMath.calculateTickBounds({
             directory: IJBDirectory(address(directory)),
@@ -165,32 +238,34 @@ contract SingleSided_OrderingTest is LPSplitHookV4TestBase {
             tickSpacing: hook.TICK_SPACING(),
             hooks: hook.oracleHook()
         });
-        positionManager.initializePool(key, TickMath.getSqrtPriceAtTick(spotTick));
+        positionManager.initializePool({key: key, sqrtPriceX96: TickMath.getSqrtPriceAtTick(spotTick)});
 
-        // Deploy the project ask capital (asks-only), then inject native-ETH bid capital INTO the position so the
-        // rebalance burn recovers it as the two-sided bid.
-        _accumulateTokens(PROJECT_ID, 1e18);
+        // Deploy the project ask capital (asks-only), then let buyers fill part of it with native ETH (moving the
+        // spot into it) so the recycle burn recovers bid capital.
+        _accumulateTokens({projectId: PROJECT_ID, amount: 1e18});
 
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, NATIVE);
-        vm.deal(address(positionManager), address(positionManager).balance + 0.05 ether);
-        positionManager.injectPositionBalance(tokenId, address(0), 0.05 ether);
-        projectToken.mint(address(positionManager), 1000e18);
-        vm.deal(address(positionManager), address(positionManager).balance + 1000 ether);
+        // Fill the ask and track the moved spot the recycle prices against.
+        (int24 filledSpot, uint256 recoveredProject, uint256 recoveredTerminal) = _fill({
+            tokenId: hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: NATIVE}), proj: address(projectToken)
+        });
+        spotTick = filledSpot;
 
-        // Move the corridor (drop issuance) so the rebalance clears its drift guard.
-        controller.setWeight(PROJECT_ID, (DEFAULT_WEIGHT * 9) / 10);
-        vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, NATIVE);
+        // Move the corridor (drop the weight) so the recycle must re-derive it; the spot stays.
+        controller.setWeight({projectId: PROJECT_ID, weight: (DEFAULT_WEIGHT * 9) / 10});
+        // Accumulate fresh inventory so the recycle has something to add.
+        _accumulateTokens({projectId: PROJECT_ID, amount: 1e18});
+        // The re-minted ask may place the recovered project principal plus the whole project ledger.
+        uint256 projectIn = recoveredProject + hook.accumulatedProjectTokens(PROJECT_ID);
+        // Any account may trigger the recycle.
+        vm.prank(user);
+        hook.addLiquidity({projectId: PROJECT_ID, terminalToken: NATIVE});
 
-        tokenId = hook.tokenIdOf(PROJECT_ID, NATIVE);
-        assertGt(positionManager.getPositionLiquidity(tokenId), 0, "liquidity must be nonzero");
-
-        // Re-derive the ceiling after the corridor move (project=token1 → ceiling is the corridor LOWER tick).
+        // Re-derive the corridor after the weight change, as the recycle did.
         (JBRuleset memory movedRuleset,) = controller.currentRulesetOf(PROJECT_ID);
-        (int24 movedCorridorLower,) = JBUniswapV4LPSplitHookMath.calculateTickBounds({
+        (int24 movedLower, int24 movedUpper) = JBUniswapV4LPSplitHookMath.calculateTickBounds({
             directory: IJBDirectory(address(directory)),
             suckerRegistry: IJBSuckerRegistry(address(0)),
             projectId: PROJECT_ID,
@@ -199,15 +274,27 @@ contract SingleSided_OrderingTest is LPSplitHookV4TestBase {
             controller: address(controller),
             ruleset: movedRuleset
         });
+        // Align the spot down to the tick spacing, matching how the hook bounds positions around spot.
+        int24 spotFloor = JBLPSplitHookHelpers.alignTickToSpacing({tick: spotTick, spacing: hook.TICK_SPACING()});
+        // The spot sits exactly on `spotTick`, so token0 starts at it when aligned, else one spacing up.
+        int24 spotCeil = spotTick == spotFloor ? spotFloor : spotFloor + hook.TICK_SPACING();
+        assertGt(spotFloor, movedLower, "precondition: spot sits above the ceiling");
+        assertLt(spotFloor + hook.TICK_SPACING(), movedUpper, "precondition: spot sits below the floor");
 
-        int24 activeLower = hook.activeTickLowerOf(PROJECT_ID, NATIVE);
-        int24 activeUpper = hook.activeTickUpperOf(PROJECT_ID, NATIVE);
-        assertEq(activeLower, movedCorridorLower, "project=token1: asks anchor at the corridor ceiling (lower tick)");
-        assertLt(activeUpper, corridorUpper + 1, "the bid bound must not exceed the corridor floor");
-        assertGt(activeUpper, spotTick, "the bid bound (upper tick) must sit above spot: a real bid leg");
-
-        (,,,, uint256 amount0Locked, uint256 amount1Locked,) = positionManager._positions(tokenId);
-        assertEq(amount1Locked, 1e18, "project (token1) asks must be fully deployed");
-        assertGt(amount0Locked, 0, "native ETH (token0) must seed a nonzero bid");
+        // project = token1: the ask (token1) rests from the ceiling up to spot, the bid (native, token0) above spot up
+        // to the floor.
+        _assertPosition({
+            tokenId: hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: NATIVE}),
+            tickLower: movedLower,
+            tickUpper: spotFloor
+        });
+        _assertPosition({
+            tokenId: hook.bidTokenIdOf({projectId: PROJECT_ID, terminalToken: NATIVE}),
+            tickLower: spotCeil,
+            tickUpper: movedUpper
+        });
+        // Each position holds exactly its inventory at its V4 cost.
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), NATIVE, projectIn, recoveredTerminal);
+        assertTrue(movedLower != corridorLower || movedUpper != corridorUpper, "the recycle used the moved corridor");
     }
 }

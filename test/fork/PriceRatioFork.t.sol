@@ -28,6 +28,7 @@ import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionMa
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {PositionInfo, PositionInfoLibrary} from "@uniswap/v4-periphery/src/libraries/PositionInfoLibrary.sol";
 import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
@@ -123,6 +124,7 @@ contract PriceRatioSwapHelper is IUnlockCallback {
 contract PriceRatioFork is ForkDeployHelper {
     using StateLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;
+    using PositionInfoLibrary for PositionInfo;
     IPoolManager constant V4_POOL_MANAGER = IPoolManager(0x000000000004444c5dc75cB358380D2e3dE08A90);
     IPositionManager constant V4_POSITION_MANAGER = IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e);
     JBUniswapV4LPSplitHook hook;
@@ -171,14 +173,15 @@ contract PriceRatioFork is ForkDeployHelper {
         _accumulateTokens(pid, address(pToken), 100_000e18);
         vm.prank(multisig);
         hook.deployPool(pid);
-        uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+        // Read the ask position that the deploy minted.
+        uint256 tokenId = hook.askTokenIdOf({projectId: pid, terminalToken: JBConstants.NATIVE_TOKEN});
         uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         assertTrue(posLiq > 0, "Position should have liquidity");
         emit log_named_uint("  position liquidity", posLiq);
         PoolKey memory key = hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN);
         PriceRatioSwapHelper swapHelper = new PriceRatioSwapHelper(V4_POOL_MANAGER);
         bool projIsToken0 = Currency.unwrap(key.currency0) == address(pToken);
-        uint256 buyAmountIn = _crossingBuyAmount(hook, pid, posLiq);
+        uint256 buyAmountIn = _crossingBuyAmount({splitHook: hook, pid: pid, liquidity: posLiq});
         vm.deal(address(this), buyAmountIn + 1000 ether);
         uint256 projBefore = IERC20(address(pToken)).balanceOf(address(this));
         swapHelper.swap{value: projIsToken0 ? 0 : buyAmountIn}(key, !projIsToken0, -int256(buyAmountIn));
@@ -201,14 +204,15 @@ contract PriceRatioFork is ForkDeployHelper {
         _accumulateTokens(pid, address(pToken), 100_000e18);
         vm.prank(multisig);
         hook.deployPool(pid);
-        uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+        // Read the ask position that the deploy minted.
+        uint256 tokenId = hook.askTokenIdOf({projectId: pid, terminalToken: JBConstants.NATIVE_TOKEN});
         uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         assertTrue(posLiq > 0, "Position should have liquidity with 90% tax rate");
         emit log_named_uint("  position liquidity (90% tax)", posLiq);
         PoolKey memory key = hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN);
         PriceRatioSwapHelper swapHelper = new PriceRatioSwapHelper(V4_POOL_MANAGER);
         bool projIsToken0 = Currency.unwrap(key.currency0) == address(pToken);
-        uint256 buyAmountIn = _crossingBuyAmount(hook, pid, posLiq);
+        uint256 buyAmountIn = _crossingBuyAmount({splitHook: hook, pid: pid, liquidity: posLiq});
         vm.deal(address(this), buyAmountIn + 1000 ether);
         uint256 projBefore = IERC20(address(pToken)).balanceOf(address(this));
         swapHelper.swap{value: projIsToken0 ? 0 : buyAmountIn}(key, !projIsToken0, -int256(buyAmountIn));
@@ -228,14 +232,15 @@ contract PriceRatioFork is ForkDeployHelper {
         _accumulateTokens(pid, address(pToken), 100_000e18);
         vm.prank(multisig);
         hook.deployPool(pid);
-        uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+        // Read the ask position that the deploy minted.
+        uint256 tokenId = hook.askTokenIdOf({projectId: pid, terminalToken: JBConstants.NATIVE_TOKEN});
         uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         assertTrue(posLiq > 0, "Position should have liquidity with 10% tax rate");
         emit log_named_uint("  position liquidity (10% tax)", posLiq);
         PoolKey memory key = hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN);
         PriceRatioSwapHelper swapHelper = new PriceRatioSwapHelper(V4_POOL_MANAGER);
         bool projIsToken0 = Currency.unwrap(key.currency0) == address(pToken);
-        uint256 buyAmountIn = _crossingBuyAmount(hook, pid, posLiq);
+        uint256 buyAmountIn = _crossingBuyAmount({splitHook: hook, pid: pid, liquidity: posLiq});
         vm.deal(address(this), buyAmountIn + 1000 ether);
         uint256 projBefore = IERC20(address(pToken)).balanceOf(address(this));
         swapHelper.swap{value: projIsToken0 ? 0 : buyAmountIn}(key, !projIsToken0, -int256(buyAmountIn));
@@ -247,12 +252,16 @@ contract PriceRatioFork is ForkDeployHelper {
         assertTrue(address(this).balance > ethBefore, "Should receive ETH (10% tax rate)");
     }
 
-    /// @notice 90% of the ETH cost to fully cross the project's single-sided ask band, computed off its own seed
-    /// tick bounds/liquidity — big enough to leave real terminal-token principal behind, small enough not to send
-    /// spot to the tick-space extreme (there's no interposing liquidity beyond this one position to absorb an
+    /// @notice 90% of the ETH cost to fully cross the project's single-sided ask band, computed off the ask
+    /// position's tick bounds/liquidity — big enough to leave real terminal-token principal behind, small enough not
+    /// to send spot to the tick-space extreme (there's no interposing liquidity beyond this one position to absorb an
     /// oversized swap).
+    /// @param splitHook The LP split hook that owns the ask position.
+    /// @param pid The ID of the project whose ask band is crossed.
+    /// @param liquidity The ask position's liquidity.
+    /// @return buyAmountIn The native ETH amount to swap in, 90% of the full-crossing cost.
     function _crossingBuyAmount(
-        JBUniswapV4LPSplitHook hook_,
+        JBUniswapV4LPSplitHook splitHook,
         uint256 pid,
         uint128 liquidity
     )
@@ -260,14 +269,20 @@ contract PriceRatioFork is ForkDeployHelper {
         view
         returns (uint256 buyAmountIn)
     {
-        int24 tickLower = hook_.activeTickLowerOf(pid, JBConstants.NATIVE_TOKEN);
-        int24 tickUpper = hook_.activeTickUpperOf(pid, JBConstants.NATIVE_TOKEN);
+        // Read the ask position's live tick range from the PositionManager.
+        (, PositionInfo info) = V4_POSITION_MANAGER.getPoolAndPositionInfo(
+            splitHook.askTokenIdOf({projectId: pid, terminalToken: JBConstants.NATIVE_TOKEN})
+        );
+        int24 tickLower = info.tickLower();
+        int24 tickUpper = info.tickUpper();
+        // Price the ETH needed to push the spot across the whole band, rounded up as core does on a swap in.
         uint256 costToFullyCross = SqrtPriceMath.getAmount0Delta({
             sqrtPriceAX96: TickMath.getSqrtPriceAtTick(tickLower),
             sqrtPriceBX96: TickMath.getSqrtPriceAtTick(tickUpper),
             liquidity: liquidity,
             roundUp: true
         });
+        // Stop at 90% so the swap leaves terminal-token principal behind without reaching the band's far bound.
         buyAmountIn = (costToFullyCross * 90) / 100;
     }
 
@@ -339,7 +354,8 @@ contract PriceRatioFork is ForkDeployHelper {
         });
         vm.startPrank(address(jbController));
         IERC20(tokenAddr).approve(address(hook), amount);
-        hook.processSplitWith(context);
+        // Cap the gas so the split is only taken in and the hook skips its inline automation.
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
     }
 

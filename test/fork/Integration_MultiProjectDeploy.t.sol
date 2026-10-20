@@ -87,7 +87,8 @@ contract Integration_MultiProjectDeploy is ForkDeployHelper {
         assertLt(hook.accumulatedProjectTokens(pidA), 10_000e18, "A bulk consumed; only remainder carried");
         assertEq(hook.accumulatedProjectTokens(pidB), bAccBefore, "B accumulated unchanged after A deploy");
         assertEq(IERC20(address(pTokenB)).balanceOf(address(hook)), bBalBefore, "B balance unchanged after A deploy");
-        uint256 aTokenId = hook.tokenIdOf(pidA, JBConstants.NATIVE_TOKEN);
+        // Read the ask position that the deploy minted.
+        uint256 aTokenId = hook.askTokenIdOf({projectId: pidA, terminalToken: JBConstants.NATIVE_TOKEN});
         uint128 aLiqBefore = V4_POSITION_MANAGER.getPositionLiquidity(aTokenId);
         vm.prank(multisig);
         hook.deployPool(pidB);
@@ -96,7 +97,8 @@ contract Integration_MultiProjectDeploy is ForkDeployHelper {
         assertLt(hook.accumulatedProjectTokens(pidB), 8000e18, "B bulk consumed; only remainder carried");
         uint128 aLiqAfter = V4_POSITION_MANAGER.getPositionLiquidity(aTokenId);
         assertEq(aLiqAfter, aLiqBefore, "A liquidity unchanged after B deploy");
-        uint256 bTokenId = hook.tokenIdOf(pidB, JBConstants.NATIVE_TOKEN);
+        // Read the ask position that the deploy minted.
+        uint256 bTokenId = hook.askTokenIdOf({projectId: pidB, terminalToken: JBConstants.NATIVE_TOKEN});
         uint128 bLiq = V4_POSITION_MANAGER.getPositionLiquidity(bTokenId);
         assertTrue(aLiqAfter > 0, "A has liquidity");
         assertTrue(bLiq > 0, "B has liquidity");
@@ -179,7 +181,8 @@ contract Integration_MultiProjectDeploy is ForkDeployHelper {
         });
         vm.startPrank(address(jbController));
         IERC20(tokenAddr).approve(address(hook), amount);
-        hook.processSplitWith(context);
+        // Cap the gas so the split is only taken in and the hook skips its inline automation.
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
     }
 

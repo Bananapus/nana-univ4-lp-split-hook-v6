@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
+import {LPSplitHookV4TestBase, DEFAULT_SURPLUS_PER_TOKEN} from "./TestBaseV4.sol";
 import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 import {IJBUniswapV4LPSplitHook} from "../src/interfaces/IJBUniswapV4LPSplitHook.sol";
 import {JBUniswapV4LPSplitHookMath} from "../src/libraries/JBUniswapV4LPSplitHookMath.sol";
+import {JBLPSplitHookHelpers} from "../src/libraries/JBLPSplitHookHelpers.sol";
 import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
@@ -41,10 +42,10 @@ contract RevertingPayTerminal {
     receive() external payable {}
 }
 
-/// @notice Tests for the symmetric, best-effort fee-project cut and the terminal-token bid-leg ledger.
-/// @dev The cut is attempted on BOTH the terminal-token side and the project-token side; every non-cut fee token is
-/// routed into the originating project's protocol-owned liquidity (project → `accumulatedProjectTokens`,
-/// terminal → `accumulatedTerminalTokens`). The mint never reads the hook's raw balance for sizing.
+/// @notice Tests for the symmetric, best-effort fee-project cut and where the remainder goes.
+/// @dev The cut is attempted on BOTH the terminal-token side and the project-token side; every non-cut fee token
+/// accrues to the originating project (terminal → `addToBalanceOf` its primary terminal, project → burned), falling
+/// back to that side's ledger only when the route fails. The mint never reads the hook's raw balance for sizing.
 contract FeeSymmetricTest is LPSplitHookV4TestBase {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
@@ -66,7 +67,7 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
 
     function _deployA() internal returns (uint256 tokenId) {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
-        tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
     }
 
     function _corridorA() internal view returns (int24 floorTick, int24 ceilingTick) {
@@ -101,7 +102,7 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
     /// live spot sits above the cash-out floor and a later mint has room to seed a comparable terminal bid leg below
     /// spot. Uses a realistic taxed cash-out curve so the corridor is well-formed.
     function _deployAAtMid(uint256 projectAmount) internal returns (uint256 tokenId) {
-        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
+        _setWideTaxedCurve(PROJECT_ID);
         (int24 floorTick, int24 ceilingTick) = _corridorA();
         positionManager.initializePool(
             _poolKeyA(), TickMath.getSqrtPriceAtTick(floorTick + (ceilingTick - floorTick) / 2)
@@ -109,7 +110,26 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, projectAmount);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
-        tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
+    }
+
+    /// @notice Asserts A's live spot leaves a non-empty terminal-token (bid) range inside A's corridor, so a zero bid
+    /// id proves A had no terminal inventory rather than that the geometry forbade a bid.
+    function _assertBidRangeNonEmptyA() internal view {
+        // Read A's corridor and live spot, the same inputs the hook bounds a bid with.
+        (int24 lower, int24 upper) = _corridorA();
+        (uint160 sqrtPriceX96,,,) = IPoolManager(address(poolManager)).getSlot0(_poolKeyA().toId());
+        int24 spacing = hook.TICK_SPACING();
+        // Align the spot down to the tick spacing, matching how the hook bounds positions around spot.
+        int24 spotFloor = JBLPSplitHookHelpers.alignTickToSpacing({
+            tick: TickMath.getTickAtSqrtPrice(sqrtPriceX96), spacing: spacing
+        });
+        // A token0 bid sits above spot and a token1 bid below it, so check the side the terminal token occupies.
+        if (terminalTokenIsToken0) {
+            assertLt(spotFloor + spacing, upper, "precondition: a terminal-token0 bid range exists above the spot");
+        } else {
+            assertGt(spotFloor, lower, "precondition: a terminal-token1 bid range exists below the spot");
+        }
     }
 
     /// @dev Sets the terminal-token side of a pool's collectable fees, ordering-aware against `projectTok` (which pool
@@ -168,7 +188,8 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
             })
         );
         jbTokens.setToken(PROJECT_B, address(projectTokenB));
-        store.setSurplus(PROJECT_B, 0.5e18);
+        // Give B the same cash-out value per token as the base project.
+        store.setSurplus({projectId: PROJECT_B, surplus: DEFAULT_SURPLUS_PER_TOKEN});
         store.setBalance(address(terminal), PROJECT_B, address(terminalToken), 10e18);
         _addDirectoryTerminal(PROJECT_B, address(terminal));
     }
@@ -177,154 +198,190 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
         projectTokenB.mint(address(controller), amount);
         vm.startPrank(address(controller));
         projectTokenB.approve(address(hook), amount);
-        hook.processSplitWith(_buildContext(PROJECT_B, address(projectTokenB), amount, 1));
+        // Cap gas below the inline-automation floor so the split only records intake.
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(
+            _buildContext({projectId: PROJECT_B, token: address(projectTokenB), amount: amount, groupId: 1})
+        );
         vm.stopPrank();
         vm.prank(owner);
         hook.deployPool(PROJECT_B);
-        tokenId = hook.tokenIdOf(PROJECT_B, address(terminalToken));
+        tokenId = hook.askTokenIdOf({projectId: PROJECT_B, terminalToken: address(terminalToken)});
     }
 
     // ─── Project-token side
     // ─────────────────────────────────────────────────
 
     /// @notice When the fee project has a terminal accepting the PROJECT token, the project-token side takes a cut and
-    /// only the remainder is carried into the accumulation ledger.
-    function test_ProjectSide_CutPaid_RemainderAccumulates() public {
+    /// only the remainder is burned; the accumulation ledger is unchanged.
+    function test_ProjectSide_CutPaid_RemainderBurned() public {
         uint256 tokenId = _deployA();
         // Give the fee project a terminal that accepts the project token.
-        _setDirectoryTerminal(FEE_PROJECT_ID, address(projectToken), address(terminal));
+        _setDirectoryTerminal({projectId: FEE_PROJECT_ID, token: address(projectToken), term: address(terminal)});
 
+        // Accrue a project-token fee on A's ask.
         uint256 projFee = 500e18;
-        _setProjectFees(tokenId, projFee);
+        _setProjectFees({tokenId: tokenId, amount: projFee});
 
+        // Snapshot the ledger, claims, payments and supply so the assertions isolate the collection.
         uint256 accBefore = hook.accumulatedProjectTokens(PROJECT_ID);
         uint256 claimBefore = hook.claimableFeeTokens(PROJECT_ID);
         uint256 payBefore = terminal.payCallCount();
+        uint256 supplyBefore = projectToken.totalSupply();
 
-        hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
+        hook.collectAndRouteLPFees({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
+        // The fee project is paid its percentage of the fee and the rest is burned.
         uint256 cut = (projFee * FEE_PERCENT) / 10_000;
         assertGt(terminal.payCallCount(), payBefore, "project-token cut must be paid");
         assertEq(terminal.lastPayProjectId(), FEE_PROJECT_ID, "cut routed to fee project");
         assertEq(terminal.lastPayAmount(), cut, "cut is feePercent of the project fee");
         assertEq(hook.claimableFeeTokens(PROJECT_ID) - claimBefore, cut, "cut tracked as claimable fee tokens");
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID) - accBefore, projFee - cut, "only the remainder accumulates");
+        assertEq(controller.lastBurnAmount(), projFee - cut, "only the remainder is burned");
+        assertEq(supplyBefore - projectToken.totalSupply(), projFee - cut, "supply fell by exactly the remainder");
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), accBefore, "the accumulation ledger is unchanged");
     }
 
-    /// @notice When the fee project has NO terminal for the project token, the whole project-token fee is forgiven and
-    /// carried into the accumulation ledger.
-    function test_ProjectSide_Forgiven_FullAmountAccumulates() public {
+    /// @notice When the fee project has NO terminal for the project token, the cut is forgiven and the whole
+    /// project-token fee is burned.
+    function test_ProjectSide_Forgiven_FullAmountBurned() public {
+        // The fee project has no project-token terminal, so the cut is forgiven.
         uint256 tokenId = _deployA();
 
+        // Accrue a project-token fee on A's ask.
         uint256 projFee = 500e18;
-        _setProjectFees(tokenId, projFee);
+        _setProjectFees({tokenId: tokenId, amount: projFee});
 
+        // Snapshot the ledger, payments and supply so the assertions isolate the collection.
         uint256 accBefore = hook.accumulatedProjectTokens(PROJECT_ID);
         uint256 payBefore = terminal.payCallCount();
+        uint256 supplyBefore = projectToken.totalSupply();
 
-        hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
+        hook.collectAndRouteLPFees({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
+        // Nothing is paid and the whole fee is burned.
         assertEq(terminal.payCallCount(), payBefore, "no cut without a project-token fee terminal");
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID) - accBefore, projFee, "full project fee accumulates");
+        assertEq(supplyBefore - projectToken.totalSupply(), projFee, "full project fee burned");
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), accBefore, "the accumulation ledger is unchanged");
     }
 
     // ─── Terminal-token side
     // ────────────────────────────────────────────────
 
-    /// @notice The non-cut terminal remainder is routed into the per-project terminal ledger, NOT deposited into the
-    /// project's treasury via `addToBalanceOf`.
-    function test_TerminalSide_RemainderToLedger_NotTreasury() public {
+    /// @notice The non-cut terminal remainder is added to the project's balance in its primary terminal via
+    /// `addToBalanceOf`; the per-project terminal ledger is unchanged.
+    function test_TerminalSide_RemainderToTreasury() public {
         uint256 tokenId = _deployA();
 
+        // Accrue a terminal-token fee on A's ask.
         uint256 termFee = 1000e18;
-        _setTerminalFees(tokenId, termFee);
+        _setTerminalFees({tokenId: tokenId, amount: termFee});
 
+        // Snapshot balance additions and the ledger so the assertions isolate the collection.
         uint256 addBefore = terminal.addToBalanceCallCount();
-        uint256 ledgerBefore = hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken));
+        uint256 ledgerBefore =
+            hook.accumulatedTerminalTokens({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
-        hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
+        hook.collectAndRouteLPFees({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
+        // The remainder after the fee project's cut is added to A's balance.
         uint256 cut = (termFee * FEE_PERCENT) / 10_000;
-        assertEq(terminal.addToBalanceCallCount(), addBefore, "terminal remainder no longer deposited to treasury");
+        assertEq(terminal.addToBalanceCallCount(), addBefore + 1, "terminal remainder added to the balance");
+        assertEq(terminal.lastAddToBalanceProjectId(), PROJECT_ID, "of the originating project");
+        assertEq(terminal.lastAddToBalanceAmount(), termFee - cut, "exactly the remainder");
         assertEq(
-            hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)) - ledgerBefore,
-            termFee - cut,
-            "terminal remainder routed into the bid-leg ledger"
+            hook.accumulatedTerminalTokens({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            ledgerBefore,
+            "the bid-leg ledger is unchanged"
         );
     }
 
-    /// @notice A forgiven terminal cut routes the whole terminal fee into the ledger, and a subsequent mint consumes
-    /// that ledger into the position's bid leg.
-    function test_TerminalSide_Forgiven_FundsBidOnNextMint() public {
+    /// @notice A terminal remainder whose add to the project's balance is rejected lands in the ledger, and a
+    /// subsequent recycle consumes that ledger into the bid position.
+    function test_TerminalSide_RouteForgiven_FundsBidOnNextMint() public {
         uint256 tokenId = _deployAAtMid(0.5e18);
-        // Forgive the terminal cut by removing the fee project's terminal for the terminal token.
-        _setDirectoryTerminal(FEE_PROJECT_ID, address(terminalToken), address(0));
+        // Forgive the terminal cut by removing the fee project's terminal for the terminal token, and have the
+        // project's terminal reject the remainder so it falls back to the ledger.
+        _setDirectoryTerminal({projectId: FEE_PROJECT_ID, token: address(terminalToken), term: address(0)});
+        terminal.setRevertOnAddToBalance(true);
 
+        // Accrue and collect a terminal-token fee; with both routes refused, the whole fee is ledgered.
         uint256 termFee = 1e18;
-        _setTerminalFees(tokenId, termFee);
-        hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
+        _setTerminalFees({tokenId: tokenId, amount: termFee});
+        hook.collectAndRouteLPFees({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
         assertEq(
-            hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)),
+            hook.accumulatedTerminalTokens({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
             termFee,
             "forgiven terminal fee fully ledgered"
         );
 
-        _accumulateTokens(PROJECT_ID, 0.5e18);
+        // Accumulate fresh inventory and recycle, which spends the ledgered terminal on a bid.
+        _accumulateTokens({projectId: PROJECT_ID, amount: 0.5e18});
 
         vm.prank(owner);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken));
+        hook.addLiquidity({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
         assertLt(
-            hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)),
+            hook.accumulatedTerminalTokens({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
             termFee,
             "the terminal ledger is drawn down into the mint"
         );
-        (, uint256 terminalSide) = _lockedSides(hook.tokenIdOf(PROJECT_ID, address(terminalToken)));
-        assertGt(terminalSide, 0, "the bid leg is funded from the terminal ledger");
+        // The bid holds the terminal drawn from the ledger.
+        (, uint256 terminalSide) =
+            _lockedSides(hook.bidTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}));
+        assertGt(terminalSide, 0, "the bid position is funded from the terminal ledger");
     }
 
     // ─── Best-effort (try/catch)
     // ─────────────────────────────────────────────
 
-    /// @notice A fee terminal whose `pay` reverts forgives the terminal cut: collection succeeds, the whole fee lands
-    /// in the ledger, no claim is tracked, and the reentrancy reserve counters are fully rolled back.
+    /// @notice A fee terminal whose `pay` reverts forgives the terminal cut: collection succeeds, the whole fee is
+    /// added to the project's balance, no claim is tracked, and the reentrancy reserve counters are fully rolled back.
     function test_TryCatch_TerminalPayReverts_CutForgiven() public {
         uint256 tokenId = _deployA();
         RevertingPayTerminal rt = new RevertingPayTerminal();
-        _setDirectoryTerminal(FEE_PROJECT_ID, address(terminalToken), address(rt));
+        _setDirectoryTerminal({projectId: FEE_PROJECT_ID, token: address(terminalToken), term: address(rt)});
 
         uint256 termFee = 10e18;
-        _setTerminalFees(tokenId, termFee);
+        _setTerminalFees({tokenId: tokenId, amount: termFee});
 
-        hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
+        // Snapshot the project terminal's balance so the assertion isolates what the collection adds.
+        uint256 terminalBalanceBefore = terminalToken.balanceOf(address(terminal));
+        hook.collectAndRouteLPFees({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
         assertEq(
-            hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)),
+            terminalToken.balanceOf(address(terminal)) - terminalBalanceBefore,
             termFee,
-            "forgiven cut routes the whole terminal fee into the ledger"
+            "forgiven cut adds the whole terminal fee to the project's balance"
+        );
+        assertEq(terminal.lastAddToBalanceAmount(), termFee, "the whole fee is the remainder");
+        assertEq(
+            hook.accumulatedTerminalTokens({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            0,
+            "nothing ledgered"
         );
         assertEq(hook.claimableFeeTokens(PROJECT_ID), 0, "no claim tracked when the cut is forgiven");
         assertEq(_outstandingTokenClaims(address(feeProjectToken)), 0, "outstanding token claims fully rolled back");
         assertEq(_inflightCount(address(feeProjectToken)), 0, "inflight routing count fully rolled back");
     }
 
-    /// @notice A reverting fee terminal on the PROJECT-token side is likewise forgiven: the whole project fee is
-    /// carried into the accumulation ledger and reserve counters are rolled back.
+    /// @notice A reverting fee terminal on the PROJECT-token side is likewise forgiven: the whole project fee is burned
+    /// and reserve counters are rolled back.
     function test_TryCatch_ProjectPayReverts_CutForgiven() public {
         uint256 tokenId = _deployA();
         RevertingPayTerminal rt = new RevertingPayTerminal();
-        _setDirectoryTerminal(FEE_PROJECT_ID, address(projectToken), address(rt));
+        _setDirectoryTerminal({projectId: FEE_PROJECT_ID, token: address(projectToken), term: address(rt)});
 
         uint256 projFee = 400e18;
-        _setProjectFees(tokenId, projFee);
+        _setProjectFees({tokenId: tokenId, amount: projFee});
 
+        // Snapshot the ledger and supply so the assertions isolate the collection.
         uint256 accBefore = hook.accumulatedProjectTokens(PROJECT_ID);
-        hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
+        uint256 supplyBefore = projectToken.totalSupply();
+        hook.collectAndRouteLPFees({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
-        assertEq(
-            hook.accumulatedProjectTokens(PROJECT_ID) - accBefore, projFee, "forgiven project cut accumulates in full"
-        );
+        assertEq(supplyBefore - projectToken.totalSupply(), projFee, "forgiven project cut: the whole fee is burned");
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), accBefore, "the accumulation ledger is unchanged");
         assertEq(hook.claimableFeeTokens(PROJECT_ID), 0, "no claim tracked when the project cut is forgiven");
         assertEq(_outstandingTokenClaims(address(feeProjectToken)), 0, "outstanding token claims fully rolled back");
         assertEq(_inflightCount(address(feeProjectToken)), 0, "inflight routing count fully rolled back");
@@ -347,48 +404,66 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 100e18);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
-        tokenId = hook.tokenIdOf(PROJECT_ID, NATIVE);
+        tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: NATIVE});
     }
 
-    /// @notice A PAID native-terminal cut is forwarded with msg.value and the non-cut remainder is carried into the
-    /// native bid-leg ledger `accumulatedTerminalTokens[project][NATIVE]`.
-    function test_Native_CutPaidWithValue_RemainderLedgered() public {
+    /// @notice A PAID native-terminal cut is forwarded with msg.value and the non-cut remainder is added to the
+    /// project's native balance, also with msg.value; the native bid-leg ledger is unchanged.
+    function test_Native_CutPaidWithValue_RemainderToTreasury() public {
         uint256 tokenId = _deployNativePool();
         // Give the fee project a terminal that accepts native ETH so the native cut is actually paid.
-        _setDirectoryTerminal(FEE_PROJECT_ID, NATIVE, address(terminal));
-        terminal.setAccountingContext(FEE_PROJECT_ID, NATIVE, uint32(uint160(NATIVE)), 18);
+        _setDirectoryTerminal({projectId: FEE_PROJECT_ID, token: NATIVE, term: address(terminal)});
+        terminal.setAccountingContext({
+            projectId: FEE_PROJECT_ID, token: NATIVE, currency: uint32(uint160(NATIVE)), decimals: 18
+        });
 
         // Native sorts as currency0 (address(0)); set the native-side collectable fee and fund the PM with ETH.
         uint256 fee = 1e18;
-        positionManager.setCollectableFees(tokenId, fee, 0);
+        positionManager.setCollectableFees({tokenId: tokenId, amount0: fee, amount1: 0});
         vm.deal(address(positionManager), fee);
 
+        // Snapshot payments, claims and the terminal's ETH so the assertions isolate the collection.
         uint256 payBefore = terminal.payCallCount();
         uint256 claimBefore = hook.claimableFeeTokens(PROJECT_ID);
+        uint256 terminalEthBefore = address(terminal).balance;
 
-        hook.collectAndRouteLPFees(PROJECT_ID, NATIVE);
+        hook.collectAndRouteLPFees({projectId: PROJECT_ID, terminalToken: NATIVE});
 
+        // The fee project is paid its percentage in ETH and the remainder is added to the project's balance in ETH.
         uint256 cut = (fee * FEE_PERCENT) / 10_000;
         assertGt(terminal.payCallCount(), payBefore, "native cut must be paid");
         assertEq(terminal.lastPayProjectId(), FEE_PROJECT_ID, "native cut routed to fee project");
         assertEq(terminal.lastPayAmount(), cut, "native cut forwarded as value");
         assertEq(hook.claimableFeeTokens(PROJECT_ID) - claimBefore, cut, "cut tracked as claimable fee tokens");
+        assertEq(terminal.lastAddToBalanceProjectId(), PROJECT_ID, "native remainder added to the project");
+        assertEq(terminal.lastAddToBalanceToken(), NATIVE, "in the native token");
+        assertEq(terminal.lastAddToBalanceAmount(), fee - cut, "exactly the remainder");
+        assertEq(terminal.lastAddToBalanceValue(), fee - cut, "forwarded as value");
+        assertEq(address(terminal).balance - terminalEthBefore, fee, "the terminal received the cut and the remainder");
         assertEq(
-            hook.accumulatedTerminalTokens(PROJECT_ID, NATIVE), fee - cut, "native remainder to native bid-leg ledger"
+            hook.accumulatedTerminalTokens({projectId: PROJECT_ID, terminalToken: NATIVE}),
+            0,
+            "the native bid-leg ledger is unchanged"
         );
     }
 
-    /// @notice A forgiven native-terminal cut routes the whole native fee into the native bid-leg ledger.
-    function test_Native_ForgivenFee_FullyLedgered() public {
+    /// @notice A forgiven native-terminal cut adds the whole native fee to the project's balance.
+    function test_Native_ForgivenFee_FullyToTreasury() public {
         uint256 tokenId = _deployNativePool();
         // The fee project has no native terminal → the native cut is forgiven.
+        // Native sorts as currency0, so the fee goes in the token0 slot; fund the PM with the ETH to pay it.
         uint256 fee = 1e18;
-        positionManager.setCollectableFees(tokenId, fee, 0);
+        positionManager.setCollectableFees({tokenId: tokenId, amount0: fee, amount1: 0});
         vm.deal(address(positionManager), fee);
+        // Snapshot the terminal's ETH so the assertion isolates what the collection adds.
+        uint256 terminalEthBefore = address(terminal).balance;
 
-        hook.collectAndRouteLPFees(PROJECT_ID, NATIVE);
+        hook.collectAndRouteLPFees({projectId: PROJECT_ID, terminalToken: NATIVE});
 
-        assertEq(hook.accumulatedTerminalTokens(PROJECT_ID, NATIVE), fee, "forgiven native fee fully ledgered");
+        // The whole fee reaches the project's balance as value and nothing is ledgered.
+        assertEq(address(terminal).balance - terminalEthBefore, fee, "forgiven native fee fully added to the balance");
+        assertEq(terminal.lastAddToBalanceValue(), fee, "forwarded as value");
+        assertEq(hook.accumulatedTerminalTokens({projectId: PROJECT_ID, terminalToken: NATIVE}), 0, "nothing ledgered");
     }
 
     // ─── Isolation (regression of the Critical)
@@ -398,34 +473,52 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
     /// never
     /// from another project's ledger or an outside donation sitting in the shared clone's raw balance.
     function test_Isolation_MintNeverConsumesOtherLedgerOrDonation() public {
-        _deployA(); // asks-only: A has zero recovered terminal and an empty terminal ledger.
+        // Asks-only at a mid-corridor spot: A has zero recovered terminal and an empty terminal ledger, yet the spot
+        // leaves a non-empty bid range, so a bid WOULD mint if A's terminal amount captured any foreign inventory.
+        _deployAAtMid(0.5e18);
+        _assertBidRangeNonEmptyA();
+        // Deploy B on the same clone so its ledger shares the hook's raw balance with A.
         _setupProjectB();
         uint256 bTokenId = _accumulateAndDeployB(100e18);
 
-        // Fund B's terminal ledger via a forgiven terminal-fee collection.
-        _setDirectoryTerminal(FEE_PROJECT_ID, address(terminalToken), address(0));
-        _setTerminalFeesFor(bTokenId, address(projectTokenB), 4e18);
-        hook.collectAndRouteLPFees(PROJECT_B, address(terminalToken));
-        uint256 ledgerB = hook.accumulatedTerminalTokens(PROJECT_B, address(terminalToken));
+        // Fund B's terminal ledger via a terminal-fee collection whose cut and route are both forgiven.
+        _setDirectoryTerminal({projectId: FEE_PROJECT_ID, token: address(terminalToken), term: address(0)});
+        _setTerminalFeesFor({tokenId: bTokenId, projectTok: address(projectTokenB), amount: 4e18});
+        // Refuse the balance addition only for B's collection, then restore the terminal for A's recycle.
+        terminal.setRevertOnAddToBalance(true);
+        hook.collectAndRouteLPFees({projectId: PROJECT_B, terminalToken: address(terminalToken)});
+        terminal.setRevertOnAddToBalance(false);
+        uint256 ledgerB = hook.accumulatedTerminalTokens({projectId: PROJECT_B, terminalToken: address(terminalToken)});
         assertEq(ledgerB, 4e18, "precondition: B's terminal ledger is funded");
 
         // Donate raw terminal tokens directly to the shared hook.
         uint256 donation = 250e18;
-        terminalToken.mint(address(hook), donation);
+        terminalToken.mint({to: address(hook), amount: donation});
 
         // A adds liquidity: its terminal amount is recovered(0) + ledger(0) == 0, so it mints asks-only.
-        _accumulateTokens(PROJECT_ID, 10e18);
+        _accumulateTokens({projectId: PROJECT_ID, amount: 10e18});
         vm.prank(owner);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken));
+        hook.addLiquidity({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
-        (, uint256 aTerminalSide) = _lockedSides(hook.tokenIdOf(PROJECT_ID, address(terminalToken)));
-        assertEq(aTerminalSide, 0, "A consumed zero terminal: neither B's ledger nor the donation was swept");
+        // A's positions and ledger hold no terminal, and B's ledger and the donation are left on the hook.
+        (, uint256 aTerminalSide) =
+            _lockedSides(hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}));
+        assertEq(aTerminalSide, 0, "A's ask holds zero terminal");
         assertEq(
-            hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)),
+            hook.bidTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            0,
+            "A minted no bid: neither B's ledger nor the donation was captured as A's terminal inventory"
+        );
+        assertEq(
+            hook.accumulatedTerminalTokens({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
             0,
             "A never absorbed B's ledger or the donation into its own ledger"
         );
-        assertEq(hook.accumulatedTerminalTokens(PROJECT_B, address(terminalToken)), ledgerB, "B's ledger is untouched");
-        assertGe(terminalToken.balanceOf(address(hook)), ledgerB + donation, "B's ledger and the donation remain");
+        assertEq(
+            hook.accumulatedTerminalTokens({projectId: PROJECT_B, terminalToken: address(terminalToken)}),
+            ledgerB,
+            "B's ledger is untouched"
+        );
+        assertEq(terminalToken.balanceOf(address(hook)), ledgerB + donation, "B's ledger and the donation remain");
     }
 }

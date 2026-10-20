@@ -46,13 +46,14 @@ contract RegressionRound2HookRegression is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
 
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "outsider should be able to trigger deployment");
+        // Only the auto-selected terminal token gets an ask position.
         assertGt(
-            hook.tokenIdOf(PROJECT_ID, address(terminalToken)),
+            hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
             0,
             "auto-select should deploy the highest-value terminal token"
         );
         assertEq(
-            hook.tokenIdOf(PROJECT_ID, address(altTerminalToken)),
+            hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(altTerminalToken)}),
             0,
             "attacker's low-value token should NOT be deployed"
         );

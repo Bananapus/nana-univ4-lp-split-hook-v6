@@ -17,16 +17,27 @@ import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionMa
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
-/// @notice Wrapper that exposes internal price math functions for testing.
-contract TestableJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
-    constructor(
-        address _directory,
-        IJBPermissions _permissions,
-        address _tokens,
-        IAllowanceTransfer _permit2
-    )
-        JBUniswapV4LPSplitHook(_directory, _permissions, _tokens, _permit2, IJBSuckerRegistry(address(0)))
-    {}
+/// @notice Wrapper that exposes the internal price math library functions for testing.
+/// @dev Standalone rather than inheriting the hook: the wrappers only call `JBUniswapV4LPSplitHookMath` and
+/// `JBLPSplitHookHelpers`, and inheriting the full hook would push this test contract past the EIP-170 runtime size
+/// checked by `forge build --sizes`.
+contract TestableJBUniswapV4LPSplitHook {
+    /// @notice The directory the math library reads controllers, terminals and stores from, mirroring the hook's
+    /// immutable.
+    address public immutable DIRECTORY;
+
+    /// @notice The sucker registry passed to the math library, the zero address because these tests deploy no
+    /// registry.
+    IJBSuckerRegistry public immutable SUCKER_REGISTRY = IJBSuckerRegistry(address(0));
+
+    /// @notice Stores the directory the wrapped math reads from.
+    /// @dev The unnamed permissions, tokens and permit2 parameters keep the hook's constructor shape so callers deploy
+    /// this wrapper the same way they deploy the hook; the math never reads them.
+    /// @param directory The directory to expose to the math library.
+    constructor(address directory, IJBPermissions, address, IAllowanceTransfer) {
+        // Record the directory every wrapper reads through `_fetchControllerAndRuleset` and the math library.
+        DIRECTORY = directory;
+    }
 
     /// @dev Helper to fetch controller and ruleset for a project.
     function _fetchControllerAndRuleset(uint256 projectId)
@@ -108,22 +119,6 @@ contract TestableJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
     }
 
     // forge-lint: disable-next-line(mixed-case-function)
-    function exposed_getSqrtPriceX96ForCurrentJuiceboxPrice(
-        uint256 projectId,
-        address terminalToken,
-        address projectToken
-    )
-        external
-        view
-        returns (uint160)
-    {
-        (address controller, JBRuleset memory ruleset) = _fetchControllerAndRuleset(projectId);
-        return JBUniswapV4LPSplitHookMath.getSqrtPriceX96ForCurrentJuiceboxPrice(
-            IJBDirectory(DIRECTORY), projectId, terminalToken, projectToken, controller, ruleset
-        );
-    }
-
-    // forge-lint: disable-next-line(mixed-case-function)
     function exposed_computeInitialSqrtPrice(
         uint256 projectId,
         address terminalToken,
@@ -138,38 +133,6 @@ contract TestableJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
             IJBDirectory(DIRECTORY), SUCKER_REGISTRY, projectId, terminalToken, projectToken, controller, ruleset
         );
     }
-
-    // forge-lint: disable-next-line(mixed-case-function)
-    function exposed_computeOptimalCashOutAmount(
-        uint256 projectId,
-        address terminalToken,
-        address projectToken,
-        uint256 totalProjectTokens,
-        uint256 preHeldTerminalTokens,
-        uint160 sqrtPriceInit,
-        int24 tickLower,
-        int24 tickUpper
-    )
-        external
-        view
-        returns (uint256)
-    {
-        (address controller, JBRuleset memory ruleset) = _fetchControllerAndRuleset(projectId);
-        return JBUniswapV4LPSplitHookMath.computeOptimalCashOutAmount(
-            IJBDirectory(DIRECTORY),
-            SUCKER_REGISTRY,
-            projectId,
-            terminalToken,
-            projectToken,
-            totalProjectTokens,
-            preHeldTerminalTokens,
-            sqrtPriceInit,
-            tickLower,
-            tickUpper,
-            controller,
-            ruleset
-        );
-    }
 }
 
 /// @notice Tests for JBUniswapV4LPSplitHook internal price math functions.
@@ -179,13 +142,13 @@ contract TestableJBUniswapV4LPSplitHook is JBUniswapV4LPSplitHook {
 ///   - weight = 1000e18, reservedPercent = 1000 (10%), baseCurrency = 1 (ETH)
 ///   - accountingContext currency = uint32(uint160(terminalToken)) (not 1)
 ///   - prices.pricePerUnitOf returns 1e18 by default
-///   - store surplus = 0.5e18 per project token
+///   - store surplus = DEFAULT_SURPLUS_PER_TOKEN = 0.0005e18 per project token
 ///
 /// Therefore:
 ///   weightRatio = 1e18 (from prices mock, since currencies differ)
 ///   rawTokensOut(1e18 input) = mulDiv(1e18, 1000e18, 1e18) = 1000e18
 ///   issuanceRate = 1000e18 * (10000-1000)/10000 = 900e18
-///   cashOutRate  = (0.5e18 * 1e18) / 1e18 = 0.5e18
+///   cashOutRate  = (0.0005e18 * 1e18) / 1e18 = 0.0005e18 (below the issuance price 1e18 / 900)
 contract PriceMathTest is LPSplitHookV4TestBase {
     TestableJBUniswapV4LPSplitHook public testableHook;
 
@@ -194,14 +157,6 @@ contract PriceMathTest is LPSplitHookV4TestBase {
         testableHook = new TestableJBUniswapV4LPSplitHook(
             address(directory), IJBPermissions(address(permissions)), address(jbTokens), IAllowanceTransfer(address(0))
         );
-        testableHook.initialize({
-            initialFeeProjectId: FEE_PROJECT_ID,
-            initialFeePercent: FEE_PERCENT,
-            newPoolManager: IPoolManager(address(1)),
-            newPositionManager: IPositionManager(address(positionManager)),
-            newOracleHook: IHooks(address(0)),
-            newBuybackHook: IJBBuybackHookRegistry(address(0))
-        });
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -249,12 +204,12 @@ contract PriceMathTest is LPSplitHookV4TestBase {
     // 4. Cash out rate with positive surplus
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice With surplus = 0.5e18, cash out rate for 1e18 project tokens = 0.5e18.
+    /// @notice With surplus = 0.0005e18, cash out rate for 1e18 project tokens = 0.0005e18.
     function test_CashOutRate_PositiveSurplus() public view {
         uint256 rate = testableHook.exposed_getCashOutRate(PROJECT_ID, address(terminalToken));
 
-        // store returns (0.5e18 * 1e18) / 1e18 = 0.5e18
-        assertEq(rate, 0.5e18, "Cash out rate should be 0.5e18 for default surplus");
+        // store returns (0.0005e18 * 1e18) / 1e18 = 0.0005e18
+        assertEq(rate, 0.0005e18, "Cash out rate should be 0.0005e18 for default surplus");
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -271,47 +226,7 @@ contract PriceMathTest is LPSplitHookV4TestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 6. SqrtPriceX96 is nonzero for valid project
-    // ─────────────────────────────────────────────────────────────────────
-
-    /// @notice _getSqrtPriceX96ForCurrentJuiceboxPrice returns a nonzero value for valid project.
-    function test_SqrtPriceX96_NonZero() public view {
-        uint160 sqrtPrice = testableHook.exposed_getSqrtPriceX96ForCurrentJuiceboxPrice(
-            PROJECT_ID, address(terminalToken), address(projectToken)
-        );
-
-        assertGt(sqrtPrice, 0, "sqrtPriceX96 should be nonzero for valid project");
-    }
-
-    // ─────────────────────────────────────────────────────────────────────
-    // 7. SqrtPriceX96 differs with swapped token order
-    // ─────────────────────────────────────────────────────────────────────
-
-    /// @notice Swapping terminalToken and projectToken arguments yields different sqrtPrice.
-    function test_SqrtPriceX96_TokenOrdering() public view {
-        uint160 sqrtPriceA = testableHook.exposed_getSqrtPriceX96ForCurrentJuiceboxPrice(
-            PROJECT_ID, address(terminalToken), address(projectToken)
-        );
-
-        // We confirm it is > 2^96 (since there are 1000 projectTokens per terminalToken)
-        // forge-lint: disable-next-line(mixed-case-variable)
-        uint256 Q96 = 2 ** 96;
-
-        // Determine sort order to know which branch is taken
-        (address token0,) = _sortTokens(address(terminalToken), address(projectToken));
-
-        if (token0 == address(terminalToken)) {
-            // token1Amount = 1000e18, token0Amount = 1e18 => price > 1 => sqrtPrice > Q96
-            assertGt(uint256(sqrtPriceA), Q96, "sqrtPrice should exceed Q96 when price > 1");
-        } else {
-            // token1Amount = getTerminalTokensOut(1e18) = mulDiv(1e18, 1e18, 1000e18) = 1e15
-            // price < 1 => sqrtPrice < Q96
-            assertLt(uint256(sqrtPriceA), Q96, "sqrtPrice should be below Q96 when price < 1");
-        }
-    }
-
-    // ─────────────────────────────────────────────────────────────────────
-    // 8. Issuance rate sqrtPriceX96 is nonzero
+    // 6. Issuance rate sqrtPriceX96 is nonzero
     // ─────────────────────────────────────────────────────────────────────
 
     /// @notice _getIssuanceRateSqrtPriceX96 returns nonzero for valid project.
@@ -323,7 +238,7 @@ contract PriceMathTest is LPSplitHookV4TestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 9. Cash out rate sqrtPriceX96 is nonzero
+    // 7. Cash out rate sqrtPriceX96 is nonzero
     // ─────────────────────────────────────────────────────────────────────
 
     /// @notice _getCashOutRateSqrtPriceX96 returns nonzero for valid project.
@@ -348,7 +263,7 @@ contract PriceMathTest is LPSplitHookV4TestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 10. Tick bounds: tickLower < tickUpper for normal rates
+    // 8. Tick bounds: tickLower < tickUpper for normal rates
     // ─────────────────────────────────────────────────────────────────────
 
     /// @notice Under normal conditions (cashOutRate < issuanceRate), tickLower < tickUpper.
@@ -360,13 +275,12 @@ contract PriceMathTest is LPSplitHookV4TestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 11. Tick bounds: extreme rate disparity produces wide sorted range
+    // 9. Tick bounds: extreme rate disparity produces wide sorted range
     // ─────────────────────────────────────────────────────────────────────
 
     /// @notice When the cash out rate is extremely small, its inverse (used for sqrtPrice
     ///         computation) becomes very large, pushing the cash out tick far from the issuance tick.
-    ///         After the tick bounds inversion fix, the ticks are sorted so the range is wide (not the narrow
-    /// fallback).
+    ///         The bounds are sorted by price, so the range is wide.
     function test_TickBounds_ExtremeRateDisparity_WideRange() public {
         // With token0 = terminalToken (lower address in our mock setup):
         //   issuance sqrtPrice  ~ sqrt(issuanceRate)          where issuanceRate = 900e18
@@ -381,14 +295,14 @@ contract PriceMathTest is LPSplitHookV4TestBase {
         (int24 tickLower, int24 tickUpper) =
             testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
 
-        // After the tick bounds inversion fix, ticks are sorted so the range is wide (not the narrow fallback).
+        // The bounds are sorted by price, so the range is wide.
         assertLt(tickLower, tickUpper, "Sorted ticks should produce tickLower < tickUpper");
-        // The range should be much wider than the narrow 2*TICK_SPACING fallback.
-        assertGt(tickUpper - tickLower, 2 * int24(200), "Range should be wider than the narrow fallback");
+        // The extreme cash-out inverse places the bounds more than two spacings apart.
+        assertGt(tickUpper - tickLower, 2 * int24(200), "Range should span more than two spacings");
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 12. Tick bounds are aligned to TICK_SPACING (200)
+    // 10. Tick bounds are aligned to TICK_SPACING (200)
     // ─────────────────────────────────────────────────────────────────────
 
     /// @notice Both tick bounds are multiples of TICK_SPACING.
@@ -401,7 +315,7 @@ contract PriceMathTest is LPSplitHookV4TestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 13. Align tick: positive tick floors correctly
+    // 11. Align tick: positive tick floors correctly
     // ─────────────────────────────────────────────────────────────────────
 
     /// @notice Positive tick 150 floors to 0 (nearest multiple of 200 at or below 150).
@@ -413,7 +327,7 @@ contract PriceMathTest is LPSplitHookV4TestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 14. Align tick: negative tick floors correctly (rounds toward -infinity)
+    // 12. Align tick: negative tick floors correctly (rounds toward -infinity)
     // ─────────────────────────────────────────────────────────────────────
 
     /// @notice Negative tick -150 floors to -200 (proper floor for negative values).
@@ -426,7 +340,7 @@ contract PriceMathTest is LPSplitHookV4TestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 15. Fuzz: aligned tick is always a multiple of spacing
+    // 13. Fuzz: aligned tick is always a multiple of spacing
     // ─────────────────────────────────────────────────────────────────────
 
     /// @notice For any valid tick in the Uniswap V4 range, alignment always produces a multiple of 200.
@@ -444,7 +358,7 @@ contract PriceMathTest is LPSplitHookV4TestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 16. Geometric mean: initial price is between cash-out and issuance
+    // 14. Geometric mean: initial price is between cash-out and issuance
     // ─────────────────────────────────────────────────────────────────────
 
     /// @notice _computeInitialSqrtPrice returns a price between cash-out and issuance bounds.
@@ -465,7 +379,7 @@ contract PriceMathTest is LPSplitHookV4TestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 17. Geometric mean: falls back to issuance rate when cash-out is 0
+    // 15. Geometric mean: falls back to issuance rate when cash-out is 0
     // ─────────────────────────────────────────────────────────────────────
 
     /// @notice When cash-out rate is 0, the cold-start seed sits strictly inside the economic corridor (one aligned
@@ -481,148 +395,6 @@ contract PriceMathTest is LPSplitHookV4TestBase {
         int24 seedTick = TickMath.getTickAtSqrtPrice(sqrtPriceInit);
         assertGt(seedTick, tickLower, "zero cash-out seed sits strictly inside the corridor floor");
         assertLt(seedTick, tickUpper, "zero cash-out seed sits strictly below the issuance ceiling");
-    }
-
-    // ─────────────────────────────────────────────────────────────────────
-    // 18. Optimal cash-out: fraction is less than 50%
-    // ─────────────────────────────────────────────────────────────────────
-
-    /// @notice The optimal cash-out amount should be less than 50% of total project tokens.
-    function test_OptimalCashOut_LessThanHalf() public view {
-        uint256 totalTokens = 100e18;
-
-        // Get tick bounds and initial price
-        (int24 tickLower, int24 tickUpper) =
-            testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
-        uint160 sqrtPriceInit =
-            testableHook.exposed_computeInitialSqrtPrice(PROJECT_ID, address(terminalToken), address(projectToken));
-
-        uint256 cashOut = testableHook.exposed_computeOptimalCashOutAmount(
-            PROJECT_ID,
-            address(terminalToken),
-            address(projectToken),
-            totalTokens,
-            0,
-            sqrtPriceInit,
-            tickLower,
-            tickUpper
-        );
-
-        assertLe(cashOut, totalTokens / 2, "Optimal cash-out should be <= 50% of total");
-        assertGt(cashOut, 0, "Optimal cash-out should be > 0 with positive cash-out rate");
-    }
-
-    // ─────────────────────────────────────────────────────────────────────
-    // 19. Optimal cash-out: returns 0 when cash-out rate is 0
-    // ─────────────────────────────────────────────────────────────────────
-
-    /// @notice When cash-out rate is 0, optimal cash-out amount should be 0.
-    function test_OptimalCashOut_ZeroWhenNoCashOutRate() public {
-        store.setSurplus(PROJECT_ID, 0);
-
-        uint256 totalTokens = 100e18;
-
-        // When cash-out rate is 0, _computeInitialSqrtPrice falls back to issuance rate.
-        // _computeOptimalCashOutAmount returns 0 when cash-out rate is 0.
-        // We pass issuance-rate sqrtPrice and arbitrary tick bounds since the function
-        // short-circuits on cashOutRate == 0.
-        uint160 sqrtPriceInit =
-            testableHook.exposed_getIssuanceRateSqrtPriceX96(PROJECT_ID, address(terminalToken), address(projectToken));
-
-        uint256 cashOut = testableHook.exposed_computeOptimalCashOutAmount(
-            PROJECT_ID,
-            address(terminalToken),
-            address(projectToken),
-            totalTokens,
-            0,
-            sqrtPriceInit,
-            int24(-200),
-            int24(200)
-        );
-
-        assertEq(cashOut, 0, "Cash-out should be 0 when surplus is 0");
-    }
-
-    // ─────────────────────────────────────────────────────────────────────
-    // 20. Optimal cash-out: scales linearly with total tokens
-    // ─────────────────────────────────────────────────────────────────────
-
-    /// @notice Doubling total tokens should approximately double the cash-out amount.
-    function test_OptimalCashOut_ScalesWithTotal() public view {
-        (int24 tickLower, int24 tickUpper) =
-            testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
-        uint160 sqrtPriceInit =
-            testableHook.exposed_computeInitialSqrtPrice(PROJECT_ID, address(terminalToken), address(projectToken));
-
-        uint256 cashOut100 = testableHook.exposed_computeOptimalCashOutAmount(
-            PROJECT_ID, address(terminalToken), address(projectToken), 100e18, 0, sqrtPriceInit, tickLower, tickUpper
-        );
-        uint256 cashOut200 = testableHook.exposed_computeOptimalCashOutAmount(
-            PROJECT_ID, address(terminalToken), address(projectToken), 200e18, 0, sqrtPriceInit, tickLower, tickUpper
-        );
-
-        // Should be ~2x (linear scaling); allow 1 wei tolerance for mulDiv rounding.
-        assertApproxEqAbs(cashOut200, cashOut100 * 2, 1, "Cash-out should scale linearly with total tokens");
-    }
-
-    // ─────────────────────────────────────────────────────────────────────
-    // 21. Optimal cash-out: pre-held terminal tokens reduce the cash-out at the
-    //     COMBINED rate H/(r+R), not H/r.
-    // ─────────────────────────────────────────────────────────────────────
-
-    /// @notice With pre-held terminal tokens H, the cash-out must be reduced so the position's terminal:project ratio
-    ///         is unchanged: (c·r + H)/(T − c) must equal the same ratio R the no-pre-held optimum targets. The old
-    ///         logic subtracted H/r (the cash-out rate alone), which over-subtracts because the position also needs
-    ///         R terminal per project — the correct offset is H/(r+R). This test pins the post-cash-out ratio.
-    function test_OptimalCashOut_PreHeldPreservesPositionRatio() public view {
-        uint256 totalTokens = 100e18;
-        // Pre-held must be small enough to be fully consumable by the position (H < R·T), so the cashed-out + pre-held
-        // terminal side still lands on the target ratio rather than leaving excess terminal as leftover.
-        uint256 preHeld = 1e18; // terminal tokens recovered from a (hypothetical) re-range burn
-
-        (int24 tickLower, int24 tickUpper) =
-            testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
-        // Price the position at the corridor midpoint: a genuinely two-sided (balanced) price so the pre-held ratio
-        // math is exercised in range. The hook's own seed sits near the floor (asks-only), which is not the balanced
-        // regime this ratio-preservation invariant is about.
-        uint160 sqrtPriceInit = TickMath.getSqrtPriceAtTick(tickLower + (tickUpper - tickLower) / 2);
-        uint256 r = testableHook.exposed_getCashOutRate(PROJECT_ID, address(terminalToken)); // terminal per project,
-        // WAD
-
-        uint256 c0 = testableHook.exposed_computeOptimalCashOutAmount(
-            PROJECT_ID,
-            address(terminalToken),
-            address(projectToken),
-            totalTokens,
-            0,
-            sqrtPriceInit,
-            tickLower,
-            tickUpper
-        );
-        uint256 cH = testableHook.exposed_computeOptimalCashOutAmount(
-            PROJECT_ID,
-            address(terminalToken),
-            address(projectToken),
-            totalTokens,
-            preHeld,
-            sqrtPriceInit,
-            tickLower,
-            tickUpper
-        );
-
-        // Pre-held tokens should reduce the cash-out, but by LESS than H/r (the old over-subtraction).
-        assertLt(cH, c0, "pre-held should reduce the cash-out");
-        uint256 oldBuggyReduction = (preHeld * 1e18) / r; // H/r in project-token terms
-        assertLt(c0 - cH, oldBuggyReduction, "reduction must be smaller than the old H/r over-subtraction");
-
-        // The decisive check: the post-cash-out terminal:project ratio is the SAME with and without pre-held — i.e.
-        // the
-        // pre-held path lands on the position's required ratio R, instead of skewing toward an over-large project side.
-        uint256 ratioNoPreHeld = (c0 * r) / (totalTokens - c0);
-        uint256 ratioWithPreHeld = ((cH * r) + (preHeld * 1e18)) / (totalTokens - cH);
-        assertApproxEqRel(
-            ratioWithPreHeld, ratioNoPreHeld, 1e15, "pre-held add must preserve the position's terminal:project ratio"
-        );
     }
 
     // ─────────────────────────────────────────────────────────────────────

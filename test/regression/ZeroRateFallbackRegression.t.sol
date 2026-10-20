@@ -108,7 +108,8 @@ contract ZeroRateFallbackHarness is JBUniswapV4LPSplitHook {
 /// `token0`. Since sqrtPriceX96 = sqrt(token1/token0), the correct extreme depends on
 /// token ordering. When terminalToken is `token0`, both fallbacks were inverted.
 ///
-/// Fix: Return MAX or MIN based on `token0 == terminalToken` for each function.
+/// Fix: The issuance encoder returns MAX or MIN based on `token0 == terminalToken`. The cash-out encoder never returns
+/// an extreme: a zero preview bounds the floor at 2 wei per project token (the preview plus two).
 ///
 /// Test strategy: We pass different `projectToken` addresses (one lower, one higher than
 /// `terminalToken`) to exercise both sort orderings. The `projectToken` address only affects
@@ -147,32 +148,43 @@ contract ZeroRateFallbackRegression is LPSplitHookV4TestBase {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // 1. Cash-out fallback: terminalToken is token0 → returns MAX_SQRT_PRICE - 1
+    // 1. Cash-out bound at a zero preview: terminalToken is token0
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice When cashOutRate=0 and terminalToken < projectToken (terminal is token0),
-    ///         sqrtPriceX96 = sqrt(PT/TT). Project token is worthless → ratio → ∞ → MAX.
-    function test_cashOutFallback_terminalIsToken0_returnsMax() public {
-        store.setSurplus(PROJECT_ID, 0);
+    /// @notice When cashOutRate=0 and terminalToken < projectToken (terminal is token0), sqrtPriceX96 = sqrt(PT/TT) at
+    ///         the bound of 2 wei per project token: floor(sqrt(floor(1e18 * 2^192 / 2))), rounded down (a higher
+    ///         project price).
+    function test_cashOutBound_zeroPreview_terminalIsToken0() public {
+        // A zero surplus makes the cash-out preview zero.
+        store.setSurplus({projectId: PROJECT_ID, surplus: 0});
 
-        uint160 result =
-            harness.exposed_getCashOutRateSqrtPriceX96(PROJECT_ID, address(terminalToken), highProjectToken);
+        // The high project token sorts above the terminal token, so the terminal token is token0.
+        uint160 result = harness.exposed_getCashOutRateSqrtPriceX96({
+            projectId: PROJECT_ID, terminalToken: address(terminalToken), projectToken: highProjectToken
+        });
 
-        assertEq(result, TickMath.MAX_SQRT_PRICE - 1, "terminal=token0: cashOut fallback should be MAX");
+        // The encoder lands exactly on the floor-rounded price of the 2 wei bound.
+        assertEq(result, 56_022_770_974_786_139_918_731_938_227_458_171_762, "terminal=token0: bound of 2 wei");
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // 2. Cash-out fallback: terminalToken is token1 → returns MIN_SQRT_PRICE
+    // 2. Cash-out bound at a zero preview: terminalToken is token1
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice When cashOutRate=0 and terminalToken > projectToken (project is token0),
-    ///         sqrtPriceX96 = sqrt(TT/PT). Project token is worthless → ratio → 0 → MIN.
-    function test_cashOutFallback_terminalIsToken1_returnsMin() public {
-        store.setSurplus(PROJECT_ID, 0);
+    /// @notice When cashOutRate=0 and terminalToken > projectToken (project is token0), sqrtPriceX96 = sqrt(TT/PT) at
+    ///         the bound of 2 wei per project token: ceil(sqrt(ceil(2 * 2^192 / 1e18))), rounded up (a higher project
+    ///         price).
+    function test_cashOutBound_zeroPreview_terminalIsToken1() public {
+        // A zero surplus makes the cash-out preview zero.
+        store.setSurplus({projectId: PROJECT_ID, surplus: 0});
 
-        uint160 result = harness.exposed_getCashOutRateSqrtPriceX96(PROJECT_ID, address(terminalToken), lowProjectToken);
+        // The low project token sorts below the terminal token, so the project token is token0.
+        uint160 result = harness.exposed_getCashOutRateSqrtPriceX96({
+            projectId: PROJECT_ID, terminalToken: address(terminalToken), projectToken: lowProjectToken
+        });
 
-        assertEq(result, TickMath.MIN_SQRT_PRICE, "terminal=token1: cashOut fallback should be MIN");
+        // The encoder lands exactly on the ceil-rounded price of the 2 wei bound.
+        assertEq(result, 112_045_541_949_572_279_838, "terminal=token1: bound of 2 wei");
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -206,49 +218,55 @@ contract ZeroRateFallbackRegression is LPSplitHookV4TestBase {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // 5. Cash-out continuity: fallback matches limit direction as rate → 0+
+    // 5. Cash-out continuity: the zero-preview bound continues the formula as rate → 0+
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice As surplus decreases toward 0, the formula's sqrtPrice monotonically approaches
-    ///         the fallback extreme. Verifies the fallback is the correct limit for both orderings.
-    function test_cashOutFallback_continuityWithFormula() public {
+    /// @notice As surplus decreases toward 0, the formula's sqrtPrice moves monotonically toward the cheap end, and a
+    ///         zero preview lands on the bound of 2 wei per token, one step further, for both orderings.
+    function test_cashOutBound_continuityWithFormula() public {
         // ── Ordering A: terminalToken is token0 ──
-        // As cashOutRate decreases, token1Amount = WAD²/rate increases → sqrtPrice increases → MAX
-        store.setSurplus(PROJECT_ID, 0.5e18); // normal surplus
-        uint160 price_normal_A =
-            harness.exposed_getCashOutRateSqrtPriceX96(PROJECT_ID, address(terminalToken), highProjectToken);
+        // As cashOutRate decreases, token1Amount = WAD²/rate increases → sqrtPrice increases.
+        store.setSurplus({projectId: PROJECT_ID, surplus: 0.5e18}); // normal surplus
+        uint160 priceNormalA = harness.exposed_getCashOutRateSqrtPriceX96({
+            projectId: PROJECT_ID, terminalToken: address(terminalToken), projectToken: highProjectToken
+        });
 
-        store.setSurplus(PROJECT_ID, 0.001e18); // tiny surplus
-        uint160 price_tiny_A =
-            harness.exposed_getCashOutRateSqrtPriceX96(PROJECT_ID, address(terminalToken), highProjectToken);
+        store.setSurplus({projectId: PROJECT_ID, surplus: 0.001e18}); // tiny surplus
+        uint160 priceTinyA = harness.exposed_getCashOutRateSqrtPriceX96({
+            projectId: PROJECT_ID, terminalToken: address(terminalToken), projectToken: highProjectToken
+        });
 
-        store.setSurplus(PROJECT_ID, 0); // zero → fallback
-        uint160 fallback_A =
-            harness.exposed_getCashOutRateSqrtPriceX96(PROJECT_ID, address(terminalToken), highProjectToken);
+        store.setSurplus({projectId: PROJECT_ID, surplus: 0}); // zero → the bound of 2 wei
+        uint160 boundA = harness.exposed_getCashOutRateSqrtPriceX96({
+            projectId: PROJECT_ID, terminalToken: address(terminalToken), projectToken: highProjectToken
+        });
 
-        // Monotonicity: price increases toward MAX as rate decreases
-        assertGt(price_tiny_A, price_normal_A, "A: smaller surplus -> higher sqrtPrice");
-        assertEq(fallback_A, TickMath.MAX_SQRT_PRICE - 1, "A: zero surplus -> MAX");
-        assertGt(fallback_A, price_tiny_A, "A: fallback >= tiny surplus price");
+        // Monotonicity: price increases as rate decreases, and the zero-preview bound is one step further.
+        assertGt(priceTinyA, priceNormalA, "A: smaller surplus -> higher sqrtPrice");
+        assertEq(boundA, 56_022_770_974_786_139_918_731_938_227_458_171_762, "A: zero surplus -> the bound of 2 wei");
+        assertGt(boundA, priceTinyA, "A: the zero-preview bound >= tiny surplus price");
 
         // ── Ordering B: terminalToken is token1 ──
-        // As cashOutRate decreases, token1Amount = rate decreases → sqrtPrice decreases → MIN
-        store.setSurplus(PROJECT_ID, 0.5e18);
-        uint160 price_normal_B =
-            harness.exposed_getCashOutRateSqrtPriceX96(PROJECT_ID, address(terminalToken), lowProjectToken);
+        // As cashOutRate decreases, token1Amount = rate decreases → sqrtPrice decreases.
+        store.setSurplus({projectId: PROJECT_ID, surplus: 0.5e18}); // normal surplus
+        uint160 priceNormalB = harness.exposed_getCashOutRateSqrtPriceX96({
+            projectId: PROJECT_ID, terminalToken: address(terminalToken), projectToken: lowProjectToken
+        });
 
-        store.setSurplus(PROJECT_ID, 0.001e18);
-        uint160 price_tiny_B =
-            harness.exposed_getCashOutRateSqrtPriceX96(PROJECT_ID, address(terminalToken), lowProjectToken);
+        store.setSurplus({projectId: PROJECT_ID, surplus: 0.001e18}); // tiny surplus
+        uint160 priceTinyB = harness.exposed_getCashOutRateSqrtPriceX96({
+            projectId: PROJECT_ID, terminalToken: address(terminalToken), projectToken: lowProjectToken
+        });
 
-        store.setSurplus(PROJECT_ID, 0);
-        uint160 fallback_B =
-            harness.exposed_getCashOutRateSqrtPriceX96(PROJECT_ID, address(terminalToken), lowProjectToken);
+        store.setSurplus({projectId: PROJECT_ID, surplus: 0}); // zero → the bound of 2 wei
+        uint160 boundB = harness.exposed_getCashOutRateSqrtPriceX96({
+            projectId: PROJECT_ID, terminalToken: address(terminalToken), projectToken: lowProjectToken
+        });
 
-        // Monotonicity: price decreases toward MIN as rate decreases
-        assertLt(price_tiny_B, price_normal_B, "B: smaller surplus -> lower sqrtPrice");
-        assertEq(fallback_B, TickMath.MIN_SQRT_PRICE, "B: zero surplus -> MIN");
-        assertLt(fallback_B, price_tiny_B, "B: fallback <= tiny surplus price");
+        // Monotonicity: price decreases as rate decreases, and the zero-preview bound is one step further.
+        assertLt(priceTinyB, priceNormalB, "B: smaller surplus -> lower sqrtPrice");
+        assertEq(boundB, 112_045_541_949_572_279_838, "B: zero surplus -> the bound of 2 wei");
+        assertLt(boundB, priceTinyB, "B: the zero-preview bound <= tiny surplus price");
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -278,7 +296,7 @@ contract ZeroRateFallbackRegression is LPSplitHookV4TestBase {
         assertLt(fallback_A, price_tiny_A, "A: fallback <= near-zero issuance price");
 
         // ── Ordering B: terminalToken is token1 ──
-        // As issuanceRate decreases, token1Amount = WAD²/rate increases → sqrtPrice increases → MAX
+        // As issuanceRate decreases, token1Amount = WAD²/rate increases → sqrtPrice increases
         controller.setReservedPercent(PROJECT_ID, 1000);
         uint160 price_normal_B =
             harness.exposed_getIssuanceRateSqrtPriceX96(PROJECT_ID, address(terminalToken), lowProjectToken);

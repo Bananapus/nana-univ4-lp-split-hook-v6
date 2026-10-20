@@ -3,7 +3,7 @@ pragma solidity 0.8.28;
 
 // ─── Test base and imports
 // ────────────────────────────────────────────
-import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
+import {LPSplitHookV4TestBase, DEFAULT_SURPLUS_PER_TOKEN} from "../TestBaseV4.sol";
 import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/IJBBuybackHookRegistry.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
 import {MockJBController} from "../mock/MockJBContracts.sol";
@@ -198,7 +198,7 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
         _setDirectoryController(FEE_PROJECT_ID, address(tsController));
 
         // Set a non-zero total surplus so the cashout rate is non-zero.
-        store.setSurplus(PROJECT_ID, 0.5e18);
+        store.setSurplus({projectId: PROJECT_ID, surplus: DEFAULT_SURPLUS_PER_TOKEN});
     }
 
     // ─── Helper: accumulate tokens via the custom controller ─
@@ -211,7 +211,8 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
         projectToken.approve(address(hook), amount);
         // Build a reserved-token split context (groupId = 1).
         JBSplitHookContext memory context = _buildReservedContext(projectId, amount);
-        hook.processSplitWith(context);
+        // Cap the gas below the inline-automation floor so the split is only accumulated.
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
     }
 
@@ -231,12 +232,12 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
-        // The pool should now exist (tokenIdOf != 0).
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        // The pool exists, with an ask position minted.
+        uint256 tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         assertGt(tokenId, 0, "pool should be deployed with scopeCashOutsToLocalBalances=false");
 
-        // Accumulated project tokens should be cleared after deployment.
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "accumulated tokens should be zero after deploy");
+        // Accumulated project tokens should be placed after deployment: only V4 rounding stays ledgered.
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), amount, 0);
     }
 
     /// @notice Compare behavior: deploy with `scopeCashOutsToLocalBalances = true`
@@ -247,7 +248,7 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
         _accumulateViaController(PROJECT_ID, 100e18);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
-        uint256 tokenIdLocal = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenIdLocal = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         assertGt(tokenIdLocal, 0, "local surplus path should deploy successfully");
 
         // ── Path B: total surplus (flag is true) ──
@@ -274,7 +275,7 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
                 token: address(terminalToken), decimals: 18, currency: uint32(uint160(address(terminalToken)))
             })
         );
-        store.setSurplus(projectB, 0.5e18);
+        store.setSurplus({projectId: projectB, surplus: DEFAULT_SURPLUS_PER_TOKEN});
         store.setBalance(address(terminal), projectB, address(terminalToken), 10e18);
 
         // Accumulate and deploy.
@@ -282,24 +283,26 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
         vm.startPrank(address(tsController));
         projectToken.approve(address(hook), 100e18);
         JBSplitHookContext memory ctxB = _buildContext(projectB, address(projectToken), 100e18, 1);
-        hook.processSplitWith(ctxB);
+        // Cap the gas below the inline-automation floor so the split is only accumulated.
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(ctxB);
         vm.stopPrank();
 
         vm.prank(owner);
         hook.deployPool(projectB);
-        uint256 tokenIdTotal = hook.tokenIdOf(projectB, address(terminalToken));
+        // The total-surplus path deploys and mints the ask position.
+        uint256 tokenIdTotal = hook.askTokenIdOf({projectId: projectB, terminalToken: address(terminalToken)});
         assertGt(tokenIdTotal, 0, "total surplus path should deploy successfully");
     }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// Test 2: Fee token claims excluded from rebalance
+// Test 2: Fee token claims excluded from recycle
 // ═══════════════════════════════════════════════════════════════════════
 
-/// @title FeeTokensExcludedFromRebalanceTest
-/// @notice After LP fees generate claimable fee tokens, a rebalance must NOT
-///         consume those reserved fee tokens in the new LP position.
-contract FeeTokensExcludedFromRebalanceTest is LPSplitHookV4TestBase {
+/// @title FeeTokensExcludedFromRecycleTest
+/// @notice After LP fees generate claimable fee tokens, a recycle (`addLiquidity`) must NOT
+///         consume those reserved fee tokens in the re-minted LP positions.
+contract FeeTokensExcludedFromRecycleTest is LPSplitHookV4TestBase {
     // Custom controller that can actually burn tokens.
     TotalSurplusController internal burnController;
 
@@ -325,7 +328,7 @@ contract FeeTokensExcludedFromRebalanceTest is LPSplitHookV4TestBase {
             newBuybackHook: IJBBuybackHookRegistry(address(0))
         });
 
-        // We need a controller that can actually burn tokens so rebalance works.
+        // We need a controller that can actually burn tokens so the recycle works.
         burnController = new TotalSurplusController();
         burnController.setPrices(address(prices));
         burnController.setWeight(PROJECT_ID, DEFAULT_WEIGHT);
@@ -343,7 +346,7 @@ contract FeeTokensExcludedFromRebalanceTest is LPSplitHookV4TestBase {
         _setDirectoryController(FEE_PROJECT_ID, address(burnController));
 
         // Set surplus for fee project so fee token routing works.
-        store.setSurplus(FEE_PROJECT_ID, 0.5e18);
+        store.setSurplus({projectId: FEE_PROJECT_ID, surplus: DEFAULT_SURPLUS_PER_TOKEN});
     }
 
     /// @notice Helper: accumulate with the burning controller as caller.
@@ -352,20 +355,21 @@ contract FeeTokensExcludedFromRebalanceTest is LPSplitHookV4TestBase {
         vm.startPrank(address(burnController));
         projectToken.approve(address(hook), amount);
         JBSplitHookContext memory ctx = _buildReservedContext(projectId, amount);
-        hook.processSplitWith(ctx);
+        // Cap the gas below the inline-automation floor so the split is only accumulated.
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(ctx);
         vm.stopPrank();
     }
 
-    /// @notice Deploy a pool, generate LP fee tokens, then rebalance. The reserved
-    ///         fee tokens must still be claimable after the rebalance.
-    function test_RebalanceDoesNotConsumeFeeTokens() public {
+    /// @notice Deploy a pool, generate LP fee tokens, then recycle. The reserved
+    ///         fee tokens must still be claimable after the recycle.
+    function test_RecycleDoesNotConsumeFeeTokens() public {
         // Step 1: accumulate and deploy a pool.
         _accumulateForProject(PROJECT_ID, 100e18);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
         // Step 2: generate LP fees and collect them.
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         bool terminalIsToken0 = address(terminalToken) < address(projectToken);
         uint256 feeAmount = 50e18;
 
@@ -381,24 +385,21 @@ contract FeeTokensExcludedFromRebalanceTest is LPSplitHookV4TestBase {
         // Collect fees — this generates claimable fee tokens.
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
 
-        // Record the claimable amount before rebalance.
+        // Record the claimable amount before the recycle.
         uint256 claimableBefore = hook.claimableFeeTokens(PROJECT_ID);
         assertGt(claimableBefore, 0, "precondition: should have claimable fee tokens");
 
-        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
-        burnController.setWeight(PROJECT_ID, 900e18);
+        // Step 3: a new reserved distribution arrives and anyone recycles the LP positions.
+        _accumulateForProject({projectId: PROJECT_ID, amount: 10e18});
+        hook.addLiquidity({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
-        // Step 3: rebalance the LP position.
-        vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
-
-        // Step 4: verify fee tokens are intact after rebalance.
+        // Step 4: verify fee tokens are intact after the recycle.
         uint256 claimableAfter = hook.claimableFeeTokens(PROJECT_ID);
-        assertEq(claimableAfter, claimableBefore, "claimable fee tokens must be unchanged after rebalance");
+        assertEq(claimableAfter, claimableBefore, "claimable fee tokens must be unchanged after recycle");
 
         // The hook must still hold at least the claimable amount of fee tokens.
         uint256 feeBalanceAfter = feeProjectToken.balanceOf(address(hook));
-        assertGe(feeBalanceAfter, claimableAfter, "hook must still hold fee tokens after rebalance");
+        assertGe(feeBalanceAfter, claimableAfter, "hook must still hold fee tokens after recycle");
 
         // Step 5: verify claiming still works.
         vm.prank(owner);
@@ -406,7 +407,7 @@ contract FeeTokensExcludedFromRebalanceTest is LPSplitHookV4TestBase {
         assertEq(
             feeProjectToken.balanceOf(user),
             claimableBefore,
-            "user should receive all claimable fee tokens after rebalance"
+            "user should receive all claimable fee tokens after recycle"
         );
     }
 }
@@ -459,7 +460,7 @@ contract FeeTokensExcludedFromSplitBalanceCheckTest is LPSplitHookV4TestBase {
         controller = MockJBController(address(burnController));
         _setDirectoryController(PROJECT_ID, address(burnController));
         _setDirectoryController(FEE_PROJECT_ID, address(burnController));
-        store.setSurplus(FEE_PROJECT_ID, 0.5e18);
+        store.setSurplus({projectId: FEE_PROJECT_ID, surplus: DEFAULT_SURPLUS_PER_TOKEN});
     }
 
     /// @notice Set up a second project (project 3) that shares the same hook clone
@@ -475,14 +476,15 @@ contract FeeTokensExcludedFromSplitBalanceCheckTest is LPSplitHookV4TestBase {
         vm.startPrank(address(burnController));
         projectToken.approve(address(hook), 100e18);
         JBSplitHookContext memory ctx1 = _buildReservedContext(PROJECT_ID, 100e18);
-        hook.processSplitWith(ctx1);
+        // Cap the gas below the inline-automation floor so the split is only accumulated.
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(ctx1);
         vm.stopPrank();
 
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
         // Generate LP fees for project 1 so that claimableFeeTokens > 0.
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         bool terminalIsToken0 = address(terminalToken) < address(projectToken);
         uint256 feeAmount = 80e18;
         if (terminalIsToken0) {
@@ -517,7 +519,7 @@ contract FeeTokensExcludedFromSplitBalanceCheckTest is LPSplitHookV4TestBase {
         // JBTokens maps project 3 to the fee project token.
         jbTokens.setToken(projectB, address(feeProjectToken));
         terminal.setProjectToken(projectB, address(feeProjectToken));
-        store.setSurplus(projectB, 0.5e18);
+        store.setSurplus({projectId: projectB, surplus: DEFAULT_SURPLUS_PER_TOKEN});
 
         // ── Step 3: Accumulate project tokens for project 3. ──
 
@@ -533,8 +535,9 @@ contract FeeTokensExcludedFromSplitBalanceCheckTest is LPSplitHookV4TestBase {
         // The balance guard in processSplitWith checks:
         //   balanceOf(this) - _totalOutstandingFeeTokenClaims >= accumulatedProjectTokens
         // Without the subtraction, this would revert because balanceOf includes
-        // project 1's reserved fee tokens that do not belong to project 3.
-        hook.processSplitWith(ctx3);
+        // project 1's reserved fee tokens that do not belong to project 3. The gas cap keeps the call below the
+        // inline-automation floor so the split is only accumulated.
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(ctx3);
         vm.stopPrank();
 
         // ── Step 4: Verify accumulation succeeded. ──

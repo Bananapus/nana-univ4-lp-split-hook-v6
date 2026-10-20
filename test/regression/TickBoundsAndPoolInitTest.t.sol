@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
+import {LPSplitHookV4TestBase, DEFAULT_SURPLUS_PER_TOKEN} from "../TestBaseV4.sol";
 import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/IJBBuybackHookRegistry.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
 import {JBUniswapV4LPSplitHookMath} from "../../src/libraries/JBUniswapV4LPSplitHookMath.sol";
@@ -107,9 +107,11 @@ contract RegressionFixM4Test is LPSplitHookV4TestBase {
             hooks: hook.oracleHook()
         });
 
-        // Pre-initialize the pool at a price within the project's economic bounds.
-        // Tick 50,000 falls within the cashout-to-issuance range for default test config.
-        int24 inBoundsTick = int24(50_000);
+        // Pre-initialize the pool at a price within the project's economic bounds. With the terminal token as
+        // token0 (default fixture ordering) the price is project tokens per terminal token: the issuance ceiling
+        // (900) sits at tick ~68,023 (aligned up to 68,200) and the cash-out floor (1 / 0.0005 = 2000) at tick
+        // ~76,013 (aligned down to 76,000), so tick 72,000 is inside the corridor.
+        int24 inBoundsTick = int24(72_000);
         uint160 inBoundsSqrtPrice = TickMath.getSqrtPriceAtTick(inBoundsTick);
         positionManager.initializePool(key, inBoundsSqrtPrice);
 
@@ -121,9 +123,13 @@ contract RegressionFixM4Test is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
-        // Verify deployment succeeded.
+        // Verify deployment succeeded and minted the ask position.
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "project should have a deployed pool");
-        assertGt(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "LP position should be created");
+        assertGt(
+            hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            0,
+            "LP position should be created"
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -177,8 +183,13 @@ contract RegressionFixM4Test is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
+        // The deploy records the pool and mints the ask position.
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "project should have a deployed pool");
-        assertGt(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "LP position should be created");
+        assertGt(
+            hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            0,
+            "LP position should be created"
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -219,10 +230,11 @@ contract RegressionFixM4Test is LPSplitHookV4TestBase {
     }
 }
 
-/// @notice Tests verifying the regression fix: fallback tick computation re-clamps to valid TickMath range.
-/// @dev fix adds a second clamping pass after the fallback calculation (currentTick +/- TICK_SPACING).
-///      Without it, a currentTick at MIN_TICK or MAX_TICK would produce ticks outside the valid range,
-///      causing TickMath.getSqrtPriceAtTick to revert.
+/// @notice Tests verifying the tick bounds stay inside the valid TickMath range at extreme prices, and that a band
+/// in which no aligned spacing fits is an empty corridor.
+/// @dev Without the clamp, a bound past MIN_TICK or MAX_TICK would make TickMath.getSqrtPriceAtTick revert. A collapsed
+///      band returns (0, 0) and the hook holds, rather than opening a band around the issuance price whose asks would
+///      sit below the cash-out value.
 contract RegressionFixL6Test is LPSplitHookV4TestBase {
     TickBoundsTestableHook public testableHook;
 
@@ -269,78 +281,105 @@ contract RegressionFixL6Test is LPSplitHookV4TestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 4. Fallback ticks near MIN_TICK are clamped to valid range
+    // 4. An extreme issuance price is clamped to the valid range
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice When cashOut and issuance rates produce nearly identical ticks (collapsing
-    ///         tickLower >= tickUpper), the fallback uses currentTick +/- TICK_SPACING.
-    ///         If currentTick is near MIN_TICK, the fix clamps tickLower to minUsable.
-    function test_L6_FallbackTickNearMinTick_ClampedToValidRange() public {
-        // Force the fallback branch by making cashOut and issuance rates nearly equal.
-        // With very high surplus, cashOutRate approaches issuanceRate, causing tick collapse.
-        store.setSurplus(PROJECT_ID, 900e18); // Very high surplus relative to supply
+    /// @notice A weight of 1 wei puts the issuance price far out (2 project wei per terminal token, tick -407,5xx
+    /// rounded inward to -407,400) but still inside the usable range, and a cash-out value of 900 sits far below it
+    /// (tick -68,0xx aligned down to -68,200): the corridor is wide and no clamp binds.
+    function test_L6_ExtremeIssuancePrice_ClampedToValidRange() public {
+        // A high cash-out value and a 1 wei weight with no reserved tokens push the two bounds far apart.
+        store.setSurplus({projectId: PROJECT_ID, surplus: 900e18});
+        controller.setWeight({projectId: PROJECT_ID, weight: 1});
+        controller.setReservedPercent({projectId: PROJECT_ID, reservedPercent: 0});
+        assertTrue(address(terminalToken) < address(projectToken), "precondition: the project is token1");
 
-        // Set weight very low so the current Juicebox price maps to a tick near MIN_TICK.
-        // A very low issuance rate means: for 1 WAD terminal tokens, very few project tokens.
-        // If project is token1 and terminal is token0, low issuance means low token1/token0 ratio => low sqrtPrice =>
-        // near MIN_TICK.
-        controller.setWeight(PROJECT_ID, 1); // Extremely low weight => near-zero issuance
-        controller.setReservedPercent(PROJECT_ID, 0);
+        // Both bounds land inside the usable range at their inward-rounded ticks.
+        (int24 tickLower, int24 tickUpper) = testableHook.exposed_calculateTickBounds({
+            projectId: PROJECT_ID, terminalToken: address(terminalToken), projectToken: address(projectToken)
+        });
 
-        // The fallback should trigger and the fix ensures no revert.
-        // Without the fix, this would revert in TickMath.getSqrtPriceAtTick if tick < MIN_TICK.
-        (int24 tickLower, int24 tickUpper) =
-            testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
+        assertEq(tickLower, -407_400, "tickLower");
+        assertEq(tickUpper, -68_200, "tickUpper");
+    }
 
-        int24 minUsable = _minUsableTick();
-        int24 maxUsable = _maxUsableTick();
+    /// @notice A saturated endpoint: with a cash-out value but no issuance (zero weight) the issuance price encodes at
+    /// TickMath's limit. With the project as token0 it is MAX_SQRT_PRICE - 1 (tick 887,271, aligned down to 887,200),
+    /// one spacing past the usable range, and the upper clamp brings it to exactly 887,000. With the project as token1
+    /// it is MIN_SQRT_PRICE (tick -887,272), whose inward rounding lands exactly on the usable minimum -887,200. The
+    /// cash-out floor (0.0005 per token) bounds the other side.
+    function test_L6_SaturatedIssuanceEndpoint_ClampsToUsableRange() public {
+        // A zero weight with no reserved tokens saturates the issuance price.
+        controller.setWeight({projectId: PROJECT_ID, weight: 0});
+        controller.setReservedPercent({projectId: PROJECT_ID, reservedPercent: 0});
+        // An address just below the terminal token makes the project token0.
+        address lowProjectToken = address(uint160(address(terminalToken)) - 1);
+        assertTrue(address(terminalToken) < address(projectToken), "precondition: the project is token1");
 
-        // Verify ticks are within valid range.
-        assertGe(tickLower, minUsable, "tickLower must be >= minUsable after clamping");
-        assertLe(tickUpper, maxUsable, "tickUpper must be <= maxUsable after clamping");
-        assertLt(tickLower, tickUpper, "tickLower must be < tickUpper");
+        // Project as token0: the saturated issuance bound clamps to the usable maximum.
+        (int24 tickLower, int24 tickUpper) = testableHook.exposed_calculateTickBounds({
+            projectId: PROJECT_ID, terminalToken: address(terminalToken), projectToken: lowProjectToken
+        });
+        assertEq(tickLower, -76_000, "project token0: the cash-out floor");
+        assertEq(tickUpper, _maxUsableTick(), "project token0: clamped to the usable maximum");
+        assertEq(tickUpper, 887_000, "project token0: the usable maximum");
+
+        // Project as token1: the saturated issuance bound rounds inward onto the usable minimum.
+        (tickLower, tickUpper) = testableHook.exposed_calculateTickBounds({
+            projectId: PROJECT_ID, terminalToken: address(terminalToken), projectToken: address(projectToken)
+        });
+        assertEq(tickLower, _minUsableTick(), "project token1: the usable minimum");
+        assertEq(tickLower, -887_200, "project token1: the usable minimum");
+        assertEq(tickUpper, 76_000, "project token1: the cash-out floor");
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 5. Fallback ticks near MAX_TICK are clamped to valid range
+    // 5. A band no aligned spacing fits in, at an extreme price, is empty
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice When the current Juicebox price maps to a tick near MAX_TICK, the fallback
-    ///         calculation (currentTick + TICK_SPACING) would exceed MAX_TICK without clamping.
-    function test_L6_FallbackTickNearMaxTick_ClampedToValidRange() public {
-        // Force the fallback branch: make cashOut and issuance rates nearly equal.
-        store.setSurplus(PROJECT_ID, 900e18);
+    /// @notice A cash-out value 1% under an extreme issuance price (weight type(uint88).max, around tick +/-195,500)
+    /// leaves a band about 100 ticks wide with no aligned spacing in it. The corridor is empty, not reopened as
+    /// currentTick +/- one spacing, and the hook refuses to deploy into it.
+    function test_L6_NarrowBandAtExtremePrice_EmptyCorridor() public {
+        // The issuance price is 1e36 / weight terminal-token wei per 1e18 project tokens.
+        // Intentionally divide first: the issuance price per token, then 99% of it.
+        // forge-lint: disable-next-line(divide-before-multiply)
+        store.setSurplus({projectId: PROJECT_ID, surplus: (1e36 / uint256(type(uint88).max)) * 99 / 100});
+        controller.setWeight({projectId: PROJECT_ID, weight: type(uint88).max});
+        controller.setReservedPercent({projectId: PROJECT_ID, reservedPercent: 0});
 
-        // Set extremely high weight to push currentTick toward MAX_TICK.
-        // High issuance rate means: for 1 WAD terminal tokens, lots of project tokens.
-        // If project is token1 and terminal is token0, high issuance means high token1/token0 ratio => high sqrtPrice
-        // => near MAX_TICK.
-        controller.setWeight(PROJECT_ID, type(uint88).max); // Very high weight
-        controller.setReservedPercent(PROJECT_ID, 0);
+        // No aligned spacing fits between the bounds, so the corridor is the empty (0, 0) band.
+        (int24 tickLower, int24 tickUpper) = testableHook.exposed_calculateTickBounds({
+            projectId: PROJECT_ID, terminalToken: address(terminalToken), projectToken: address(projectToken)
+        });
+        assertEq(tickLower, 0, "empty corridor lower");
+        assertEq(tickUpper, 0, "empty corridor upper");
 
-        // The fallback should trigger and the fix ensures no revert.
-        (int24 tickLower, int24 tickUpper) =
-            testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
-
-        int24 minUsable = _minUsableTick();
-        int24 maxUsable = _maxUsableTick();
-
-        // Verify ticks are within valid range.
-        assertGe(tickLower, minUsable, "tickLower must be >= minUsable after clamping");
-        assertLe(tickUpper, maxUsable, "tickUpper must be <= maxUsable after clamping");
-        assertLt(tickLower, tickUpper, "tickLower must be < tickUpper");
+        // The deploy refuses the empty corridor and leaves the reserved tokens ledgered.
+        _accumulateTokens({projectId: PROJECT_ID, amount: 1e18});
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_EmptyCorridor.selector, PROJECT_ID, address(terminalToken)
+            )
+        );
+        hook.deployPool(PROJECT_ID);
+        assertFalse(
+            hook.isPoolDeployed({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            "the pool is not deployed"
+        );
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 1e18, "the reserved tokens stay ledgered");
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 6. Normal fallback ticks (in middle of range) are unaffected
+    // 6. Well-separated prices (in middle of range) give a wide corridor
     // ─────────────────────────────────────────────────────────────────────
 
     /// @notice When cashOut and issuance rates produce well-separated ticks (middle of range),
-    ///         the normal (non-fallback) path produces valid, clamped tick bounds.
+    ///         the corridor is valid, clamped and wide.
     function test_L6_NormalTicks_ValidBounds() public {
-        // With moderate surplus and default weight, cashout and issuance ticks are well-separated,
-        // so the normal path runs (not the fallback).
-        store.setSurplus(PROJECT_ID, 900e18);
+        // With moderate surplus and default weight, cashout and issuance ticks are well-separated (cash-out value
+        // 0.0005 vs issuance price 1/900, about 39 spacings).
+        store.setSurplus({projectId: PROJECT_ID, surplus: DEFAULT_SURPLUS_PER_TOKEN});
 
         (int24 tickLower, int24 tickUpper) =
             testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
@@ -348,16 +387,12 @@ contract RegressionFixL6Test is LPSplitHookV4TestBase {
         int24 minUsable = _minUsableTick();
         int24 maxUsable = _maxUsableTick();
 
-        // Verify ticks are within valid range (always true post-fix).
+        // Verify ticks are within the valid range the clamp guarantees.
         assertGe(tickLower, minUsable, "tickLower must be >= minUsable");
         assertLe(tickUpper, maxUsable, "tickUpper must be <= maxUsable");
         assertLt(tickLower, tickUpper, "tickLower must be < tickUpper");
 
-        // Range should be wider than the minimal fallback width.
-        assertGt(
-            tickUpper - tickLower,
-            2 * TICK_SPACING,
-            "normal path should produce a wider range than the fallback minimum"
-        );
+        // The corridor spans many spacings.
+        assertGt(tickUpper - tickLower, 2 * TICK_SPACING, "the corridor should span more than two spacings");
     }
 }

@@ -9,7 +9,7 @@ import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookCont
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {IJBSplitHook} from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
 import {MockERC20} from "./mock/MockERC20.sol";
-import {MockJBController} from "./mock/MockJBContracts.sol";
+import {MockJBController, MockJBTerminalStore} from "./mock/MockJBContracts.sol";
 
 // ═══════════════════════════════════════════════════════════════════════
 // Malicious Contracts
@@ -135,6 +135,27 @@ contract ReentrantControllerTerminal is MockJBController {
         }
     }
 
+    /// @notice This terminal's own surplus for a project, as its store reports it.
+    /// @dev Matches `IJBTerminal.currentSurplusOf`; the unnamed accounting-context list is ignored because the store
+    /// reports the total surplus.
+    /// @param projectId The project to read the surplus of.
+    /// @param decimals The decimals the surplus is expressed in.
+    /// @param currency The currency the surplus is expressed in.
+    /// @return surplus The project's surplus in this terminal.
+    function currentSurplusOf(
+        uint256 projectId,
+        address[] calldata,
+        uint256 decimals,
+        uint256 currency
+    )
+        external
+        view
+        returns (uint256 surplus)
+    {
+        // Delegate to the store so the hook reads the same surplus a real terminal would report.
+        return MockJBTerminalStore(storeAddr).currentTotalSurplusOf(projectId, decimals, currency);
+    }
+
     function pay(
         uint256,
         address token,
@@ -167,8 +188,7 @@ contract ReentrantControllerTerminal is MockJBController {
 
 /// @notice Fee terminal that re-enters hook functions during `pay()`.
 /// @dev Supports two re-entry modes:
-///      - REBALANCE: re-enters `rebalanceLiquidity` (permissionless — must now be blocked by the `nonReentrant`
-///        guard, since no permission check exists to save it anymore).
+///      - ADD_LIQUIDITY: re-enters `addLiquidity` (permissionless — only the `nonReentrant` guard can block it).
 ///      - COLLECT_FEES: re-enters `collectAndRouteLPFees` (also guarded; the outer call still completes and
 ///        collects fees exactly once).
 contract ReentrantFeeTerminal {
@@ -180,7 +200,7 @@ contract ReentrantFeeTerminal {
     enum ReentryMode {
         NONE,
         COLLECT_FEES,
-        REBALANCE
+        ADD_LIQUIDITY
     }
 
     ReentryMode public reentryMode;
@@ -233,10 +253,10 @@ contract ReentrantFeeTerminal {
                     reentryReverted = true;
                     reentryRevertSelector = _extractSelector(reason);
                 }
-            } else if (reentryMode == ReentryMode.REBALANCE) {
-                // Re-enter rebalanceLiquidity. `rebalanceLiquidity` is permissionless, so only the `nonReentrant`
-                // guard can stop this now.
-                try hook.rebalanceLiquidity(projectId, terminalTokenAddr) {
+            } else if (reentryMode == ReentryMode.ADD_LIQUIDITY) {
+                // Re-enter addLiquidity. `addLiquidity` is permissionless, so only the `nonReentrant` guard can stop
+                // this.
+                try hook.addLiquidity({projectId: projectId, terminalToken: terminalTokenAddr}) {
                 // Should NOT reach here.
                 }
                 catch (bytes memory reason) {
@@ -279,7 +299,7 @@ contract ReentrantFeeTerminal {
 // ═══════════════════════════════════════════════════════════════════════
 
 /// @notice Reentrancy safety tests for JBUniswapV4LPSplitHook.
-/// @dev The hook's six external state-changing entry points (`deployPool`, `addLiquidity`, `rebalanceLiquidity`,
+/// @dev The hook's five external state-changing entry points (`deployPool`, `addLiquidity`,
 ///      `collectAndRouteLPFees`, `claimFeeTokensFor`, `processSplitWith`) are all guarded by solady's
 ///      `ReentrancyGuard.nonReentrant`. These tests prove that a malicious controller/terminal/fee-terminal that
 ///      re-enters the hook mid-call is blocked deterministically by the guard — not by an incidental
@@ -318,12 +338,10 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
         );
         store.setBalance(address(malicious), PROJECT_ID, address(terminalToken), 10e18);
 
-        // 4. Fund the hook with real terminal-token dust, and configure the mock PositionManager to only use 80% of
-        // the amounts offered to MINT_POSITION (matching the pattern other tests use to exercise leftover-carry
-        // behavior). The unconsumed project-token side is carried into the accumulation ledger via a pure state write;
-        // the terminal side, when any, is carried into the terminal ledger — neither makes an external call.
+        // 4. Fund the hook with real terminal-token dust. Step 6 caps the ask at 80% of its liquidity with V4's
+        // per-tick cap, so the unconsumed project-token side is carried into the accumulation ledger via a pure state
+        // write; the terminal side, when any, is carried into the terminal ledger — neither makes an external call.
         terminalToken.mint(address(hook), 10e18);
-        positionManager.setUsagePercent(8000);
 
         // 5. Accumulate tokens through the malicious controller.
         uint256 accumulateAmount = 1000e18;
@@ -332,13 +350,15 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
         vm.startPrank(address(malicious)); // malicious IS the controller
         projectToken.approve(address(hook), accumulateAmount);
         JBSplitHookContext memory accCtx = _buildReservedContext(PROJECT_ID, accumulateAmount);
-        hook.processSplitWith(accCtx);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(accCtx);
         vm.stopPrank();
 
         uint256 accBefore = hook.accumulatedProjectTokens(PROJECT_ID);
         assertEq(accBefore, accumulateAmount, "Pre-condition: tokens accumulated");
 
-        // 6. Arm re-entry (the malicious terminal would re-enter on `addToBalanceOf`) and deploy the pool.
+        // 6. Cap the ask at 80% of its liquidity, arm re-entry (the malicious terminal would re-enter on
+        // `addToBalanceOf`) and deploy the pool.
+        uint128 room = _capNextAsk({deploy: true, bps: 8000});
         malicious.enableReentry();
 
         vm.prank(owner);
@@ -356,9 +376,14 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
             "funded terminal must be untouched (never paired, never routed)"
         );
 
-        // 8. Only the 20% project-token leftover (at 80% mint usage) is carried back to the ledger — a pure state
-        // write with no external call.
-        uint256 legitimateLeftover = 200e18; // 20% of the 1000e18 deploy amount, per positionManager.setUsagePercent
+        // 8. Only the project-token leftover the capped ask could not place is carried back to the ledger — a pure
+        // state write with no external call.
+        uint256 askId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
+        assertEq(positionManager.getPositionLiquidity(askId), room, "the ask is capped at the per-tick room");
+        // The leftover is whatever the capped ask's liquidity did not cost at spot.
+        (uint256 cost0, uint256 cost1) = _mintCostAtSpot(askId);
+        uint256 legitimateLeftover = accumulateAmount - (cost0 + cost1);
+        assertGt(legitimateLeftover, 0, "the cap leaves a leftover");
         assertEq(
             hook.accumulatedProjectTokens(PROJECT_ID),
             legitimateLeftover,
@@ -374,57 +399,46 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // Test 2: rebalanceLiquidity re-entry is blocked by the guard (not by a permission check)
+    // Test 2: addLiquidity re-entry is blocked by the guard (not by a permission check)
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice A malicious fee terminal re-enters `rebalanceLiquidity` during the fee-routing `pay()` call.
-    ///         `rebalanceLiquidity` is permissionless, so nothing but the `nonReentrant` guard can stop this —
-    ///         proving the fix replaces an incidental (and fragile) underflow revert with a deterministic one.
-    function test_reentrancy_rebalance_cannotReenter() public {
-        // 1. Deploy pool normally.
-        _accumulateAndDeploy(PROJECT_ID, 1000e18);
-
-        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard and reaches
-        // the pre-burn fee-routing `pay()` that triggers the re-entry under test.
-        controller.setWeight(PROJECT_ID, 900e18);
+    /// @notice A malicious fee terminal re-enters `addLiquidity` during the recycle's fee-routing `pay()` call.
+    ///         `addLiquidity` is permissionless, so nothing but the `nonReentrant` guard can stop this — proving the
+    ///         recycle is protected by a deterministic guard rather than an incidental (and fragile) revert.
+    function test_reentrancy_addLiquidity_cannotReenter() public {
+        // 1. Deploy pool normally, then accumulate enough for a recycle.
+        _accumulateAndDeploy({projectId: PROJECT_ID, amount: 1000e18});
+        _accumulateTokens({projectId: PROJECT_ID, amount: 10e18});
 
         // 2. Create malicious fee terminal.
         ReentrantFeeTerminal malFeeTerminal =
             new ReentrantFeeTerminal(hook, feeProjectToken, PROJECT_ID, address(terminalToken));
 
         // 3. Register it as the fee terminal for FEE_PROJECT_ID.
-        _setDirectoryTerminal(FEE_PROJECT_ID, address(terminalToken), address(malFeeTerminal));
+        _setDirectoryTerminal({projectId: FEE_PROJECT_ID, token: address(terminalToken), term: address(malFeeTerminal)});
 
         // 4. Set up LP fees to collect.
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        (address token0,) = _sortForTest(address(projectToken), address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
+        (address token0,) = _sortForTest({tokenA: address(projectToken), tokenB: address(terminalToken)});
 
+        // Record the terminal-side fee in whichever currency slot the terminal token sorts to, and fund the PM.
         uint256 feeAmount = 50e18;
         if (token0 == address(terminalToken)) {
-            positionManager.setCollectableFees(tokenId, feeAmount, 0);
+            positionManager.setCollectableFees({tokenId: tokenId, amount0: feeAmount, amount1: 0});
         } else {
-            positionManager.setCollectableFees(tokenId, 0, feeAmount);
+            positionManager.setCollectableFees({tokenId: tokenId, amount0: 0, amount1: feeAmount});
         }
-        terminalToken.mint(address(positionManager), feeAmount);
+        terminalToken.mint({to: address(positionManager), amount: feeAmount});
 
-        // The prior `deployPool` minted a single-sided (100% project-token) position, so burning it recovers no
-        // terminal-token principal, and every collected LP fee (terminal-token side) is routed straight out to the
-        // fee terminal / project balance before the re-mint. Fund the hook with independent terminal-token
-        // principal (e.g. dust from an earlier partial add) so the re-centered two-sided re-mint has a non-zero
-        // terminal-token side to work with — otherwise the re-mint degenerates to zero liquidity for reasons
-        // unrelated to reentrancy, masking the guard assertions below.
-        terminalToken.mint(address(hook), 100e18);
+        // 5. Enable re-entry mode: try to re-enter addLiquidity.
+        malFeeTerminal.setReentryMode(ReentrantFeeTerminal.ReentryMode.ADD_LIQUIDITY);
 
-        // 5. Enable re-entry mode: try to re-enter rebalanceLiquidity.
-        malFeeTerminal.setReentryMode(ReentrantFeeTerminal.ReentryMode.REBALANCE);
-
-        // 6. Call rebalanceLiquidity as an arbitrary, unpermissioned caller — it's permissionless by design.
+        // 6. Call addLiquidity as an arbitrary, unpermissioned caller — it's permissionless by design.
         vm.prank(user);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
+        hook.addLiquidity({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
-        // 7. Verify: re-entry was attempted, and specifically blocked by the `nonReentrant` guard — the old
-        // "no permission" defense no longer exists (rebalanceLiquidity is permissionless), so the guard is the
-        // only thing standing between this and the arithmetic-underflow footgun the fix removes.
+        // 7. Verify: re-entry was attempted, and specifically blocked by the `nonReentrant` guard — the only thing
+        // standing between a permissionless nested recycle and the outer recycle's in-flight state.
         assertTrue(malFeeTerminal.reentrancyAttempted(), "Re-entry should have been attempted during pay()");
         assertTrue(malFeeTerminal.reentryReverted(), "Re-entry must revert");
         assertEq(
@@ -433,9 +447,10 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
             "Re-entry must revert specifically via the nonReentrant guard, not an incidental underflow"
         );
 
-        // 8. Verify: position still exists (rebalance completed successfully) despite the blocked re-entry.
-        uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        assertNotEq(newTokenId, 0, "Position should exist after successful rebalance");
+        // 8. Verify: the outer recycle completed despite the blocked re-entry — the old ask was burned and replaced.
+        uint256 newTokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
+        assertNotEq(newTokenId, 0, "Ask should exist after a successful recycle");
+        assertNotEq(newTokenId, tokenId, "The old ask must be replaced by the recycle");
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -457,7 +472,7 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
         _setDirectoryTerminal(FEE_PROJECT_ID, address(terminalToken), address(malFeeTerminal));
 
         // 4. Set up LP fees to collect.
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         (address token0,) = _sortForTest(address(projectToken), address(terminalToken));
 
         uint256 feeAmount = 50e18;

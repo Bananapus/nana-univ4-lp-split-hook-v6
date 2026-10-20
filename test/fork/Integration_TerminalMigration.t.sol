@@ -82,35 +82,63 @@ contract Integration_TerminalMigration is ForkDeployHelper {
         });
     }
 
-    function test_fork_integration_terminalMigration_rebalanceAfterMigration() public {
+    /// @notice A project whose balance migrates to a second terminal still recycles: after the migration and a fresh
+    /// reserved-token distribution, a permissionless `addLiquidity` re-mints the ask with liquidity.
+    function test_fork_integration_terminalMigration_recycleAfterMigration() public {
+        // Launch a migratable project with a 50% cash-out tax so the corridor depends on the terminal's surplus.
         uint256 pid =
             _launchProjectWithMigration({reservedPercent: 0, cashOutTaxRate: 5000, weight: 1_000_000e18, duration: 0});
+
+        // Give the project an ERC-20 so the hook can pair it in a pool.
         vm.prank(multisig);
-        IJBToken pToken = jbController.deployERC20For(pid, "Migration Token", "MIG", bytes32(0));
-        _payProject(pid, 50 ether);
-        _accumulateTokens(pid, address(pToken), 100_000e18);
+        IJBToken pToken =
+            jbController.deployERC20For({projectId: pid, name: "Migration Token", symbol: "MIG", salt: bytes32(0)});
+
+        // Fund the first terminal and hand the hook inventory, then deploy the pool and its first ask.
+        _payProject({pid: pid, amount: 50 ether});
+        _accumulateTokens({pid: pid, tokenAddr: address(pToken), amount: 100_000e18});
         vm.prank(multisig);
         hook.deployPool(pid);
-        assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "Pool deployed");
-        uint256 initialTokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+        assertTrue(hook.isPoolDeployed({projectId: pid, terminalToken: JBConstants.NATIVE_TOKEN}), "Pool deployed");
+
+        // Record the first ask so the recycle can be compared against it.
+        uint256 initialTokenId = hook.askTokenIdOf({projectId: pid, terminalToken: JBConstants.NATIVE_TOKEN});
         uint128 initialLiq = V4_POSITION_MANAGER.getPositionLiquidity(initialTokenId);
         assertTrue(initialLiq > 0, "Initial position has liquidity");
-        IJBTerminal primaryBefore = jbDirectory.primaryTerminalOf(pid, JBConstants.NATIVE_TOKEN);
+
+        // Before migration the first terminal is primary and holds the project's balance.
+        IJBTerminal primaryBefore = jbDirectory.primaryTerminalOf({projectId: pid, token: JBConstants.NATIVE_TOKEN});
         assertEq(address(primaryBefore), address(jbMultiTerminal), "Primary terminal is terminal 1 before migration");
-        uint256 balanceBefore = jbTerminalStore.balanceOf(address(jbMultiTerminal), pid, JBConstants.NATIVE_TOKEN);
+        uint256 balanceBefore = jbTerminalStore.balanceOf({
+            terminal: address(jbMultiTerminal), projectId: pid, token: JBConstants.NATIVE_TOKEN
+        });
         assertGt(balanceBefore, 0, "Terminal 1 should hold project balance before migration");
+
+        // Move the whole native balance to the second terminal.
         vm.prank(multisig);
-        jbMultiTerminal.migrateBalanceOf(pid, JBConstants.NATIVE_TOKEN, IJBTerminal(address(jbMultiTerminal2)));
-        uint256 oldBalance = jbTerminalStore.balanceOf(address(jbMultiTerminal), pid, JBConstants.NATIVE_TOKEN);
-        uint256 newBalance = jbTerminalStore.balanceOf(address(jbMultiTerminal2), pid, JBConstants.NATIVE_TOKEN);
+        jbMultiTerminal.migrateBalanceOf({
+            projectId: pid, token: JBConstants.NATIVE_TOKEN, to: IJBTerminal(address(jbMultiTerminal2))
+        });
+
+        // The balance left the first terminal and landed in the second.
+        uint256 oldBalance = jbTerminalStore.balanceOf({
+            terminal: address(jbMultiTerminal), projectId: pid, token: JBConstants.NATIVE_TOKEN
+        });
+        uint256 newBalance = jbTerminalStore.balanceOf({
+            terminal: address(jbMultiTerminal2), projectId: pid, token: JBConstants.NATIVE_TOKEN
+        });
         assertEq(oldBalance, 0, "Old terminal balance should be zero after migration");
         assertGt(newBalance, 0, "New terminal should hold migrated balance");
+
+        // Make the second terminal the project's only terminal, so it becomes primary.
         IJBTerminal[] memory newTerminals = new IJBTerminal[](1);
         newTerminals[0] = IJBTerminal(address(jbMultiTerminal2));
         vm.prank(multisig);
-        jbDirectory.setTerminalsOf(pid, newTerminals);
-        IJBTerminal primaryAfter = jbDirectory.primaryTerminalOf(pid, JBConstants.NATIVE_TOKEN);
+        jbDirectory.setTerminalsOf({projectId: pid, terminals: newTerminals});
+        IJBTerminal primaryAfter = jbDirectory.primaryTerminalOf({projectId: pid, token: JBConstants.NATIVE_TOKEN});
         assertEq(address(primaryAfter), address(jbMultiTerminal2), "Primary terminal is terminal 2 after migration");
+
+        // Pay through the second terminal so it holds fresh surplus of its own.
         jbMultiTerminal2.pay{value: 10 ether}({
             projectId: pid,
             token: JBConstants.NATIVE_TOKEN,
@@ -121,64 +149,31 @@ contract Integration_TerminalMigration is ForkDeployHelper {
             metadata: ""
         });
 
-        // `rebalanceLiquidity`'s drift guard is gated on CORRIDOR movement (a genuine issuance/cash-out rate
-        // change), not on the terminal migration itself — the migration alone leaves the corridor untouched. Queue
-        // a real ruleset weight change to genuinely shift the corridor.
-        _queueHalvedWeightRuleset(pid, 5000);
+        // More reserved tokens arrive after the migration; the recycle reads the corridor through the new terminal.
+        _accumulateTokens({pid: pid, tokenAddr: address(pToken), amount: 10_000e18});
 
-        _mockOracleTwapEqualsSpot(hook.oracleHook(), V4_POOL_MANAGER, hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN));
-        // Permissionless: any non-owner stranger may rebalance once the corridor has genuinely drifted.
+        // Pin the TWAP to the spot so the hook's spot-vs-TWAP guard passes.
+        _mockOracleTwapEqualsSpot({
+            oracle: hook.oracleHook(),
+            pm: V4_POOL_MANAGER,
+            key: hook.poolKeyOf({projectId: pid, terminalToken: JBConstants.NATIVE_TOKEN})
+        });
+
+        // Permissionless: any non-owner stranger may recycle.
         vm.prank(address(0xB0BB1E));
-        hook.rebalanceLiquidity({projectId: pid, terminalToken: JBConstants.NATIVE_TOKEN});
-        uint256 newTokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+        hook.addLiquidity({projectId: pid, terminalToken: JBConstants.NATIVE_TOKEN});
+
+        // The recycle minted an ask that holds liquidity.
+        uint256 newTokenId = hook.askTokenIdOf({projectId: pid, terminalToken: JBConstants.NATIVE_TOKEN});
         assertTrue(newTokenId > 0, "New tokenId exists");
         uint128 newLiq = V4_POSITION_MANAGER.getPositionLiquidity(newTokenId);
-        assertTrue(newLiq > 0, "Rebalanced position has liquidity after terminal migration");
+        assertTrue(newLiq > 0, "Recycled ask has liquidity after terminal migration");
+
+        // Log the before and after positions for inspection.
         emit log_named_uint("  Initial tokenId", initialTokenId);
         emit log_named_uint("  Initial liquidity", initialLiq);
         emit log_named_uint("  New tokenId", newTokenId);
         emit log_named_uint("  New liquidity", newLiq);
-    }
-
-    /// @notice Queue a real ruleset with a halved weight, effective immediately (the base ruleset's `duration` is
-    /// 0, so `JBRulesets.deriveStartFrom` starts the next cycle at `mustStartAtOrAfter` == `block.timestamp`). Used
-    /// to genuinely shift the project's issuance/cash-out corridor so `rebalanceLiquidity`'s drift guard clears.
-    /// Note: the project was launched via `_launchProjectWithMigration` with `allowTerminalMigration`/
-    /// `allowSetTerminals` true, but the migration this test exercises already ran before this is called, so those
-    /// flags don't need to persist into the new cycle.
-    function _queueHalvedWeightRuleset(uint256 pid, uint16 cashOutTaxRate) internal {
-        JBRulesetMetadata memory metadata = JBRulesetMetadata({
-            reservedPercent: 0,
-            cashOutTaxRate: cashOutTaxRate,
-            baseCurrency: uint32(uint160(JBConstants.NATIVE_TOKEN)),
-            pausePay: false,
-            pauseCreditTransfers: false,
-            allowOwnerMinting: true,
-            allowSetCustomToken: true,
-            allowTerminalMigration: false,
-            allowSetTerminals: false,
-            allowSetController: false,
-            allowAddAccountingContext: false,
-            allowAddPriceFeed: false,
-            ownerMustSendPayouts: false,
-            holdFees: false,
-            scopeCashOutsToLocalBalances: true,
-            useDataHookForPay: false,
-            useDataHookForCashOut: false,
-            dataHook: address(0),
-            metadata: 0
-        });
-        JBRulesetConfig[] memory configs = new JBRulesetConfig[](1);
-        configs[0].mustStartAtOrAfter = 0;
-        configs[0].duration = 0;
-        configs[0].weight = 500_000e18;
-        configs[0].weightCutPercent = 0;
-        configs[0].approvalHook = IJBRulesetApprovalHook(address(0));
-        configs[0].metadata = metadata;
-        configs[0].splitGroups = new JBSplitGroup[](0);
-        configs[0].fundAccessLimitGroups = new JBFundAccessLimitGroup[](0);
-        vm.prank(multisig);
-        jbController.queueRulesetsOf({projectId: pid, rulesetConfigurations: configs, memo: ""});
     }
 
     function _launchFeeProject() internal returns (uint256 id) {
@@ -304,7 +299,8 @@ contract Integration_TerminalMigration is ForkDeployHelper {
         });
         vm.startPrank(address(jbController));
         IERC20(tokenAddr).approve(address(hook), amount);
-        hook.processSplitWith(context);
+        // Cap the gas below the automation floor so the hook records the intake and skips inline automation.
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
     }
 

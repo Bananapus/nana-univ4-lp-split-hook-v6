@@ -89,7 +89,8 @@ contract CrossProjectFork is ForkDeployHelper {
         assertEq(bTokenBalanceAfter, bTokenBalanceBefore, "B token balance should be unchanged");
         // A's accumulation is consumed by the deploy; only an unpaired remainder is carried forward (never burned).
         assertLt(hook.accumulatedProjectTokens(pidA), 10_000e18, "A bulk consumed; only remainder carried after deploy");
-        uint256 tokenIdA = hook.tokenIdOf(pidA, JBConstants.NATIVE_TOKEN);
+        // Read the ask position that the deploy minted.
+        uint256 tokenIdA = hook.askTokenIdOf({projectId: pidA, terminalToken: JBConstants.NATIVE_TOKEN});
         uint128 posLiqA = V4_POSITION_MANAGER.getPositionLiquidity(tokenIdA);
         assertTrue(posLiqA > 0, "A position should have liquidity");
         emit log_named_uint("  A position liquidity", posLiqA);
@@ -171,7 +172,8 @@ contract CrossProjectFork is ForkDeployHelper {
         });
         vm.startPrank(address(jbController));
         IERC20(tokenAddr).approve(address(hook), amount);
-        hook.processSplitWith(context);
+        // Cap the gas so the split is only taken in and the hook skips its inline automation.
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
     }
 

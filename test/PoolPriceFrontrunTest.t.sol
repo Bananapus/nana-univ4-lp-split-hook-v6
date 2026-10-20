@@ -139,7 +139,11 @@ contract PoolPriceFrontrunTest is LPSplitHookV4TestBase {
 
         // Verify pool was deployed.
         assertTrue(hook.isPoolDeployed(PROJECT_ID, address(terminalToken)), "Pool should be deployed");
-        assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "Token ID should be non-zero");
+        assertNotEq(
+            hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            0,
+            "Token ID should be non-zero"
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────────

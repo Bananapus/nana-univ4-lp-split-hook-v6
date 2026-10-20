@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
+import {LPSplitHookV4TestBase, DEFAULT_SURPLUS_PER_TOKEN} from "./TestBaseV4.sol";
 import {MockERC20} from "./mock/MockERC20.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
 
 /// @notice End-to-end lifecycle integration tests for JBUniswapV4LPSplitHook.
-/// @dev Exercises the full protocol flow: accumulate -> deploy -> collect fees -> rebalance -> claim.
+/// @dev Exercises the full protocol flow: accumulate -> deploy -> collect fees -> recycle -> claim.
 contract IntegrationLifecycle is LPSplitHookV4TestBase {
     // --- Helpers -----------------------------------------------------------
 
@@ -39,11 +39,11 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
 
         // Verify pool was created (tokenId is nonzero)
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         assertNotEq(tokenId, 0, "tokenIdOf should be nonzero after deploy");
 
-        // Verify accumulated tokens were cleared
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "accumulated should be 0 after deploy");
+        // Verify accumulated tokens were placed: only V4 rounding stays ledgered
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), 90e18, 0);
 
         // Verify projectDeployed is set
         assertTrue(
@@ -66,7 +66,7 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
     function test_FullLifecycle_DeployThenCollectFees() public {
         // Deploy pool
         _accumulateAndDeploy(PROJECT_ID, 100e18);
-        uint256 poolTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 poolTokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
         // Determine token ordering for this pool
         bool terminalTokenIsToken0 = address(terminalToken) < address(projectToken);
@@ -85,55 +85,57 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         uint256 payCountBefore = terminal.payCallCount();
         uint256 burnCountBefore = controller.burnCallCount();
         uint256 accumulatedBefore = hook.accumulatedProjectTokens(PROJECT_ID);
+        uint256 terminalLedgerBefore =
+            hook.accumulatedTerminalTokens({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
+        // Snapshot supply so the burn of the project-side fee can be measured.
+        uint256 supplyBefore = projectToken.totalSupply();
 
         // Collect and route fees
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
 
-        // Verify terminal token fees were routed (pay was called for fee project)
+        // Verify terminal token fees were routed (pay was called for fee project), and the remainder was added to the
+        // project's balance.
         assertGt(terminal.payCallCount(), payCountBefore, "terminal.pay should be called to route terminal token fees");
+        // The fee project's cut is its percentage of the terminal fee; the rest is the project's remainder.
+        uint256 terminalCut = terminalFeeAmount * FEE_PERCENT / 10_000;
+        assertEq(terminal.lastAddToBalanceAmount(), terminalFeeAmount - terminalCut, "terminal remainder added");
 
-        // Verify project token fees were carried into the accumulation ledger, not burned.
-        assertEq(controller.burnCallCount(), burnCountBefore, "no burn should occur when collecting fees");
+        // Verify project token fees were burned (the project-side cut is forgiven: no fee terminal for it).
+        assertEq(controller.burnCallCount(), burnCountBefore + 1, "the project-side fee is burned");
+        assertEq(supplyBefore - projectToken.totalSupply(), projectFeeAmount, "supply fell by the project-side fee");
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), accumulatedBefore, "the ask ledger is unchanged");
         assertEq(
-            hook.accumulatedProjectTokens(PROJECT_ID),
-            accumulatedBefore + projectFeeAmount,
-            "project-token fees should be carried into the accumulation ledger"
+            hook.accumulatedTerminalTokens({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            terminalLedgerBefore,
+            "the bid ledger is unchanged"
         );
     }
 
     // -----------------------------------------------------------------------
-    // 3. Full lifecycle: deploy pool then rebalance liquidity
+    // 3. Full lifecycle: deploy pool then recycle via addLiquidity
     // -----------------------------------------------------------------------
 
-    /// @notice Deploy a pool, then rebalance liquidity.
-    ///         Verify old position is burned and a new position is minted with a different tokenId.
-    function test_FullLifecycle_DeployThenRebalance() public {
+    /// @notice Deploy a pool, accumulate more, then recycle. With no terminal tokens held, the recycle burns the old
+    ///         ask and mints exactly one fresh ask holding every project token, and no bid.
+    function test_FullLifecycle_DeployThenRecycle() public {
         // Deploy pool
-        _accumulateAndDeploy(PROJECT_ID, 100e18);
-        uint256 originalTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        _accumulateAndDeploy({projectId: PROJECT_ID, amount: 100e18});
+        uint256 originalTokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         assertNotEq(originalTokenId, 0, "original tokenId should be nonzero");
 
-        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
-        controller.setWeight(PROJECT_ID, 900e18);
-
-        // Mint tokens to PositionManager so decreaseLiquidity -> collect has tokens to give back
-        projectToken.mint(address(positionManager), 50e18);
-        terminalToken.mint(address(positionManager), 50e18);
-
-        // Approve tokens from hook for new PositionManager mint
-        vm.startPrank(address(hook));
-        projectToken.approve(address(positionManager), type(uint256).max);
-        terminalToken.approve(address(positionManager), type(uint256).max);
-        vm.stopPrank();
-
+        // Snapshot mint and burn counts so the assertions isolate the recycle.
         uint256 mintCountBefore = positionManager.mintCallCount();
         uint256 burnCountBefore = positionManager.burnCallCount();
 
-        // Rebalance (requires owner permission)
-        vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
+        // Recycle (permissionless) with a fresh accumulation.
+        _accumulateTokens({projectId: PROJECT_ID, amount: 1e18});
+        // The unfilled ask holds only project tokens, so both principal sides sum to the recovered project amount.
+        (uint256 recovered0, uint256 recovered1) = _principalAtSpot(originalTokenId);
+        uint256 projectIn = recovered0 + recovered1 + hook.accumulatedProjectTokens(PROJECT_ID);
+        vm.prank(user);
+        hook.addLiquidity({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
-        // Verify old position was burned and new one minted
+        // Verify old position was burned and exactly one new one minted (no terminal, so no bid).
         assertEq(
             positionManager.burnCallCount(),
             burnCountBefore + 1,
@@ -142,13 +144,20 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         assertEq(
             positionManager.mintCallCount(),
             mintCountBefore + 1,
-            "PositionManager mint should be called once for new position"
+            "PositionManager mint should be called once for the ask"
+        );
+        assertEq(
+            hook.bidTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            0,
+            "no bid without terminal tokens"
         );
 
-        // Verify new tokenId differs from original
-        uint256 newTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        // Verify new tokenId differs from original and holds every project token.
+        uint256 newTokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         assertNotEq(newTokenId, 0, "new tokenId should be nonzero");
-        assertNotEq(newTokenId, originalTokenId, "tokenIdOf should change after rebalance");
+        assertNotEq(newTokenId, originalTokenId, "askTokenIdOf should change after the recycle");
+        // The ask holds the recovered plus new project tokens, less only V4 rounding left in the ledger.
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), projectIn, 0);
     }
 
     // -----------------------------------------------------------------------
@@ -160,7 +169,7 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
     function test_FullLifecycle_DeployThenClaimFees() public {
         // Deploy pool
         _accumulateAndDeploy(PROJECT_ID, 100e18);
-        uint256 poolTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 poolTokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
         // Determine token ordering
         bool terminalTokenIsToken0 = address(terminalToken) < address(projectToken);
@@ -240,7 +249,8 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
                 token: address(terminalToken), decimals: 18, currency: uint32(uint160(address(terminalToken)))
             })
         );
-        store.setSurplus(PROJECT_3, 0.5e18);
+        // Give project 3 the same cash-out value per token as the base project.
+        store.setSurplus({projectId: PROJECT_3, surplus: DEFAULT_SURPLUS_PER_TOKEN});
         store.setBalance(address(terminal), PROJECT_3, address(terminalToken), 10e18);
 
         // Set project 3 ownership
@@ -254,7 +264,8 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         vm.startPrank(address(controller));
         projectToken3.approve(address(hook), 50e18);
         JBSplitHookContext memory ctx3 = _buildContext(PROJECT_3, address(projectToken3), 50e18, 1);
-        hook.processSplitWith(ctx3);
+        // Cap gas below the inline-automation floor so the split only records intake.
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(ctx3);
         vm.stopPrank();
 
         assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 50e18, "PROJECT_ID accumulated should be 50e18");
@@ -274,16 +285,16 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_3);
 
         // --- Verify independent token IDs ---
-        uint256 tokenId1 = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        uint256 tokenId3 = hook.tokenIdOf(PROJECT_3, address(terminalToken));
+        uint256 tokenId1 = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
+        uint256 tokenId3 = hook.askTokenIdOf({projectId: PROJECT_3, terminalToken: address(terminalToken)});
 
         assertNotEq(tokenId1, 0, "PROJECT_ID tokenId should be nonzero");
         assertNotEq(tokenId3, 0, "PROJECT_3 tokenId should be nonzero");
         assertNotEq(tokenId1, tokenId3, "tokenIds should differ between projects");
 
-        // Verify accumulated tokens were cleared for both
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "PROJECT_ID accumulated should be 0 after deploy");
-        assertEq(hook.accumulatedProjectTokens(PROJECT_3), 0, "PROJECT_3 accumulated should be 0 after deploy");
+        // Verify accumulated tokens were placed for both: only V4 rounding stays ledgered
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), 50e18, 0);
+        _assertPlacedExactly(PROJECT_3, address(projectToken3), address(terminalToken), 50e18, 0);
 
         // Verify both projects are marked as deployed
         assertTrue(hook.isPoolDeployed(PROJECT_ID, address(terminalToken)), "PROJECT_ID should be deployed");
@@ -309,7 +320,8 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         vm.startPrank(address(controller));
         projectToken.approve(address(hook), newAmount);
         JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, newAmount);
-        hook.processSplitWith(context);
+        // Cap gas below the inline-automation floor so the split only records intake.
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
 
         // Verify tokens were accumulated, not burned.
@@ -345,11 +357,11 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
 
         // Verify pool was created
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         assertNotEq(tokenId, 0, "tokenIdOf should be nonzero after deploy");
 
-        // Verify accumulated tokens were cleared
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "accumulated should be 0 after deploy");
+        // Verify accumulated tokens were placed: only V4 rounding stays ledgered
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), amount, 0);
 
         // Verify project is marked deployed
         assertTrue(hook.isPoolDeployed(PROJECT_ID, address(terminalToken)), "projectDeployed should be true");

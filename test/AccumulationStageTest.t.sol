@@ -109,7 +109,8 @@ contract AccumulationStageTest is LPSplitHookV4TestBase {
         );
         // Call from `user` instead of controller
         vm.prank(user);
-        hook.processSplitWith(context);
+        // Deliver with intake-only gas so the hook runs intake and skips inline automation.
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
     }
 
     // -----------------------------------------------------------------------
@@ -146,14 +147,15 @@ contract AccumulationStageTest is LPSplitHookV4TestBase {
             )
         );
         vm.prank(address(controller));
-        hook.processSplitWith(context);
+        // Deliver with intake-only gas so the hook runs intake and skips inline automation.
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
     }
 
     // -----------------------------------------------------------------------
     // 8. processSplitWith -- reverts if groupId is not 1
     // -----------------------------------------------------------------------
 
-    /// @notice processSplitWith reverts with TerminalTokensNotAllowed when groupId != 1.
+    /// @notice A groupId other than 1 is read as a payout, so it must match the token's payout group.
     function test_ProcessSplit_RevertsIf_GroupIdNotOne() public {
         uint256 amount = 100e18;
         projectToken.mint(address(hook), amount);
@@ -161,13 +163,15 @@ contract AccumulationStageTest is LPSplitHookV4TestBase {
         // Build context with groupId=0 (payout split, not reserved tokens)
         JBSplitHookContext memory context = _buildContext(PROJECT_ID, address(projectToken), amount, 0);
 
+        // A project token is never a payout group's token, so group 0 reverts naming the group and the token.
         vm.expectRevert(
             abi.encodeWithSelector(
-                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_TerminalTokensNotAllowed.selector, 0, 1
+                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidSplitGroup.selector, 0, address(projectToken)
             )
         );
         vm.prank(address(controller));
-        hook.processSplitWith(context);
+        // Deliver with intake-only gas so the hook runs intake and skips inline automation.
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
     }
 
     // -----------------------------------------------------------------------
@@ -193,7 +197,8 @@ contract AccumulationStageTest is LPSplitHookV4TestBase {
         );
         // Even pranking as some address, it will fail at the controllerOf check first
         vm.prank(address(controller));
-        hook.processSplitWith(context);
+        // Deliver with intake-only gas so the hook runs intake and skips inline automation.
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
     }
 
     // -----------------------------------------------------------------------
@@ -230,7 +235,8 @@ contract AccumulationStageTest is LPSplitHookV4TestBase {
         vm.startPrank(address(controller));
         projectToken.approve(address(hook), newAmount);
         JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, newAmount);
-        hook.processSplitWith(context);
+        // Deliver with intake-only gas so the hook runs intake and skips inline automation.
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
 
         // Verify tokens were accumulated, not burned.
@@ -256,7 +262,8 @@ contract AccumulationStageTest is LPSplitHookV4TestBase {
         JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, 0);
 
         vm.prank(address(controller));
-        hook.processSplitWith(context);
+        // Deliver with intake-only gas so the hook runs intake and skips inline automation.
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
 
         assertEq(
             hook.accumulatedProjectTokens(PROJECT_ID),
@@ -282,39 +289,38 @@ contract AccumulationStageTest is LPSplitHookV4TestBase {
 
         vm.expectRevert();
         vm.prank(address(controller));
-        hook.processSplitWith(context);
+        // Deliver with intake-only gas so the hook runs intake and skips inline automation.
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
     }
 
     // -----------------------------------------------------------------------
     // 14. processSplitWith -- reverts if balance doesn't cover accumulated
     // -----------------------------------------------------------------------
 
-    /// @notice processSplitWith reverts with InsufficientBalance when the contract's ERC-20 balance
-    ///         is less than the accumulated total (e.g., a custom controller that doesn't transfer first).
-    function test_ProcessSplit_RevertsIf_InsufficientBalance() public {
+    /// @notice A pre-existing accounting deficit (ledger above the hook's actual ERC-20 balance) does not revert
+    ///         intake, since a reverting intake would make Core burn the newly delivered allocation. The deficit
+    ///         surfaces as InsufficientBalance when the inventory is deployed instead.
+    function test_ProcessSplit_AcceptsDespiteDeficit_DeployReverts() public {
         // First, do a legitimate accumulation so the counter is nonzero
-        _accumulateTokens(PROJECT_ID, 100e18);
+        _accumulateTokens({projectId: PROJECT_ID, amount: 100e18});
         assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 100e18);
 
         // Drain tokens from the hook to create a deficit between accumulated and actual balance.
         vm.prank(address(hook));
         // forge-lint: disable-next-line(erc20-unchecked-transfer)
-        projectToken.transfer(address(0xdead), 50e18);
+        projectToken.transfer({to: address(0xdead), amount: 50e18});
 
-        // Hook balance is now 50e18 but accumulator is 100e18.
-        // Another accumulation of 1e18 transfers 1e18 in (hook balance -> 51e18),
-        // pushing the accumulator to 101e18 > 51e18, triggering InsufficientBalance.
-        projectToken.mint(address(controller), 1e18);
+        // Hook balance is now 50e18 but accumulator is 100e18. Another accumulation of 1e18 still lands: intake is
+        // durable and must not let a pre-existing inconsistency burn the new allocation.
+        _accumulateTokens({projectId: PROJECT_ID, amount: 1e18});
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 101e18, "intake should accept despite the deficit");
 
-        vm.startPrank(address(controller));
-        projectToken.approve(address(hook), 1e18);
-        JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, 1e18);
+        // The deficit surfaces where the inventory would be spent: deployPool's solvency check.
         vm.expectRevert(
             abi.encodeWithSelector(
                 JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientBalance.selector, 51e18, 101e18
             )
         );
-        hook.processSplitWith(context);
-        vm.stopPrank();
+        hook.deployPool(PROJECT_ID);
     }
 }

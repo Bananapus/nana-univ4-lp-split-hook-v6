@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
+import {LPSplitHookV4TestBase, DEFAULT_SURPLUS_PER_TOKEN} from "../TestBaseV4.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
 import {MockJBController} from "../mock/MockJBContracts.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
@@ -52,6 +52,14 @@ contract DrainingAddToBalanceTerminal {
 
     function accountingContextsOf(uint256 projectId) external view returns (JBAccountingContext[] memory) {
         return contextsList[projectId];
+    }
+
+    /// @notice The project's surplus held in this terminal, which is always zero.
+    /// @dev Matches IJBTerminal.currentSurplusOf so the hook can read this terminal's surplus.
+    /// @return surplus The surplus, always zero because this terminal holds no surplus for any project.
+    function currentSurplusOf(uint256, address[] calldata, uint256, uint256) external pure returns (uint256 surplus) {
+        // This terminal holds no surplus for any project.
+        return 0;
     }
 
     function addToBalanceOf(
@@ -199,7 +207,8 @@ contract FeeProjectSelfBurnRegression is LPSplitHookV4TestBase {
         controller = MockJBController(address(burningController));
         _setDirectoryController(PROJECT_ID, address(burningController));
         _setDirectoryController(FEE_PROJECT_ID, address(burningController));
-        store.setSurplus(FEE_PROJECT_ID, 0.5e18);
+        // Give the fee project the default cash-out value per token.
+        store.setSurplus({projectId: FEE_PROJECT_ID, surplus: DEFAULT_SURPLUS_PER_TOKEN});
 
         drainingTerminal = new DrainingAddToBalanceTerminal();
         drainingTerminal.setStore(address(store));
@@ -224,7 +233,8 @@ contract FeeProjectSelfBurnRegression is LPSplitHookV4TestBase {
         vm.startPrank(address(burningController));
         token.approve(address(hook), amount);
         JBSplitHookContext memory context = _buildContext(projectId, address(token), amount, 1);
-        hook.processSplitWith(context);
+        // Cap the gas below the inline-automation floor so the split is only accumulated.
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
     }
 
@@ -234,7 +244,8 @@ contract FeeProjectSelfBurnRegression is LPSplitHookV4TestBase {
 
         _accumulateAndDeploy(PROJECT_ID, 100e18);
 
-        uint256 projectOneTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        // The ask position carries the LP fees this test collects.
+        uint256 projectOneTokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         bool terminalIsToken0 = address(terminalToken) < address(projectToken);
         uint256 terminalFeeAmount = 100e18;
 
@@ -289,7 +300,8 @@ contract FeeProjectSelfBurnRegression is LPSplitHookV4TestBase {
     function test_ClaimThenBurn_NoUnderflow() public {
         // Deploy pool and generate fee tokens for PROJECT_ID.
         _accumulateAndDeploy(PROJECT_ID, 100e18);
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        // The ask position carries the LP fees this test collects.
+        uint256 tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         bool terminalIsToken0 = address(terminalToken) < address(projectToken);
 
         // First fee collection: generates claimable fee tokens.
@@ -346,7 +358,8 @@ contract FeeProjectSelfBurnRegression is LPSplitHookV4TestBase {
                 token: address(terminalToken), decimals: 18, currency: uint32(uint160(address(terminalToken)))
             })
         );
-        store.setSurplus(PROJECT_B, 0.5e18);
+        // Give project B the default cash-out value per token.
+        store.setSurplus({projectId: PROJECT_B, surplus: DEFAULT_SURPLUS_PER_TOKEN});
         store.setBalance(address(terminal), PROJECT_B, address(terminalToken), 10e18);
 
         // Deploy pools for both projects.
@@ -358,7 +371,7 @@ contract FeeProjectSelfBurnRegression is LPSplitHookV4TestBase {
         bool terminalIsToken0 = address(terminalToken) < address(projectToken);
 
         // Generate fee tokens for PROJECT_ID.
-        uint256 tokenIdA = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenIdA = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         uint256 feeA = 60e18;
         if (terminalIsToken0) {
             positionManager.setCollectableFees(tokenIdA, feeA, 0);
@@ -369,7 +382,7 @@ contract FeeProjectSelfBurnRegression is LPSplitHookV4TestBase {
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
 
         // Generate fee tokens for PROJECT_B.
-        uint256 tokenIdB = hook.tokenIdOf(PROJECT_B, address(terminalToken));
+        uint256 tokenIdB = hook.askTokenIdOf({projectId: PROJECT_B, terminalToken: address(terminalToken)});
         uint256 feeB = 40e18;
         if (terminalIsToken0) {
             positionManager.setCollectableFees(tokenIdB, feeB, 0);
@@ -413,7 +426,8 @@ contract FeeProjectSelfBurnRegression is LPSplitHookV4TestBase {
     function test_TerminalTokenLeftoverSweepPreservesOutstandingFeeClaims() public {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
 
-        uint256 tokenIdA = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        // The ask position carries the LP fees this test collects.
+        uint256 tokenIdA = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         bool terminalIsToken0 = address(terminalToken) < address(projectToken);
         uint256 feeAmount = 100e18;
 
@@ -446,7 +460,8 @@ contract FeeProjectSelfBurnRegression is LPSplitHookV4TestBase {
         drainingTerminal.setAccountingContext(
             PROJECT_B, address(feeProjectToken), uint32(uint160(address(feeProjectToken))), 18
         );
-        store.setSurplus(PROJECT_B, 0.5e18);
+        // Give project B the default cash-out value per token.
+        store.setSurplus({projectId: PROJECT_B, surplus: DEFAULT_SURPLUS_PER_TOKEN});
         store.setBalance(address(drainingTerminal), PROJECT_B, address(feeProjectToken), 10e18);
 
         _accumulateTokensFor(PROJECT_B, projectToken, 100e18);
@@ -473,7 +488,8 @@ contract FeeProjectSelfBurnRegression is LPSplitHookV4TestBase {
     ///         burn (triggered by collectAndRouteLPFees) must leave the reserved fee tokens intact.
     function test_BurnExcludesReservedFeeTokens() public {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        // The ask position carries the LP fees this test collects.
+        uint256 tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         bool terminalIsToken0 = address(terminalToken) < address(projectToken);
 
         // Generate fee tokens via LP fee collection.

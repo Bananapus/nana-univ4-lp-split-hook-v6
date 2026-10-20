@@ -86,9 +86,9 @@ contract TickBoundsFork is ForkDeployHelper {
             // forge-lint: disable-next-line(unsafe-typecast)
             bytes4 err = bytes4(reason);
             assertTrue(
-                err == JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ZeroLiquidity.selector
+                err == JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot.selector
                     || err == JBUniswapV4LPSplitHookMath.JBUniswapV4LPSplitHookMath_NoTerminalTokenFound.selector,
-                "Should revert with ZeroLiquidity or NoTerminalTokenFound"
+                "Should revert with NoDeployableLiquidityAtSpot or NoTerminalTokenFound"
             );
         }
     }
@@ -102,7 +102,8 @@ contract TickBoundsFork is ForkDeployHelper {
         vm.prank(multisig);
         hook.deployPool(pid);
         assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "Pool should deploy with low weight");
-        uint256 tokenId = hook.tokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+        // Read the ask position that the deploy minted.
+        uint256 tokenId = hook.askTokenIdOf({projectId: pid, terminalToken: JBConstants.NATIVE_TOKEN});
         uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         assertTrue(posLiq > 0, "Position should have liquidity");
         emit log_named_uint("  position liquidity", posLiq);
@@ -183,7 +184,8 @@ contract TickBoundsFork is ForkDeployHelper {
         });
         vm.startPrank(address(jbController));
         IERC20(tokenAddr).approve(address(hook), amount);
-        hook.processSplitWith(context);
+        // Cap the gas so the split is only taken in and the hook skips its inline automation.
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
     }
 

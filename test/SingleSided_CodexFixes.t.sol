@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
 import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 import {JBUniswapV4LPSplitHookMath} from "../src/libraries/JBUniswapV4LPSplitHookMath.sol";
+import {JBLPSplitHookHelpers} from "../src/libraries/JBLPSplitHookHelpers.sol";
 import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/IJBBuybackHookRegistry.sol";
 import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
@@ -56,7 +57,8 @@ contract CodexExposedHook is JBUniswapV4LPSplitHook {
     }
 }
 
-/// @notice Codex audit fix coverage. Each test names its finding and asserts the corrected behavior.
+/// @notice Single-sided deploy and recycle edge cases: uint128 cast bounds, cold-start seed placement, corridor
+/// bounds, the TWAP guard, terminal isolation between projects, fee routing on a recycle and dust intake.
 contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
@@ -103,7 +105,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         });
     }
 
-    // ─── Finding 8: unsafe uint128 casts revert instead of silently truncating ───
+    // ─── Unsafe uint128 casts revert instead of silently truncating ───
 
     /// @notice A settle-cap amount at or above 2^128 must revert `AmountExceedsUint128` rather than wrap to a smaller
     /// value (which would silently mint a truncated/zero-cap position).
@@ -125,16 +127,16 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         });
     }
 
-    // ─── Finding 9: a hook-initialized (fresh) pool seeds at the cash-out floor, not the geometric midpoint
+    // ─── A hook-initialized (fresh) pool seeds at the cash-out floor, not the geometric midpoint
     // ───
 
     /// @notice Deploying onto a pool the hook initializes itself seeds the pool just inside the cash-out (floor) bound,
     /// so nearly the entire project balance deploys as asks across [floor, ceiling] rather than wasting the
-    /// [floor, midpoint] band the old geometric-midpoint seed left empty.
+    /// [floor, midpoint] band a geometric-midpoint seed would leave empty.
     function test_Finding9_FreshPoolSeedsAtFloor() public {
         // A non-inverted corridor: cash-out value (floor) sits genuinely below the issuance ceiling. A low surplus
         // relative to a large supply keeps the cash-out rate small, so the cash-out price is the economic floor.
-        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 1e18, supply: 1_000_000e18, taxRate: 4000});
+        _setWideTaxedCurve(PROJECT_ID);
 
         (int24 corridorLower, int24 corridorUpper) =
             _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
@@ -151,13 +153,13 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         int24 seedTick = _spotTickOf(PROJECT_ID);
         assertEq(seedTick, expectedSeedTick, "fresh pool must seed one spacing inside the cash-out floor");
 
-        // The seed sits near the floor extreme, not the geometric midpoint the old code used.
+        // The seed sits near the floor extreme, not the geometric midpoint.
         int24 midTick = corridorLower + (corridorUpper - corridorLower) / 2;
         int24 distFromMid = seedTick >= midTick ? seedTick - midTick : midTick - seedTick;
         assertGt(distFromMid, (corridorUpper - corridorLower) / 4, "seed must sit near the floor, not the midpoint");
     }
 
-    // ─── Finding 3: cashOutRate == 0 corridor pins the ceiling on the EXACT issuance tick ───
+    // ─── A cashOutRate == 0 corridor pins the ceiling on the EXACT issuance tick ───
 
     function _zeroCashOutIssuanceTick(uint256 projectId, address term, address proj) internal view returns (int24) {
         (JBRuleset memory ruleset,) = controller.currentRulesetOf(projectId);
@@ -226,7 +228,11 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 0.5e18);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
-        assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "deploy strictly below ceiling must succeed");
+        assertNotEq(
+            hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            0,
+            "deploy strictly below ceiling must succeed"
+        );
     }
 
     function _absTick(int24 a, int24 b) internal pure returns (int24) {
@@ -237,10 +243,10 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         return hook.TICK_SPACING();
     }
 
-    // ─── Finding 2: deployPool validates spot against the oracle TWAP on a pre-initialized pool ───
+    // ─── deployPool validates spot against the oracle TWAP on a pre-initialized pool ───
 
     function _preInitAtMid() internal returns (int24 midTick) {
-        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
+        _setWideTaxedCurve(PROJECT_ID);
         (int24 corridorLower, int24 corridorUpper) =
             _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
         midTick = corridorLower + (corridorUpper - corridorLower) / 2;
@@ -248,11 +254,11 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
     }
 
     /// @notice Deploying onto a pre-initialized pool whose spot has been shoved off the oracle TWAP reverts, so a
-    /// deploy cannot be sandwiched into minting at a manipulated price (parity with addLiquidity/rebalance).
+    /// deploy cannot be sandwiched into minting at a manipulated price (parity with addLiquidity).
     function test_Finding2_DeployOnPreInitPool_RevertsWhenSpotOffTwap() public {
         // The pool key includes the oracle hook, so install the fixed oracle BEFORE pre-initializing so the pre-init
         // pool and the hook's computed key match.
-        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
+        _setWideTaxedCurve(PROJECT_ID);
         (int24 corridorLower, int24 corridorUpper) =
             _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
         int24 midTick = corridorLower + (corridorUpper - corridorLower) / 2;
@@ -275,13 +281,17 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 0.5e18);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
-        assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "near-TWAP deploy must succeed");
+        assertNotEq(
+            hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            0,
+            "near-TWAP deploy must succeed"
+        );
     }
 
     /// @notice A fresh pool the hook initializes itself has no TWAP history, so the guard is skipped and the cold-start
     /// deploy still succeeds even when the oracle would revert.
     function test_Finding2_FreshPoolColdStart_SkipsTwapGuard() public {
-        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
+        _setWideTaxedCurve(PROJECT_ID);
 
         MockGeomeanOracle revertingOracle = new MockGeomeanOracle();
         revertingOracle.setShouldRevert(true);
@@ -290,10 +300,14 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 0.5e18);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
-        assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "cold-start deploy must skip the TWAP guard");
+        assertNotEq(
+            hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            0,
+            "cold-start deploy must skip the TWAP guard"
+        );
     }
 
-    // ─── Finding 1 (CRITICAL): a deploy spends ONLY this project's own burn-recovered terminal ───
+    // ─── A deploy spends ONLY this project's own burn-recovered terminal ───
 
     function _lockedSides(uint256 tokenId) internal view returns (uint256 projectSide, uint256 terminalSide) {
         (,,,, uint256 amount0Locked, uint256 amount1Locked,) = positionManager._positions(tokenId);
@@ -303,7 +317,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
 
     /// @notice Terminal sitting loose on the shared clone (a donation, or another project's recovered terminal) is
     /// NEVER paired into a project's deploy nor routed out — the deploy is asks-only and the loose balance is
-    /// untouched. On the pre-fix code this balance was read as the mint's terminal side and captured.
+    /// untouched.
     function test_Finding1_DonatedTerminalNotSweptAtDeploy() public {
         int24 midTick = _preInitAtMid();
         midTick; // pool is pre-initialized at mid.
@@ -316,9 +330,18 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
-        (uint256 projectSide, uint256 terminalSide) = _lockedSides(hook.tokenIdOf(PROJECT_ID, address(terminalToken)));
+        (, uint256 terminalSide) =
+            _lockedSides(hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}));
         assertEq(terminalSide, 0, "donated terminal must not be paired into the position (asks-only)");
-        assertEq(projectSide, 0.5e18, "the full project balance deploys as asks");
+        // The full project balance deploys as asks (only V4 rounding stays ledgered).
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), 0.5e18, 0);
+        // The mid-corridor spot leaves room for a bid (see `test_Finding1_RecycleFoldsRecoveredTerminalIntoBid`), so a
+        // captured donation would surface as a bid position.
+        assertEq(
+            hook.bidTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            0,
+            "the donation must not mint a bid"
+        );
         assertEq(terminalToken.balanceOf(address(hook)), donation, "donation stays on the hook, never swept or routed");
         assertEq(
             terminal.addToBalanceCallCount(), addToBalanceBefore, "no terminal is routed out on an asks-only deploy"
@@ -337,138 +360,214 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
-        (, uint256 terminalSide) = _lockedSides(hook.tokenIdOf(PROJECT_ID, address(terminalToken)));
+        (, uint256 terminalSide) =
+            _lockedSides(hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}));
         assertEq(terminalSide, 0, "project A must not pair another project's terminal as its bid");
+        assertEq(
+            hook.bidTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            0,
+            "another project's terminal must not mint A a bid"
+        );
         assertEq(terminalToken.balanceOf(address(hook)), bBalance, "the other project's terminal is fully preserved");
     }
 
-    /// @notice Existing behavior preserved: a rebalance still folds this project's OWN recovered terminal (the burn's
-    /// principal) into the re-minted bid leg.
-    function test_Finding1_RebalanceFoldsRecoveredBid() public {
+    /// @notice A recycle folds this project's OWN recovered terminal (the burned ask's principal) into a terminal-only
+    /// bid below the spot, while the ask re-mints project-only above it.
+    function test_Finding1_RecycleFoldsRecoveredTerminalIntoBid() public {
+        // Pre-initialize the pool mid-corridor so the recycle has room for a bid below spot.
         (int24 corridorLower, int24 corridorUpper) = _corridorAtMid();
-        positionManager.initializePool(
-            _poolKey(), TickMath.getSqrtPriceAtTick(corridorLower + (corridorUpper - corridorLower) / 2)
-        );
-        _accumulateTokens(PROJECT_ID, 0.5e18);
+        positionManager.initializePool({
+            key: _poolKey(),
+            sqrtPriceX96: TickMath.getSqrtPriceAtTick(corridorLower + (corridorUpper - corridorLower) / 2)
+        });
+        // Deploy a project-only ask from the first accumulation.
+        _accumulateTokens({projectId: PROJECT_ID, amount: 0.5e18});
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        // An asks-only deploy leaves the bid slot empty.
+        uint256 tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
+        assertEq(
+            hook.bidTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            0,
+            "no bid before any terminal is held"
+        );
 
-        // Inject this project's OWN terminal into its position (as filled asks would), recovered on the burn.
-        uint256 bid = 1e18;
-        terminalToken.mint(address(positionManager), bid);
-        positionManager.injectPositionBalance(tokenId, address(terminalToken), bid);
-        projectToken.mint(address(positionManager), 1000e18);
-        terminalToken.mint(address(positionManager), 1000e18);
+        // Buyers fill part of this project's OWN ask, leaving terminal in it that the burn recovers.
+        _fillHalfOf(tokenId);
+        (uint256 recoveredProject, uint256 recoveredTerminal) = _lockedSides(tokenId);
 
-        controller.setWeight(PROJECT_ID, 900e18); // move corridor to clear the drift guard.
-        vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
+        // Accumulate fresh inventory so the recycle has something to add.
+        _accumulateTokens({projectId: PROJECT_ID, amount: 0.5e18});
+        // The re-minted ask may place the recovered project principal plus the whole project ledger.
+        uint256 projectIn = recoveredProject + hook.accumulatedProjectTokens(PROJECT_ID);
+        // Any account may trigger the recycle.
+        vm.prank(user);
+        hook.addLiquidity({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
-        (, uint256 terminalSide) = _lockedSides(hook.tokenIdOf(PROJECT_ID, address(terminalToken)));
-        assertGt(terminalSide, 0, "the burn-recovered terminal must seed the re-minted bid leg");
-        assertLe(terminalSide, bid, "the bid never exceeds the recovered terminal");
+        // The ask re-mints every project token and the bid exactly the recovered terminal.
+        assertNotEq(
+            hook.bidTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            0,
+            "the recovered terminal mints a bid"
+        );
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), projectIn, recoveredTerminal);
+        // Both positions sit on the ranges a recycle derives from the live spot and corridor.
+        _assertRecycleGeometry({pid: PROJECT_ID, term: address(terminalToken), proj: address(projectToken)});
     }
 
     function _corridorAtMid() internal returns (int24 lo, int24 hi) {
-        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
+        _setWideTaxedCurve(PROJECT_ID);
         (lo, hi) = _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
     }
 
-    // ─── Finding 5 (MEDIUM): a rebalance collects fees before the re-mint, folding them into the bid-leg ledger
+    // ─── A recycle routes fees to the treasury before it prices the corridor
     // ───
 
-    /// @notice A rebalance collects and routes LP fees BEFORE the burn/re-mint. The terminal-fee remainder is folded
-    /// into this project's bid-leg ledger and re-minted as bid liquidity — it is NOT deposited into the treasury and
-    /// does NOT bump the project's surplus (so it no longer moves the cash-out floor). Genuine corridor drift therefore
-    /// comes from a rate/surplus change; an immediate second rebalance with no further drift reverts — no free
-    /// double-rebalance.
-    function test_Finding5_FeesFoldToBidLedgerNotSurplus_NoDoubleRebalance() public {
-        // Even with the treasury-surplus bump enabled, no `addToBalanceOf` deposit happens for routed fees anymore.
+    /// @notice A recycle collects and routes LP fees BEFORE it prices the corridor and re-mints. The terminal-fee
+    /// remainder is added to the project's balance, raising its surplus, so the re-minted ranges already sit inside the
+    /// corridor of the raised cash-out floor; the bid holds only the recovered terminal principal.
+    function test_Finding5_FeesRaiseSurplusBeforeTheCorridorIsPriced() public {
+        // Model a real terminal: an `addToBalanceOf` deposit raises the project's surplus.
         terminal.setBumpSurplusOnAddToBalance(true);
+        // Pre-initialize the pool mid-corridor so the recycle has room for a bid below spot.
         (int24 corridorLower, int24 corridorUpper) = _corridorAtMid();
-        positionManager.initializePool(
-            _poolKey(), TickMath.getSqrtPriceAtTick(corridorLower + (corridorUpper - corridorLower) / 2)
-        );
-        _accumulateTokens(PROJECT_ID, 1e18);
+        positionManager.initializePool({
+            key: _poolKey(),
+            sqrtPriceX96: TickMath.getSqrtPriceAtTick(corridorLower + (corridorUpper - corridorLower) / 2)
+        });
+        // Deploy the ask that accrues the fees.
+        _accumulateTokens({projectId: PROJECT_ID, amount: 1e18});
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
-        // Give the position a bid and MATERIAL pending terminal-side LP fees.
-        terminalToken.mint(address(positionManager), 1e18);
-        positionManager.injectPositionBalance(tokenId, address(terminalToken), 1e18);
+        // Give the position recovered terminal (buyers filled part of it) and MATERIAL pending terminal-side LP fees.
+        _fillHalfOf(tokenId);
+        (uint256 recoveredProject, uint256 recoveredTerminal) = _lockedSides(tokenId);
         uint256 fee = 60e18;
+        // Record the fee on whichever currency slot the terminal token sorts to, and fund the PM to pay it.
         bool terminalIsToken0 = address(terminalToken) < address(projectToken);
-        if (terminalIsToken0) positionManager.setCollectableFees(tokenId, fee, 0);
-        else positionManager.setCollectableFees(tokenId, 0, fee);
-        terminalToken.mint(address(positionManager), fee);
-        projectToken.mint(address(positionManager), 1000e18);
+        if (terminalIsToken0) positionManager.setCollectableFees({tokenId: tokenId, amount0: fee, amount1: 0});
+        else positionManager.setCollectableFees({tokenId: tokenId, amount0: 0, amount1: fee});
+        terminalToken.mint({to: address(positionManager), amount: fee});
 
+        // Snapshot surplus, routing and the corridor so the assertions isolate the recycle's effect.
         uint256 surplusBefore = store.surplusPerToken(PROJECT_ID);
         uint256 addToBalanceBefore = terminal.addToBalanceCallCount();
+        uint256 terminalBalanceBefore = terminalToken.balanceOf(address(terminal));
+        (int24 lowerBefore, int24 upperBefore) =
+            _corridorOf({projectId: PROJECT_ID, term: address(terminalToken), proj: address(projectToken)});
 
-        // Drive genuine corridor drift with a rate change (fees no longer move the floor).
-        controller.setWeight(PROJECT_ID, 900e18);
-
+        // Accumulate fresh inventory so the recycle has something to add.
+        _accumulateTokens({projectId: PROJECT_ID, amount: 0.5e18});
+        // The re-minted ask may place the recovered project principal plus the whole project ledger.
+        uint256 projectIn = recoveredProject + hook.accumulatedProjectTokens(PROJECT_ID);
+        // Any account may trigger the recycle.
         vm.prank(user);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
+        hook.addLiquidity({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
-        // The terminal fee remainder was NOT deposited to the treasury and did NOT bump the project's surplus.
-        assertEq(
-            terminal.addToBalanceCallCount(), addToBalanceBefore, "routed fees are not deposited into the treasury"
-        );
-        assertEq(store.surplusPerToken(PROJECT_ID), surplusBefore, "routed fees do not bump the project's surplus");
+        // The fee-project cut and the project's remainder both went to the shared terminal; the remainder raised the
+        // project's surplus by exactly its amount.
+        uint256 cut = fee * FEE_PERCENT / 10_000;
+        assertEq(terminal.addToBalanceCallCount(), addToBalanceBefore + 1, "the remainder is added to the balance");
+        assertEq(terminal.lastAddToBalanceAmount(), fee - cut, "exactly the remainder");
+        assertEq(terminalToken.balanceOf(address(terminal)) - terminalBalanceBefore, fee, "the whole fee left the hook");
+        assertEq(store.surplusPerToken(PROJECT_ID), surplusBefore + fee - cut, "the remainder raised the surplus");
 
-        // The fee remainder was folded into the bid leg alongside the recovered terminal.
-        (, uint256 terminalSide) = _lockedSides(hook.tokenIdOf(PROJECT_ID, address(terminalToken)));
-        assertGt(terminalSide, 0, "the collected fee is folded into the re-minted bid leg");
-
-        // The stored drift basis reflects the freshly computed corridor.
-        (int24 postLower, int24 postUpper) = _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
-        assertEq(hook.rangedCorridorLowerOf(PROJECT_ID, address(terminalToken)), postLower, "stored floor is current");
-        assertEq(hook.rangedCorridorUpperOf(PROJECT_ID, address(terminalToken)), postUpper, "stored ceiling is current");
-
-        // An immediate second rebalance finds no further drift (no new fees, no rate change) and reverts.
-        vm.prank(user);
-        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_DriftBelowThreshold.selector);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
+        // The raised floor moved the corridor, and the re-mint used the moved one.
+        (int24 lowerAfter, int24 upperAfter) =
+            _corridorOf({projectId: PROJECT_ID, term: address(terminalToken), proj: address(projectToken)});
+        // The floor is the lower bound for a token0 project and the upper bound for a token1 project.
+        if (address(projectToken) < address(terminalToken)) {
+            assertGt(lowerAfter, lowerBefore, "a token0 project's floor (the lower bound) rose");
+        } else {
+            assertLt(upperAfter, upperBefore, "a token1 project's floor (the upper bound) rose");
+        }
+        // The bid holds exactly the recovered terminal principal and the ask every project token.
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), projectIn, recoveredTerminal);
+        // Both positions sit on the ranges a recycle derives from the live spot and the moved corridor.
+        _assertRecycleGeometry({pid: PROJECT_ID, term: address(terminalToken), proj: address(projectToken)});
     }
 
-    // ─── Finding 7 (LOW): addLiquidity rejects dust accumulation to prevent churn ───
+    // ─── Dust accumulation never triggers an inline recycle ───
 
     function _deployForAdd() internal returns (int24 midTick) {
         midTick = _preInitAtMid();
         _accumulateTokens(PROJECT_ID, 1e18);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
-        projectToken.mint(address(positionManager), 1000e18);
-        terminalToken.mint(address(positionManager), 1000e18);
     }
 
-    /// @notice A 1-wei accumulation cannot force an addLiquidity churn.
-    function test_Finding7_DustAccumulation_CannotForceChurn() public {
-        _deployForAdd();
-        // Deploy consumed the accumulation; accrue a single wei of project-token dust.
-        _accumulateTokens(PROJECT_ID, 1);
+    /// @notice A dust accumulation never triggers an inline recycle, but an explicit recycle folds it into the ask.
+    function test_Finding7_DustAccumulation_FoldsIntoExplicitRecycle() public {
+        // No extra PositionManager funding here: the mock's SWEEP would hand it to the hook and skew the ledger read.
+        _preInitAtMid();
+        // Deploy the ask, then record what V4 rounding left in the ledger.
+        _accumulateTokens({projectId: PROJECT_ID, amount: 1e18});
+        vm.prank(owner);
+        hook.deployPool(PROJECT_ID);
+        uint256 oldTokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
+        uint256 deployRounding = hook.accumulatedProjectTokens(PROJECT_ID);
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), 1e18, 0);
 
+        // A single wei arriving with full gas still skips the inline attempt (below `_MIN_ADD_ACCUMULATION`).
+        projectToken.mint({to: address(controller), amount: 1});
+        vm.startPrank(address(controller));
+        projectToken.approve({spender: address(hook), amount: 1});
+        hook.processSplitWith(_buildReservedContext({projectId: PROJECT_ID, amount: 1}));
+        vm.stopPrank();
+        // The ask is untouched and the dust is ledgered on top of the deploy's rounding.
+        assertEq(
+            hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            oldTokenId,
+            "dust intake does not recycle"
+        );
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), deployRounding + 1, "dust is held in the ledger");
+
+        // Anyone may still recycle explicitly; the dust joins the new ask.
+        (uint256 recovered0, uint256 recovered1) = _principalAtSpot(oldTokenId);
+        // The unfilled ask holds only project tokens, so both principal sides sum to the recovered project amount.
+        uint256 projectIn = recovered0 + recovered1 + hook.accumulatedProjectTokens(PROJECT_ID);
         vm.prank(user);
-        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_AccumulationBelowThreshold.selector);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken));
+        hook.addLiquidity({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
+        assertNotEq(
+            hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            oldTokenId,
+            "explicit recycle re-mints"
+        );
+        // The dust is folded into the ask: only V4 rounding of the whole re-mint stays ledgered.
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), projectIn, 0);
     }
 
     /// @notice A meaningful accumulation still adds liquidity (a fresh position is minted).
     function test_Finding7_MeaningfulAccumulation_StillAdds() public {
+        // Deploy mid-corridor and accumulate a meaningful amount on top.
         _deployForAdd();
-        uint256 oldTokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-        _accumulateTokens(PROJECT_ID, 0.5e18);
+        uint256 oldTokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
+        _accumulateTokens({projectId: PROJECT_ID, amount: 0.5e18});
+        // The unfilled ask holds only project tokens, so both principal sides sum to the recovered project amount.
+        (uint256 recovered0, uint256 recovered1) = _principalAtSpot(oldTokenId);
+        uint256 projectIn = recovered0 + recovered1 + hook.accumulatedProjectTokens(PROJECT_ID);
 
+        // Any account may trigger the recycle, which burns the old ask and mints a fresh one.
         vm.prank(user);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken));
-        assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), oldTokenId, "meaningful accumulation must add");
+        hook.addLiquidity({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
+        uint256 newTokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
+        assertNotEq(newTokenId, oldTokenId, "meaningful accumulation must add");
+
+        // The re-minted ask (plus V4 rounding left in the ledger) holds the recovered principal and the new tokens
+        // exactly; nothing else funds it.
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), projectIn, 0);
+        assertEq(
+            hook.bidTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            0,
+            "no terminal to bid with"
+        );
+        // Both accumulations (1e18 deployed, 0.5e18 recycled) are held by the pool or the ledger.
+        _assertPoolAndLedgerHold(1.5e18);
     }
 
-    // ─── Cold-start seed helpers (Fix A / Fix B) ───
+    // ─── Cold-start seed helpers ───
 
     /// @notice Wire a fresh project whose ERC-20 project token sorts BELOW its ERC-20 terminal token (project =
     /// token0), mirroring `SingleSided_OrderingTest` — the opposite of the default harness ordering.
@@ -502,14 +601,30 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         proj.mint(address(controller), amount);
         vm.startPrank(address(controller));
         proj.approve(address(hook), amount);
-        hook.processSplitWith(_buildContext(pid, address(proj), amount, 1));
+        // Cap gas below the inline-automation floor so the split only records intake.
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(
+            _buildContext({projectId: pid, token: address(proj), amount: amount, groupId: 1})
+        );
         vm.stopPrank();
     }
 
-    function _spotTickFor(uint256 pid, address term) internal view returns (int24) {
-        PoolKey memory key = hook.poolKeyOf(pid, term);
-        (uint160 sqrtPriceX96,,,) = IPoolManager(address(poolManager)).getSlot0(key.toId());
-        return TickMath.getTickAtSqrtPrice(sqrtPriceX96);
+    /// @notice The spot tick of a project's pool.
+    /// @param pid The project whose pool to read.
+    /// @param term The pool's terminal token.
+    /// @return tick The tick at the pool's spot sqrt price.
+    function _spotTickFor(uint256 pid, address term) internal view returns (int24 tick) {
+        // Convert the live spot price so tests compare against tick-denominated bounds.
+        return TickMath.getTickAtSqrtPrice(_spotSqrtPriceFor({pid: pid, term: term}));
+    }
+
+    /// @notice The spot sqrt price of a project's pool.
+    /// @param pid The project whose pool to read.
+    /// @param term The pool's terminal token.
+    /// @return sqrtPriceX96 The pool's spot sqrt price, as a Q64.96 fixed point number.
+    function _spotSqrtPriceFor(uint256 pid, address term) internal view returns (uint160 sqrtPriceX96) {
+        // Read slot0 for the pool key the hook records, so the read targets the pool the hook manages.
+        PoolKey memory key = hook.poolKeyOf({projectId: pid, terminalToken: term});
+        (sqrtPriceX96,,,) = IPoolManager(address(poolManager)).getSlot0(key.toId());
     }
 
     function _lockedSidesFor(
@@ -526,11 +641,50 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         (projectSide, terminalSide) = terminalIsToken0 ? (a1, a0) : (a0, a1);
     }
 
+    /// @notice Assert the live ask/bid sit exactly on the recycle geometry at the current spot: token0 on
+    /// [max(spotCeil, corridorLower), corridorUpper], token1 on [corridorLower, min(spotFloor, corridorUpper)], where
+    /// spotCeil is spotFloor when the spot sits exactly on it and one spacing above otherwise.
+    /// @param pid The project whose positions to check.
+    /// @param term The pool's terminal token.
+    /// @param proj The project token.
+    function _assertRecycleGeometry(uint256 pid, address term, address proj) internal view {
+        // Derive the expected bounds from the same corridor math and the live spot the hook reads.
+        (int24 lo, int24 hi) = _corridorOf({projectId: pid, term: term, proj: proj});
+        int24 spotFloor = JBLPSplitHookHelpers.alignTickToSpacing({
+            tick: _spotTickFor({pid: pid, term: term}), spacing: TICK_SPACING()
+        });
+        // The ask holds the project token and the bid the terminal token, so map them onto token0/token1.
+        bool projectIsToken0 = proj < term;
+        uint256 token0Id = projectIsToken0
+            ? hook.askTokenIdOf({projectId: pid, terminalToken: term})
+            : hook.bidTokenIdOf({projectId: pid, terminalToken: term});
+        uint256 token1Id = projectIsToken0
+            ? hook.bidTokenIdOf({projectId: pid, terminalToken: term})
+            : hook.askTokenIdOf({projectId: pid, terminalToken: term});
+        if (token0Id != 0) {
+            // The token0 position sits at or above spot, clamped to the corridor.
+            (, int24 tickLower, int24 tickUpper,,,,) = positionManager._positions(token0Id);
+            int24 spotCeil = TickMath.getSqrtPriceAtTick(spotFloor) == _spotSqrtPriceFor({pid: pid, term: term})
+                ? spotFloor
+                : spotFloor + TICK_SPACING();
+            assertEq(tickLower, spotCeil > lo ? spotCeil : lo, "token0 lower");
+            assertEq(tickUpper, hi, "token0 upper is the corridor upper");
+            assertLt(tickLower, tickUpper, "token0 range non-degenerate");
+        }
+        if (token1Id != 0) {
+            // The token1 position sits at or below spot, clamped to the corridor.
+            (, int24 tickLower, int24 tickUpper,,,,) = positionManager._positions(token1Id);
+            assertEq(tickLower, lo, "token1 lower is the corridor lower");
+            assertEq(tickUpper, spotFloor < hi ? spotFloor : hi, "token1 upper");
+            assertLt(tickLower, tickUpper, "token1 range non-degenerate");
+        }
+    }
+
     /// @notice Assert a cold-start deploy minted an asks-only position seeded strictly on the ask-fillable side of the
-    /// issuance ceiling, with a non-degenerate range — the invariant both Fix A (zero-cashout) and Fix B (one-spacing
-    /// corridor) must satisfy for either token ordering.
+    /// issuance ceiling, with a non-degenerate range — the invariant both the zero-cashout and the one-spacing
+    /// corridor cold starts must satisfy for either token ordering.
     function _assertColdStartAsksOnlyBelowCeiling(uint256 pid, address term, address proj) internal view {
-        uint256 tokenId = hook.tokenIdOf(pid, term);
+        uint256 tokenId = hook.askTokenIdOf({projectId: pid, terminalToken: term});
         assertNotEq(tokenId, 0, "cold-start deploy must mint a position");
 
         (uint256 projectSide, uint256 terminalSide) = _lockedSidesFor(tokenId, term, proj);
@@ -548,11 +702,13 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
             assertGt(spot, lo, "seed sits strictly above the issuance ceiling (lower tick)");
         }
 
-        assertLt(hook.activeTickLowerOf(pid, term), hook.activeTickUpperOf(pid, term), "range must be non-degenerate");
+        // With no terminal held, the cold start mints no bid, and the ask sits on the recycle geometry.
+        assertEq(hook.bidTokenIdOf({projectId: pid, terminalToken: term}), 0, "no bid without terminal");
+        _assertRecycleGeometry({pid: pid, term: term, proj: proj});
     }
 
     /// @notice Sweep the (linear) cash-out surplus to find a value that collapses the economic corridor to exactly one
-    /// tick spacing, so the cold-start seed lands on the minimum-width corridor Fix B targets.
+    /// tick spacing, so the cold-start seed lands on the minimum-width corridor the one-spacing tests target.
     function _findOneSpacingSurplus(uint256 pid, address term, address proj) internal returns (uint256) {
         int24 spacing = TICK_SPACING();
         for (uint256 i = 0; i < 600; i++) {
@@ -564,7 +720,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         revert("no one-spacing surplus found");
     }
 
-    // ─── Fix A (MEDIUM): a zero-cashout cold-start pool seeds strictly below the ceiling and deploys ───
+    // ─── A zero-cashout cold-start pool seeds strictly below the ceiling and deploys ───
 
     /// @notice Default ordering (project = token1): cashOutRate rounds to 0 (no surplus) with nonzero issuance. The
     /// hook-initialized pool seeds strictly on the ask side of the issuance ceiling, so the cold-start deploy SUCCEEDS
@@ -588,7 +744,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         _assertColdStartAsksOnlyBelowCeiling(pid, address(term), address(proj));
     }
 
-    // ─── Fix B (LOW): a one-spacing-wide corridor cold-start yields a non-degenerate asks-only range ───
+    // ─── A one-spacing-wide corridor cold-start yields a non-degenerate asks-only range ───
 
     /// @notice Default ordering (project = token1): a corridor exactly one tick spacing wide seeds the cold-start pool
     /// on the aligned floor bound, leaving a non-degenerate one-spacing asks-only range instead of collapsing to
@@ -626,7 +782,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         uint256 pid = 23;
         (MockERC20 proj, MockERC20 term) = _wireProjectToken0Codex(pid);
         // A low surplus over a large supply keeps the cash-out floor genuinely below the issuance ceiling (wide band).
-        store.setTaxedCashOutCurve({projectId: pid, surplus: 1e18, supply: 1_000_000e18, taxRate: 4000});
+        _setWideTaxedCurve(pid);
 
         (int24 corridorLower, int24 corridorUpper) = _corridorOf(pid, address(term), address(proj));
         // project = token0 → the cash-out floor is the corridor's LOWER tick; the seed sits one spacing inside it.
@@ -638,60 +794,5 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
 
         assertEq(_spotTickFor(pid, address(term)), expectedSeedTick, "wide corridor seeds one spacing inside the floor");
         assertLt(expectedSeedTick, corridorUpper - TICK_SPACING() + 1, "seed stays strictly below the ceiling");
-    }
-
-    // ─── Fix C (coverage): floor-pinned excess terminal is carried into the terminal bid-leg ledger ───
-
-    /// @notice When a rebalance recovers MORE terminal than the floor-leg bid can absorb, the bid bound pins at the
-    /// cash-out floor and the excess terminal is carried into the project's terminal bid-leg ledger (retained as
-    /// protocol-owned liquidity for the next mint) — never paired beyond capacity, never deposited into the treasury,
-    /// and never stranded outside the ledger.
-    function test_FixC_RebalanceFloorPinnedExcessTerminal_CarriedToLedger() public {
-        (int24 corridorLower, int24 corridorUpper) = _corridorAtMid();
-        positionManager.initializePool(
-            _poolKey(), TickMath.getSqrtPriceAtTick(corridorLower + (corridorUpper - corridorLower) / 2)
-        );
-        _accumulateTokens(PROJECT_ID, 0.5e18);
-        vm.prank(owner);
-        hook.deployPool(PROJECT_ID);
-        uint256 tokenId = hook.tokenIdOf(PROJECT_ID, address(terminalToken));
-
-        // Inject FAR more of this project's own terminal than a 0.5e18 ask leg's bid can absorb, so the burn recovers
-        // an excess that must pin the bid bound at the floor. Fund only the injected principal (so the mock's SWEEP has
-        // no
-        // unlocked terminal to hand back to the hook, keeping the ledger-only-retention assertion meaningful).
-        uint256 injected = 1_000_000e18;
-        terminalToken.mint(address(positionManager), injected);
-        positionManager.injectPositionBalance(tokenId, address(terminalToken), injected);
-        projectToken.mint(address(positionManager), 1000e18);
-
-        controller.setWeight(PROJECT_ID, 900e18); // move the corridor to clear the drift guard.
-
-        uint256 addToBalanceBefore = terminal.addToBalanceCallCount();
-        vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
-
-        // The floor-pinned excess is retained in the terminal ledger, not deposited into the treasury.
-        assertEq(
-            terminal.addToBalanceCallCount(), addToBalanceBefore, "excess terminal is not deposited into the treasury"
-        );
-
-        // The bid was pinned at the floor: only part of the recovered terminal was paired into the re-minted position.
-        (, uint256 terminalSide) = _lockedSidesFor(
-            hook.tokenIdOf(PROJECT_ID, address(terminalToken)), address(terminalToken), address(projectToken)
-        );
-        assertGt(terminalSide, 0, "the floor-leg bid is seeded from recovered terminal");
-        assertLt(terminalSide, injected, "the paired bid is capped at floor capacity, below the recovered terminal");
-
-        // The un-paired excess is exactly the ledger, and the whole excess remains held in the hook as that ledger.
-        uint256 excess = injected - terminalSide;
-        assertEq(
-            hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)),
-            excess,
-            "the floor-pinned excess is carried into the terminal bid-leg ledger"
-        );
-        assertEq(
-            terminalToken.balanceOf(address(hook)), excess, "the excess is retained in the hook as ledger, not stranded"
-        );
     }
 }

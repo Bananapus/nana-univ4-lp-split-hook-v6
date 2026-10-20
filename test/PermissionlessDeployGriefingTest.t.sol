@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
+import {LPSplitHookV4TestBase, DEFAULT_SURPLUS_PER_TOKEN} from "./TestBaseV4.sol";
 import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
@@ -45,7 +45,7 @@ contract PermissionlessDeployGriefingTest is LPSplitHookV4TestBase {
         store.setBalance(address(terminal), PROJECT_ID, address(lowLiquidityToken), 0.01e18);
 
         // Set surplus for low liquidity token too
-        store.setSurplus(PROJECT_ID, 0.5e18);
+        store.setSurplus({projectId: PROJECT_ID, surplus: DEFAULT_SURPLUS_PER_TOKEN});
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -73,10 +73,14 @@ contract PermissionlessDeployGriefingTest is LPSplitHookV4TestBase {
         // Pool was deployed with the HIGH-liquidity token, not the attacker's choice
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "pool should be deployed");
         assertTrue(
-            hook.tokenIdOf(PROJECT_ID, address(terminalToken)) != 0,
+            hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}) != 0,
             "pool should exist for highest-value token (terminalToken)"
         );
-        assertEq(hook.tokenIdOf(PROJECT_ID, address(lowLiquidityToken)), 0, "no pool should exist for low-value token");
+        assertEq(
+            hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(lowLiquidityToken)}),
+            0,
+            "no pool should exist for low-value token"
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -102,7 +106,11 @@ contract PermissionlessDeployGriefingTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
 
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "pool should be deployed");
-        assertNotEq(hook.tokenIdOf(PROJECT_ID, address(terminalToken)), 0, "pool should exist for highest-value token");
+        assertNotEq(
+            hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            0,
+            "pool should exist for highest-value token"
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -153,7 +161,7 @@ contract PermissionlessDeployGriefingTest is LPSplitHookV4TestBase {
                 token: address(terminalToken), decimals: 18, currency: uint32(uint160(address(terminalToken)))
             })
         );
-        store.setSurplus(freshProjectId, 0.5e18);
+        store.setSurplus({projectId: freshProjectId, surplus: DEFAULT_SURPLUS_PER_TOKEN});
         store.setBalance(address(terminal), freshProjectId, address(terminalToken), 10e18);
 
         // Accumulate tokens
@@ -161,7 +169,8 @@ contract PermissionlessDeployGriefingTest is LPSplitHookV4TestBase {
         vm.startPrank(address(controller));
         projectToken.approve(address(hook), 100e18);
         JBSplitHookContext memory context = _buildContext(freshProjectId, address(projectToken), 100e18, 1);
-        hook.processSplitWith(context);
+        // Deliver with intake-only gas so the hook runs intake and skips inline automation.
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
 
         // Decay weight 10x
