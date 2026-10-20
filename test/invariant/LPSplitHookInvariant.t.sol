@@ -12,6 +12,11 @@ import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookCont
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {MockGeomeanOracle} from "../mock/MockGeomeanOracle.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
@@ -52,6 +57,8 @@ contract InvariantMockPermit2 {
 /// @notice Handler exercising the accumulation, deploy, fee-collection and recycle stages of JBUniswapV4LPSplitHook.
 /// @dev The fuzzer calls functions on this handler. Each function mutates hook state through a legitimate entry point.
 contract LPSplitHookHandler is Test {
+    using PoolIdLibrary for PoolKey;
+
     /// @notice Gas cap that covers intake but sits below the hook's inline-automation attempt floor, keeping the
     /// handler's accumulate actions accumulate-only (automation skips, exactly like a distribution arriving without
     /// enough gas for it), so the invariants keep exercising the explicit deploy/add paths.
@@ -104,6 +111,11 @@ contract LPSplitHookHandler is Test {
 
     /// @dev Ghost variable: gross LP fees injected into each project's live positions and not yet collected.
     mapping(uint256 projectId => uint256 amount) public uncollectedFees;
+
+    /// @dev Ghost: what V4's rounding left in the pool when a recycle burned the project's positions (each burn returns
+    /// its principal at the spot rounded down, below the rounded-up cost the pool holds), by side.
+    mapping(uint256 projectId => uint256 amount) public projectBurnRounding;
+    mapping(uint256 projectId => uint256 amount) public terminalBurnRounding;
 
     /// @dev Ghost variables: successful collections / recycles that collected a nonzero injected fee.
     uint256 public feeCollectionCount;
@@ -315,6 +327,28 @@ contract LPSplitHookHandler is Test {
         uncollectedFees[projectId] += projectFee + terminalFee;
     }
 
+    /// @notice What burning `projectId`'s live ask and bid leaves in the pool, by side: each position's reserves minus
+    /// the principal V4 returns for its liquidity at the live spot (rounded down).
+    function _burnRounding(uint256 projectId) internal view returns (uint256 projectSide, uint256 terminalSide) {
+        bool projectIsToken0 = address(projectToken) < address(terminalToken);
+        uint256[2] memory ids = [
+            hook.askTokenIdOf(projectId, address(terminalToken)), hook.bidTokenIdOf(projectId, address(terminalToken))
+        ];
+        for (uint256 j; j < 2; j++) {
+            if (ids[j] == 0) continue;
+            (PoolKey memory key, int24 lower, int24 upper, uint128 liquidity, uint256 locked0, uint256 locked1,) =
+                positionManager._positions(ids[j]);
+            (uint160 sqrtP,,,) = StateLibrary.getSlot0(IPoolManager(address(positionManager.poolManager())), key.toId());
+            uint160 sqrtA = TickMath.getSqrtPriceAtTick(lower);
+            uint160 sqrtB = TickMath.getSqrtPriceAtTick(upper);
+            sqrtP = sqrtP < sqrtA ? sqrtA : sqrtP > sqrtB ? sqrtB : sqrtP;
+            uint256 rounding0 = locked0 - SqrtPriceMath.getAmount0Delta(sqrtP, sqrtB, liquidity, false);
+            uint256 rounding1 = locked1 - SqrtPriceMath.getAmount1Delta(sqrtA, sqrtP, liquidity, false);
+            projectSide += projectIsToken0 ? rounding0 : rounding1;
+            terminalSide += projectIsToken0 ? rounding1 : rounding0;
+        }
+    }
+
     /// @notice A successful collection or recycle collected every live position's injected fees.
     /// @return collectedFees Whether a nonzero injected fee was collected.
     function _settleCollectedFees(uint256 projectId) internal returns (bool collectedFees) {
@@ -352,11 +386,14 @@ contract LPSplitHookHandler is Test {
     function addLiquidity(uint256 projectIdSeed, uint256 feeSeed) external {
         uint256 projectId = _deployedProject(projectIdSeed);
         _injectNonzeroFees(projectId, feeSeed);
+        (uint256 projectRounding, uint256 terminalRounding) = _burnRounding(projectId);
 
         try hook.addLiquidity(projectId, address(terminalToken)) {
             // The recycle collected both positions' fees before burning them.
             if (_settleCollectedFees(projectId)) feeRecycleCount++;
             recycleCallCount++;
+            projectBurnRounding[projectId] += projectRounding;
+            terminalBurnRounding[projectId] += terminalRounding;
         } catch (bytes memory reason) {
             _latch(reason);
         }
@@ -623,8 +660,13 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
         uint256 accumulatedBefore = hook.accumulatedProjectTokens(1);
         uint256 terminalBefore = hook.accumulatedTerminalTokens(1, address(terminalToken));
         uint256 cuts2 = _cut(fees2[1]) + _cut(fees2[3]);
+        uint256 projectRoundingBefore = handler.projectBurnRounding(1);
+        uint256 terminalRoundingBefore = handler.terminalBurnRounding(1);
         handler.addLiquidity(1, 0);
         assertEq(handler.recycleCallCount(), 2, "the zero-accumulation recycle succeeded");
+        // The burns return the principal less V4's rounding, which stays in the pool.
+        uint256 projectRounding = handler.projectBurnRounding(1) - projectRoundingBefore;
+        uint256 terminalRounding = handler.terminalBurnRounding(1) - terminalRoundingBefore;
 
         assertEq(hook.claimableFeeTokens(1), claims + cuts + cuts2, "the recycle cut both positions' fees exactly");
         uint256 newAsk = hook.askTokenIdOf(1, address(terminalToken));
@@ -637,12 +679,12 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
         assertEq(newBidProject, 0, "the bid holds no project token");
         assertEq(
             newAskProject + hook.accumulatedProjectTokens(1),
-            askProject + bidProject + accumulatedBefore + fees2[0] + fees2[2],
+            askProject + bidProject - projectRounding + accumulatedBefore + fees2[0] + fees2[2],
             "every project token (principal + ledger + forgiven fees) is in the ask or its ledger"
         );
         assertEq(
             newBidTerminal + hook.accumulatedTerminalTokens(1, address(terminalToken)),
-            askTerminal + bidTerminal + terminalBefore + fees2[1] + fees2[3] - cuts2,
+            askTerminal + bidTerminal - terminalRounding + terminalBefore + fees2[1] + fees2[3] - cuts2,
             "every terminal token (principal + ledger + fee remainders) is in the bid or its ledger"
         );
 
@@ -677,7 +719,8 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
 
     /// @notice Nothing is donated in this campaign, so every balance is exactly its books: the hook holds its ledgers
     ///         plus the fee tokens it owes (which share the project token here), the PositionManager holds the live
-    ///         principal plus uncollected fees, and the fee terminal holds exactly the independently computed cuts.
+    ///         principal plus uncollected fees plus the rounding past burns left in the pool, and the fee terminal
+    ///         holds exactly the independently computed cuts.
     /// @dev Catches tokens credited without arriving, ledgers erased while their tokens strand, and cuts that are
     ///      over- or under-paid.
     function invariant_exactGlobalBacking() public view {
@@ -690,6 +733,11 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
             cuts += handler.expectedClaims(i);
         }
         (uint256 pmProjectBooks, uint256 pmTerminalBooks) = _positionManagerBooks();
+        // Burns leave V4's rounding in the pool.
+        for (uint256 i = 1; i <= handler.MAX_PROJECT_ID(); i++) {
+            pmProjectBooks += handler.projectBurnRounding(i);
+            pmTerminalBooks += handler.terminalBurnRounding(i);
+        }
 
         assertEq(projectToken.balanceOf(address(hook)), hookProjectBooks, "INVARIANT VIOLATED: hook project backing");
         assertEq(terminalToken.balanceOf(address(hook)), hookTerminalBooks, "INVARIANT VIOLATED: hook terminal backing");
@@ -777,6 +825,9 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
                 projectBooks += projectIsToken0 ? amount0 : amount1;
                 terminalBooks += projectIsToken0 ? amount1 : amount0;
             }
+            // What a project's burns left in the pool as V4 rounding is still its tokens, just no longer withdrawable.
+            projectBooks += handler.projectBurnRounding(i);
+            terminalBooks += handler.terminalBurnRounding(i);
             assertEq(
                 projectBooks,
                 handler.totalMintedToHook(i) + handler.projectFeesInjected(i),

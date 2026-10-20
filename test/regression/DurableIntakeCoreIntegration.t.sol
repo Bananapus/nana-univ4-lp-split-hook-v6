@@ -175,7 +175,13 @@ contract DurableIntakeCoreIntegration is ForkDeployHelper {
         oracle.setShouldRevert(false);
         hook.deployPool(pid);
         assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "the retry should deploy");
-        assertEq(hook.accumulatedProjectTokens(pid), 0, "the retained amount should be deployed");
+        // The retained amount is deployed exactly once: the ask holds it all but V4 rounding, which stays ledgered.
+        (,,,, uint256 askEth, uint256 askProject,) =
+            positionManager._positions(hook.askTokenIdOf(pid, JBConstants.NATIVE_TOKEN));
+        uint256 ledger = hook.accumulatedProjectTokens(pid);
+        assertEq(askEth, 0, "the ask holds no ETH");
+        assertEq(askProject + ledger, reservedAmount, "the retained amount should be deployed");
+        assertEq(IERC20(address(token)).balanceOf(address(hook)), ledger, "the hook holds only the ledgered rounding");
     }
 
     // ─── Gas starvation

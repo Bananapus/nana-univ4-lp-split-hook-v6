@@ -42,8 +42,8 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(tokenId, 0, "tokenIdOf should be nonzero after deploy");
 
-        // Verify accumulated tokens were cleared
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "accumulated should be 0 after deploy");
+        // Verify accumulated tokens were placed: only V4 rounding stays ledgered
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), 90e18, 0);
 
         // Verify projectDeployed is set
         assertTrue(
@@ -118,6 +118,8 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
 
         // Recycle (permissionless) with a fresh accumulation.
         _accumulateTokens(PROJECT_ID, 1e18);
+        (uint256 recovered0, uint256 recovered1) = _principalAtSpot(originalTokenId);
+        uint256 projectIn = recovered0 + recovered1 + hook.accumulatedProjectTokens(PROJECT_ID);
         vm.prank(user);
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
@@ -138,9 +140,8 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(newTokenId, 0, "new tokenId should be nonzero");
         assertNotEq(newTokenId, originalTokenId, "askTokenIdOf should change after the recycle");
-        (,,,, uint256 amount0Locked, uint256 amount1Locked,) = positionManager._positions(newTokenId);
-        assertEq(amount0Locked + amount1Locked, 101e18, "the ask holds the recovered plus new project tokens");
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "the project ledger is fully minted");
+        // The ask holds the recovered plus new project tokens, less only V4 rounding left in the ledger.
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), projectIn, 0);
     }
 
     // -----------------------------------------------------------------------
@@ -273,9 +274,9 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         assertNotEq(tokenId3, 0, "PROJECT_3 tokenId should be nonzero");
         assertNotEq(tokenId1, tokenId3, "tokenIds should differ between projects");
 
-        // Verify accumulated tokens were cleared for both
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "PROJECT_ID accumulated should be 0 after deploy");
-        assertEq(hook.accumulatedProjectTokens(PROJECT_3), 0, "PROJECT_3 accumulated should be 0 after deploy");
+        // Verify accumulated tokens were placed for both: only V4 rounding stays ledgered
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), 50e18, 0);
+        _assertPlacedExactly(PROJECT_3, address(projectToken3), address(terminalToken), 50e18, 0);
 
         // Verify both projects are marked as deployed
         assertTrue(hook.isPoolDeployed(PROJECT_ID, address(terminalToken)), "PROJECT_ID should be deployed");
@@ -340,8 +341,8 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(tokenId, 0, "tokenIdOf should be nonzero after deploy");
 
-        // Verify accumulated tokens were cleared
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "accumulated should be 0 after deploy");
+        // Verify accumulated tokens were placed: only V4 rounding stays ledgered
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), amount, 0);
 
         // Verify project is marked deployed
         assertTrue(hook.isPoolDeployed(PROJECT_ID, address(terminalToken)), "projectDeployed should be true");

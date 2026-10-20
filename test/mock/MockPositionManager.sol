@@ -3,33 +3,46 @@ pragma solidity 0.8.28;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
-import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
-import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
-import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {Pool} from "@uniswap/v4-core/src/libraries/Pool.sol";
+import {Position as V4Position} from "@uniswap/v4-core/src/libraries/Position.sol";
+import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
+import {TickBitmap} from "@uniswap/v4-core/src/libraries/TickBitmap.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
+import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {BaseActionsRouter} from "@uniswap/v4-periphery/src/base/BaseActionsRouter.sol";
+import {DeltaResolver} from "@uniswap/v4-periphery/src/base/DeltaResolver.sol";
+import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
+import {ActionConstants} from "@uniswap/v4-periphery/src/libraries/ActionConstants.sol";
 import {Actions} from "@uniswap/v4-periphery/src/libraries/Actions.sol";
-import {SlippageCheck} from "@uniswap/v4-periphery/src/libraries/SlippageCheck.sol";
 import {PositionInfo, PositionInfoLibrary} from "@uniswap/v4-periphery/src/libraries/PositionInfoLibrary.sol";
+import {SlippageCheck} from "@uniswap/v4-periphery/src/libraries/SlippageCheck.sol";
+
 import {MockPoolManager} from "./MockPoolManager.sol";
 
-/// @notice Mock PositionManager for testing JBUniswapV4LPSplitHook
-/// @dev Simulates modifyLiquidities with realistic token flows:
-///      - MINT_POSITION records how many tokens the position requires
-///      - SETTLE pulls tokens from the caller (enforcing approval + balance)
-///      - BURN_POSITION / DECREASE_LIQUIDITY record their minimums, enforce them against the principal removed (fees
-///        excluded, like V4's `validateMinOut`) and track owed amounts for TAKE_PAIR
-///      - TAKE_PAIR transfers owed + fee amounts to the recipient, reverting when the unlocked balance cannot pay
-///      - SWEEP returns only the native value this call sent but did not use (ERC-20s are pulled exactly)
+/// @notice Mock PositionManager for testing JBUniswapV4LPSplitHook, following Uniswap V4's PositionManager and
+/// PoolManager semantics for every action the hook encodes:
+///      - MINT_POSITION / INCREASE_LIQUIDITY add exactly the requested liquidity at a cost computed from the live
+///        price and range, rounded up as in v4-core, and revert with `MaximumAmountExceeded` above a maximum.
+///      - BURN_POSITION / DECREASE_LIQUIDITY remove principal from the same math rounded down, owner-only, and revert
+///        with `MinimumAmountInsufficient` below a minimum (fees excluded, like `validateMinOut`).
+///      - Each batch tracks a delta per currency: SETTLE / SETTLE_PAIR pay debt (honoring amount and payer), TAKE_PAIR
+///        takes credit, CLOSE_CURRENCY does whichever applies, and the batch reverts with `CurrencyNotSettled` unless
+///        every delta ends at zero. Unsupported actions revert with `UnsupportedAction`.
+///      - The pool's reserves (`poolLocked`) are kept apart from this contract's own loose balance, which is all SWEEP
+///        ever moves (the whole loose balance of the currency, native or ERC-20).
 contract MockPositionManager {
-    using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
+    using PoolIdLibrary for PoolKey;
+
+    IAllowanceTransfer constant PERMIT2 = IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3);
 
     uint256 public nextTokenId = 1;
 
-    // Configurable usage percent (how much of desired amounts are used in mint)
-    uint256 public usagePercent = 10_000; // 100%
-
-    // Reference to MockPoolManager for syncing Slot0 on pool init
+    // Reference to MockPoolManager for the pool's Slot0 and tick liquidity.
     MockPoolManager public poolManager;
 
     struct Position {
@@ -37,16 +50,21 @@ contract MockPositionManager {
         int24 tickLower;
         int24 tickUpper;
         uint128 liquidity;
-        uint256 amount0Locked; // tokens locked in the position
-        uint256 amount1Locked; // tokens locked in the position
+        uint256 amount0Locked; // pool reserves of token0 backing this position
+        uint256 amount1Locked; // pool reserves of token1 backing this position
         bool exists;
     }
 
     mapping(uint256 tokenId => Position) public _positions;
+    mapping(uint256 tokenId => address) public ownerOf;
 
-    // Pre-configured collectable fees per tokenId
+    // Fees accrued to each position, held in the pool's reserves until collected.
     mapping(uint256 tokenId => uint256 amount0) public collectableAmount0;
     mapping(uint256 tokenId => uint256 amount1) public collectableAmount1;
+
+    // Part of the removed principal a pool hook keeps on each removal (a V4 `afterRemoveLiquidity` return delta).
+    mapping(uint256 tokenId => uint256 amount0) public hookTakeOnRemove0;
+    mapping(uint256 tokenId => uint256 amount1) public hookTakeOnRemove1;
 
     // Initialized pools
     mapping(bytes32 poolId => bool) public poolInitialized;
@@ -63,49 +81,22 @@ contract MockPositionManager {
     mapping(uint256 tokenId => uint128) public lastMin0Of;
     mapping(uint256 tokenId => uint128) public lastMin1Of;
 
-    // Tokens locked in positions (simulates PoolManager holding them). TAKE_PAIR only pays out of the balance above
-    // this, so an unfunded fee or principal reverts instead of being paid from another position's stock.
+    // The pool's reserves per token (settled principal plus accrued fees). Everything this contract holds above it is
+    // its own loose balance.
     mapping(address token => uint256) public poolLocked;
 
-    // --- Per-modifyLiquidities transient state ---
-    // Tracks amounts owed to the caller after BURN/DECREASE, consumed by TAKE_PAIR.
-    uint256 private _pendingOwed0;
-    uint256 private _pendingOwed1;
-    // Track the currencies for pending owed amounts.
-    Currency private _pendingCurrency0;
-    Currency private _pendingCurrency1;
-    // Amounts the mint expects to settle (consumed by SETTLE).
-    uint256 private _pendingSettle0;
-    uint256 private _pendingSettle1;
-    Currency private _settleCurrency0;
-    Currency private _settleCurrency1;
-    // Native value sent with this call and not yet consumed by a mint/increase (what SWEEP may return).
-    uint256 private _nativeCredit;
+    // --- Per-batch state ---
+    bool private _unlocked;
+    mapping(address token => int256) private _delta;
+    address[] private _touched;
 
     function setPoolManager(MockPoolManager pm) external {
         poolManager = pm;
     }
 
-    /// @notice Test helper: grow a live position's locked balance of `token` (simulating buyers filling the position's
-    /// asks and leaving `token` behind as principal), so a subsequent BURN recovers real principal of that token —
-    /// the
-    /// only legitimate way terminal enters an LP position. The caller must have already funded this contract with
-    /// `amount` of `token` (mint an ERC-20 to it, or `vm.deal` for native ETH) so TAKE_PAIR can pay it out on burn.
-    function injectPositionBalance(uint256 tokenId, address token, uint256 amount) external {
-        Position storage pos = _positions[tokenId];
-        require(pos.exists, "Position does not exist");
-        if (token == Currency.unwrap(pos.poolKey.currency0)) {
-            pos.amount0Locked += amount;
-        } else if (token == Currency.unwrap(pos.poolKey.currency1)) {
-            pos.amount1Locked += amount;
-        } else {
-            revert("token not in pool");
-        }
-        poolLocked[token] += amount;
-    }
-
-    /// @notice Test helper: overwrite a live position's recorded principal (e.g. to mark it to a moved price or to
-    /// return slightly less than a burn floor). The caller keeps this contract's balances backing the new amounts.
+    /// @notice Test helper: overwrite a live position's pool reserves, as swaps through its range would (e.g. to mark
+    /// it to a moved price). The caller keeps this contract's balances backing the new amounts. A burn pays the
+    /// principal from the position's liquidity at the live price and reverts if these reserves cannot cover it.
     function setPositionPrincipal(uint256 tokenId, uint256 amount0, uint256 amount1) external {
         Position storage pos = _positions[tokenId];
         require(pos.exists, "Position does not exist");
@@ -123,13 +114,29 @@ contract MockPositionManager {
         _positions[tokenId].liquidity = liquidity;
     }
 
-    function setUsagePercent(uint256 percent) external {
-        usagePercent = percent;
-    }
-
+    /// @notice Test helper: fees accrued to `tokenId`. They join the pool's reserves, so the caller funds this contract
+    /// with them.
     function setCollectableFees(uint256 tokenId, uint256 amount0, uint256 amount1) external {
+        require(_positions[tokenId].exists, "Position does not exist");
+        PoolKey memory key = _positions[tokenId].poolKey;
+        address token0 = Currency.unwrap(key.currency0);
+        address token1 = Currency.unwrap(key.currency1);
+        poolLocked[token0] = poolLocked[token0] - collectableAmount0[tokenId] + amount0;
+        poolLocked[token1] = poolLocked[token1] - collectableAmount1[tokenId] + amount1;
         collectableAmount0[tokenId] = amount0;
         collectableAmount1[tokenId] = amount1;
+    }
+
+    /// @notice Test helper: a pool hook keeps `amount0`/`amount1` of the principal each removal from `tokenId` would
+    /// return (V4's `afterRemoveLiquidity` return delta), so the caller receives less than the position's principal.
+    function setHookTakeOnRemove(uint256 tokenId, uint256 amount0, uint256 amount1) external {
+        hookTakeOnRemove0[tokenId] = amount0;
+        hookTakeOnRemove1[tokenId] = amount1;
+    }
+
+    /// @notice Test helper: liquidity other LPs already hold at `tick`, which counts against V4's per-tick cap.
+    function setTickLiquidityGross(PoolKey calldata key, int24 tick, uint128 liquidityGross) external {
+        _writeTickGross(key, tick, liquidityGross);
     }
 
     /// @notice IPoolInitializer_v4.initializePool
@@ -173,45 +180,59 @@ contract MockPositionManager {
         return (pos.poolKey, PositionInfoLibrary.initialize(pos.poolKey, pos.tickLower, pos.tickUpper));
     }
 
-    /// @notice IPositionManager.modifyLiquidities — the main entry point
-    /// @dev Decodes actions and params, simulates behavior with realistic token flows.
-    function modifyLiquidities(
-        bytes calldata unlockData,
-        uint256 /* deadline */
-    )
-        external
-        payable
-    {
-        // Reset transient state
-        _pendingOwed0 = 0;
-        _pendingOwed1 = 0;
-        _pendingSettle0 = 0;
-        _pendingSettle1 = 0;
-        _nativeCredit = msg.value;
+    /// @notice IPositionManager.modifyLiquidities — the main entry point.
+    function modifyLiquidities(bytes calldata unlockData, uint256 deadline) external payable {
+        if (block.timestamp > deadline) revert IPositionManager.DeadlinePassed(deadline);
+        if (_unlocked) revert IPoolManager.AlreadyUnlocked();
+        _unlocked = true;
 
         (bytes memory actions, bytes[] memory params) = abi.decode(unlockData, (bytes, bytes[]));
+        if (actions.length != params.length) revert BaseActionsRouter.InputLengthMismatch();
 
-        for (uint256 i = 0; i < actions.length; i++) {
-            uint8 action = uint8(actions[i]);
+        for (uint256 i; i < actions.length; i++) {
+            uint256 action = uint8(actions[i]);
 
-            if (action == uint8(Actions.INCREASE_LIQUIDITY)) {
+            if (action == Actions.INCREASE_LIQUIDITY) {
                 _handleIncreaseLiquidity(params[i]);
-            } else if (action == uint8(Actions.MINT_POSITION)) {
+            } else if (action == Actions.MINT_POSITION) {
                 _handleMint(params[i]);
-            } else if (action == uint8(Actions.BURN_POSITION)) {
+            } else if (action == Actions.BURN_POSITION) {
                 _handleBurn(params[i]);
-            } else if (action == uint8(Actions.DECREASE_LIQUIDITY)) {
+            } else if (action == Actions.DECREASE_LIQUIDITY) {
                 _handleDecreaseLiquidity(params[i]);
-            } else if (action == uint8(Actions.TAKE_PAIR)) {
-                _handleTakePair(params[i]);
-            } else if (action == uint8(Actions.SETTLE)) {
-                _handleSettle(params[i]);
-            } else if (action == uint8(Actions.SETTLE_PAIR)) {
-                // No-op in mock — tokens already transferred
-            } else if (action == uint8(Actions.SWEEP)) {
-                _handleSweep(params[i]);
+            } else if (action == Actions.SETTLE) {
+                (Currency currency, uint256 amount, bool payerIsUser) = abi.decode(params[i], (Currency, uint256, bool));
+                _settle(currency, payerIsUser ? msg.sender : address(this), _mapSettleAmount(amount, currency));
+            } else if (action == Actions.SETTLE_PAIR) {
+                (Currency currency0, Currency currency1) = abi.decode(params[i], (Currency, Currency));
+                _settle(currency0, msg.sender, _fullDebt(currency0));
+                _settle(currency1, msg.sender, _fullDebt(currency1));
+            } else if (action == Actions.TAKE_PAIR) {
+                (Currency currency0, Currency currency1, address recipient) =
+                    abi.decode(params[i], (Currency, Currency, address));
+                recipient = _mapRecipient(recipient);
+                _take(currency0, recipient, _fullCredit(currency0));
+                _take(currency1, recipient, _fullCredit(currency1));
+            } else if (action == Actions.CLOSE_CURRENCY) {
+                Currency currency = abi.decode(params[i], (Currency));
+                int256 delta = _delta[Currency.unwrap(currency)];
+                if (delta < 0) _settle(currency, msg.sender, uint256(-delta));
+                else _take(currency, msg.sender, uint256(delta));
+            } else if (action == Actions.SWEEP) {
+                (Currency currency, address to) = abi.decode(params[i], (Currency, address));
+                uint256 balance = _looseBalance(currency);
+                if (balance > 0) _transfer(currency, _mapRecipient(to), balance);
+            } else {
+                revert BaseActionsRouter.UnsupportedAction(action);
             }
         }
+
+        // Like PoolManager.unlock: every currency delta must be cleared before the batch returns.
+        for (uint256 i; i < _touched.length; i++) {
+            if (_delta[_touched[i]] != 0) revert IPoolManager.CurrencyNotSettled();
+        }
+        delete _touched;
+        _unlocked = false;
     }
 
     function _handleMint(bytes memory data) internal {
@@ -225,41 +246,30 @@ contract MockPositionManager {
             address posOwner,
             /* hookData */
         ) = abi.decode(data, (PoolKey, int24, int24, uint256, uint128, uint128, address, bytes));
-        posOwner; // Silence unused variable warning.
 
         mintCallCount++;
         uint256 tokenId = nextTokenId++;
         lastMintTokenId = tokenId;
+        ownerOf[tokenId] = _mapRecipient(posOwner);
 
-        // Calculate amounts used based on usagePercent
-        uint256 amount0Used = (uint256(amount0Max) * usagePercent) / 10_000;
-        uint256 amount1Used = (uint256(amount1Max) * usagePercent) / 10_000;
+        // V4 checks the range before touching the position.
+        if (tickLower >= tickUpper) revert Pool.TicksMisordered(tickLower, tickUpper);
+        if (tickLower < TickMath.MIN_TICK) revert Pool.TickLowerOutOfBounds(tickLower);
+        if (tickUpper > TickMath.MAX_TICK) revert Pool.TickUpperOutOfBounds(tickUpper);
+        if (tickLower % key.tickSpacing != 0) revert TickBitmap.TickMisaligned(tickLower, key.tickSpacing);
+        if (tickUpper % key.tickSpacing != 0) revert TickBitmap.TickMisaligned(tickUpper, key.tickSpacing);
+        if (liquidity == 0) revert V4Position.CannotUpdateEmptyPosition();
 
         _positions[tokenId] = Position({
             poolKey: key,
             tickLower: tickLower,
             tickUpper: tickUpper,
-            // The position holds liquidity in proportion to what it used, so its principal and burn floor agree.
-            // Safe: test mock; values in tests always fit in target type.
-            // forge-lint: disable-next-line(unsafe-typecast)
-            liquidity: uint128((liquidity * usagePercent) / 10_000),
-            amount0Locked: amount0Used,
-            amount1Locked: amount1Used,
+            liquidity: 0,
+            amount0Locked: 0,
+            amount1Locked: 0,
             exists: true
         });
-
-        // Record what SETTLE needs to pull from the caller.
-        _pendingSettle0 = amount0Used;
-        _pendingSettle1 = amount1Used;
-        _settleCurrency0 = key.currency0;
-        _settleCurrency1 = key.currency1;
-
-        // Lock the used amounts in the "pool".
-        address token0 = Currency.unwrap(key.currency0);
-        address token1 = Currency.unwrap(key.currency1);
-        poolLocked[token0] += amount0Used;
-        poolLocked[token1] += amount1Used;
-        _consumeNative(key, amount0Used, amount1Used);
+        _addLiquidity(tokenId, liquidity, amount0Max, amount1Max);
     }
 
     function _handleIncreaseLiquidity(bytes memory data) internal {
@@ -271,55 +281,28 @@ contract MockPositionManager {
         ) = abi.decode(data, (uint256, uint256, uint128, uint128, bytes));
 
         increaseCallCount++;
-
-        // Calculate amounts used based on usagePercent (same model as mint).
-        uint256 amount0Used = (uint256(amount0Max) * usagePercent) / 10_000;
-        uint256 amount1Used = (uint256(amount1Max) * usagePercent) / 10_000;
-
-        // Grow the existing position's recorded liquidity/locked amounts.
-        Position storage position = _positions[tokenId];
-        // Safe: test mock; values in tests always fit in target type.
-        // forge-lint: disable-next-line(unsafe-typecast)
-        position.liquidity += uint128((liquidity * usagePercent) / 10_000);
-        position.amount0Locked += amount0Used;
-        position.amount1Locked += amount1Used;
-
-        // Record what SETTLE needs to pull from the caller.
-        _pendingSettle0 = amount0Used;
-        _pendingSettle1 = amount1Used;
-        _settleCurrency0 = position.poolKey.currency0;
-        _settleCurrency1 = position.poolKey.currency1;
-
-        // Lock the used amounts in the "pool".
-        poolLocked[Currency.unwrap(position.poolKey.currency0)] += amount0Used;
-        poolLocked[Currency.unwrap(position.poolKey.currency1)] += amount1Used;
-        _consumeNative(position.poolKey, amount0Used, amount1Used);
+        _requireApproved(tokenId);
+        _addLiquidity(tokenId, liquidity, amount0Max, amount1Max);
+        // Increasing also collects the position's accrued fees, which are excluded from the max check.
+        _creditFees(tokenId);
     }
 
-    /// @dev Native liquidity is paid with the call's value; using more than was sent fails like V4's settle would.
-    function _consumeNative(PoolKey memory key, uint256 amount0Used, uint256 amount1Used) internal {
-        uint256 nativeUsed;
-        if (key.currency0.isAddressZero()) nativeUsed += amount0Used;
-        if (key.currency1.isAddressZero()) nativeUsed += amount1Used;
-        require(nativeUsed <= _nativeCredit, "native underpaid");
-        _nativeCredit -= nativeUsed;
-    }
+    /// @dev Adds exactly `liquidity`, charging its rounded-up cost at the live price as debt.
+    function _addLiquidity(uint256 tokenId, uint256 liquidity, uint128 amount0Max, uint128 amount1Max) internal {
+        Position storage pos = _positions[tokenId];
+        require(pos.exists, "Position does not exist");
+        uint128 added = _toUint128(liquidity);
+        _growTicks(pos, added);
 
-    /// @dev Mirrors V4's `SlippageCheck.validateMinOut` on the principal removed (fees excluded).
-    function _validateMinOut(
-        uint256 principal0,
-        uint256 principal1,
-        uint128 amount0Min,
-        uint128 amount1Min
-    )
-        internal
-        pure
-    {
-        // Safe: test mock; principal fits uint128 in every fixture.
-        // forge-lint: disable-next-line(unsafe-typecast)
-        if (principal0 < amount0Min) revert SlippageCheck.MinimumAmountInsufficient(amount0Min, uint128(principal0));
-        // forge-lint: disable-next-line(unsafe-typecast)
-        if (principal1 < amount1Min) revert SlippageCheck.MinimumAmountInsufficient(amount1Min, uint128(principal1));
+        (uint256 cost0, uint256 cost1) = _amountsFor(pos, added, true);
+        if (cost0 > amount0Max) revert SlippageCheck.MaximumAmountExceeded(amount0Max, _toUint128(cost0));
+        if (cost1 > amount1Max) revert SlippageCheck.MaximumAmountExceeded(amount1Max, _toUint128(cost1));
+
+        pos.liquidity += added;
+        pos.amount0Locked += cost0;
+        pos.amount1Locked += cost1;
+        _accountDelta(pos.poolKey.currency0, -int256(cost0));
+        _accountDelta(pos.poolKey.currency1, -int256(cost1));
     }
 
     function _handleBurn(bytes memory data) internal {
@@ -330,31 +313,21 @@ contract MockPositionManager {
         ) = abi.decode(data, (uint256, uint128, uint128, bytes));
 
         burnCallCount++;
-        Position storage pos = _positions[tokenId];
-        require(pos.exists, "Position does not exist");
+        require(_positions[tokenId].exists, "Position does not exist");
+        _requireApproved(tokenId);
         lastMin0Of[tokenId] = amount0Min;
         lastMin1Of[tokenId] = amount1Min;
-        _validateMinOut(pos.amount0Locked, pos.amount1Locked, amount0Min, amount1Min);
 
-        // Unlock the locked amounts from the "pool" so TAKE_PAIR can pay them out.
-        address token0 = Currency.unwrap(pos.poolKey.currency0);
-        address token1 = Currency.unwrap(pos.poolKey.currency1);
-        poolLocked[token0] -= pos.amount0Locked;
-        poolLocked[token1] -= pos.amount1Locked;
+        // Like V4, a burn only touches the pool (and collects fees) when liquidity remains.
+        uint128 liquidity = _positions[tokenId].liquidity;
+        if (liquidity > 0) {
+            _removeLiquidity(tokenId, liquidity, amount0Min, amount1Min);
+            _creditFees(tokenId);
+        }
 
-        // The underlying tokens + any fees become owed to the caller via TAKE_PAIR.
-        _pendingOwed0 += pos.amount0Locked + collectableAmount0[tokenId];
-        _pendingOwed1 += pos.amount1Locked + collectableAmount1[tokenId];
-        _pendingCurrency0 = pos.poolKey.currency0;
-        _pendingCurrency1 = pos.poolKey.currency1;
-
-        // Clear fees since they're included in owed amounts.
-        collectableAmount0[tokenId] = 0;
-        collectableAmount1[tokenId] = 0;
-
-        // Position is fully removed.
-        pos.liquidity = 0;
+        // Whatever reserves the rounded-down principal left behind stay in the pool.
         delete _positions[tokenId];
+        delete ownerOf[tokenId];
     }
 
     function _handleDecreaseLiquidity(bytes memory data) internal {
@@ -366,130 +339,194 @@ contract MockPositionManager {
         ) = abi.decode(data, (uint256, uint256, uint128, uint128, bytes));
 
         decreaseLiquidityCallCount++;
-
-        Position storage pos = _positions[tokenId];
-        require(pos.exists, "Position does not exist");
+        require(_positions[tokenId].exists, "Position does not exist");
+        _requireApproved(tokenId);
         lastMin0Of[tokenId] = amount0Min;
         lastMin1Of[tokenId] = amount1Min;
 
-        _pendingCurrency0 = pos.poolKey.currency0;
-        _pendingCurrency1 = pos.poolKey.currency1;
-
-        address token0 = Currency.unwrap(pos.poolKey.currency0);
-        address token1 = Currency.unwrap(pos.poolKey.currency1);
-
-        if (liquidity > 0) {
-            // Calculate the pro-rata share of locked tokens being removed.
-            uint256 fraction0;
-            uint256 fraction1;
-            if (pos.liquidity > 0) {
-                // Safe: test mock; values in tests always fit in target type.
-                // forge-lint: disable-next-line(unsafe-typecast)
-                fraction0 = (pos.amount0Locked * uint128(liquidity)) / pos.liquidity;
-                // Safe: test mock; values in tests always fit in target type.
-                // forge-lint: disable-next-line(unsafe-typecast)
-                fraction1 = (pos.amount1Locked * uint128(liquidity)) / pos.liquidity;
-            }
-            _validateMinOut(fraction0, fraction1, amount0Min, amount1Min);
-            _pendingOwed0 += fraction0;
-            _pendingOwed1 += fraction1;
-            pos.amount0Locked -= fraction0;
-            pos.amount1Locked -= fraction1;
-
-            // Unlock the removed fraction from the pool.
-            poolLocked[token0] -= fraction0;
-            poolLocked[token1] -= fraction1;
-
-            // Safe: test mock; values in tests always fit in target type.
-            // forge-lint: disable-next-line(unsafe-typecast)
-            if (uint128(liquidity) >= pos.liquidity) {
-                pos.liquidity = 0;
-            } else {
-                // Safe: test mock; values in tests always fit in target type.
-                // forge-lint: disable-next-line(unsafe-typecast)
-                pos.liquidity -= uint128(liquidity);
-            }
-        } else {
-            // Collect-only: no principal is removed, so any nonzero minimum fails.
-            _validateMinOut(0, 0, amount0Min, amount1Min);
-        }
-
+        _removeLiquidity(tokenId, _toUint128(liquidity), amount0Min, amount1Min);
         // Fees are always owed regardless of liquidity amount (0 = collect-only).
-        _pendingOwed0 += collectableAmount0[tokenId];
-        _pendingOwed1 += collectableAmount1[tokenId];
+        _creditFees(tokenId);
+    }
+
+    /// @dev Removes `liquidity`, crediting its rounded-down principal at the live price (less any pool-hook take),
+    /// checked against the minimums like V4's `validateMinOut`.
+    function _removeLiquidity(uint256 tokenId, uint128 liquidity, uint128 amount0Min, uint128 amount1Min) internal {
+        Position storage pos = _positions[tokenId];
+        require(liquidity <= pos.liquidity, "liquidity underflow");
+
+        (uint256 principal0, uint256 principal1) = _amountsFor(pos, liquidity, false);
+        // The pool can only return reserves it holds for this position: a test moving the price must mark it.
+        require(
+            principal0 <= pos.amount0Locked && principal1 <= pos.amount1Locked,
+            "principal exceeds the position's reserves; mark it to the moved price"
+        );
+        pos.amount0Locked -= principal0;
+        pos.amount1Locked -= principal1;
+        pos.liquidity -= liquidity;
+        _shrinkTicks(pos, liquidity);
+
+        uint256 take0 = hookTakeOnRemove0[tokenId];
+        uint256 take1 = hookTakeOnRemove1[tokenId];
+        uint256 out0 = principal0 > take0 ? principal0 - take0 : 0;
+        uint256 out1 = principal1 > take1 ? principal1 - take1 : 0;
+        if (out0 < amount0Min) revert SlippageCheck.MinimumAmountInsufficient(amount0Min, _toUint128(out0));
+        if (out1 < amount1Min) revert SlippageCheck.MinimumAmountInsufficient(amount1Min, _toUint128(out1));
+
+        _accountDelta(pos.poolKey.currency0, int256(out0));
+        _accountDelta(pos.poolKey.currency1, int256(out1));
+    }
+
+    function _creditFees(uint256 tokenId) internal {
+        PoolKey memory key = _positions[tokenId].poolKey;
+        _accountDelta(key.currency0, int256(collectableAmount0[tokenId]));
+        _accountDelta(key.currency1, int256(collectableAmount1[tokenId]));
         collectableAmount0[tokenId] = 0;
         collectableAmount1[tokenId] = 0;
     }
 
-    function _handleTakePair(bytes memory data) internal {
-        (Currency currency0, Currency currency1, address recipient) = abi.decode(data, (Currency, Currency, address));
-
-        uint256 owed0 = _pendingOwed0;
-        uint256 owed1 = _pendingOwed1;
-        _pendingOwed0 = 0;
-        _pendingOwed1 = 0;
-
-        _pay(currency0, recipient, owed0);
-        _pay(currency1, recipient, owed1);
+    /// @dev Token amounts for `liquidity` over the position's range at the live price, branching on the live tick like
+    /// v4-core's `Pool.modifyLiquidity`.
+    function _amountsFor(
+        Position storage pos,
+        uint128 liquidity,
+        bool roundUp
+    )
+        internal
+        view
+        returns (uint256 amount0, uint256 amount1)
+    {
+        (uint160 sqrtPriceX96, int24 tick,,) =
+            StateLibrary.getSlot0(IPoolManager(address(poolManager)), pos.poolKey.toId());
+        if (sqrtPriceX96 == 0) revert Pool.PoolNotInitialized();
+        uint160 sqrtLower = TickMath.getSqrtPriceAtTick(pos.tickLower);
+        uint160 sqrtUpper = TickMath.getSqrtPriceAtTick(pos.tickUpper);
+        if (tick < pos.tickLower) {
+            amount0 = SqrtPriceMath.getAmount0Delta(sqrtLower, sqrtUpper, liquidity, roundUp);
+        } else if (tick < pos.tickUpper) {
+            amount0 = SqrtPriceMath.getAmount0Delta(sqrtPriceX96, sqrtUpper, liquidity, roundUp);
+            amount1 = SqrtPriceMath.getAmount1Delta(sqrtLower, sqrtPriceX96, liquidity, roundUp);
+        } else {
+            amount1 = SqrtPriceMath.getAmount1Delta(sqrtLower, sqrtUpper, liquidity, roundUp);
+        }
     }
 
-    /// @dev Pay `amount` out of the balance no position has locked; never silently pays less.
-    function _pay(Currency currency, address recipient, uint256 amount) internal {
+    /// @dev V4 caps each initialized tick's gross liquidity at `tickSpacingToMaxLiquidityPerTick`.
+    function _growTicks(Position storage pos, uint128 liquidity) internal {
+        uint128 maxPerTick = Pool.tickSpacingToMaxLiquidityPerTick(pos.poolKey.tickSpacing);
+        int24[2] memory ticks = [pos.tickLower, pos.tickUpper];
+        for (uint256 i; i < 2; i++) {
+            uint256 gross = uint256(_tickGross(pos.poolKey, ticks[i])) + liquidity;
+            if (gross > maxPerTick) revert Pool.TickLiquidityOverflow(ticks[i]);
+            _writeTickGross(pos.poolKey, ticks[i], uint128(gross));
+        }
+    }
+
+    function _shrinkTicks(Position storage pos, uint128 liquidity) internal {
+        _writeTickGross(pos.poolKey, pos.tickLower, _tickGross(pos.poolKey, pos.tickLower) - liquidity);
+        _writeTickGross(pos.poolKey, pos.tickUpper, _tickGross(pos.poolKey, pos.tickUpper) - liquidity);
+    }
+
+    function _tickGross(PoolKey memory key, int24 tick) internal view returns (uint128 gross) {
+        (gross,) = StateLibrary.getTickLiquidity(IPoolManager(address(poolManager)), key.toId(), tick);
+    }
+
+    /// @dev Writes `pools[id].ticks[tick].liquidityGross` (low 128 bits), keeping `liquidityNet`.
+    function _writeTickGross(PoolKey memory key, int24 tick, uint128 gross) internal {
+        bytes32 stateSlot = keccak256(abi.encodePacked(PoolId.unwrap(key.toId()), StateLibrary.POOLS_SLOT));
+        bytes32 slot =
+            keccak256(abi.encodePacked(int256(tick), bytes32(uint256(stateSlot) + StateLibrary.TICKS_OFFSET)));
+        uint256 word = uint256(poolManager.extsload(slot));
+        poolManager.writeSlot(slot, bytes32((word >> 128 << 128) | gross));
+    }
+
+    function _requireApproved(uint256 tokenId) internal view {
+        if (ownerOf[tokenId] != msg.sender) revert IPositionManager.NotApproved(msg.sender);
+    }
+
+    // --- Delta resolution (DeltaResolver / PoolManager semantics) ---
+
+    function _accountDelta(Currency currency, int256 amount) internal {
         if (amount == 0) return;
         address token = Currency.unwrap(currency);
-        uint256 balance =
-            currency.isAddressZero() ? address(this).balance - _nativeCredit : IERC20(token).balanceOf(address(this));
-        require(balance >= poolLocked[token] + amount, "TAKE_PAIR: unbacked payout");
+        if (_delta[token] == 0) _touched.push(token);
+        _delta[token] += amount;
+    }
+
+    function _mapSettleAmount(uint256 amount, Currency currency) internal view returns (uint256) {
+        if (amount == ActionConstants.CONTRACT_BALANCE) return _looseBalance(currency);
+        if (amount == ActionConstants.OPEN_DELTA) return _fullDebt(currency);
+        return amount;
+    }
+
+    function _fullDebt(Currency currency) internal view returns (uint256) {
+        int256 delta = _delta[Currency.unwrap(currency)];
+        if (delta > 0) revert DeltaResolver.DeltaNotNegative(currency);
+        return uint256(-delta);
+    }
+
+    function _fullCredit(Currency currency) internal view returns (uint256) {
+        int256 delta = _delta[Currency.unwrap(currency)];
+        if (delta < 0) revert DeltaResolver.DeltaNotPositive(currency);
+        return uint256(delta);
+    }
+
+    /// @dev Pays `amount` into the pool's reserves: native and payer-is-this-contract come out of the loose balance
+    /// (as V4 pays them from the PositionManager's own balance); a user payer is pulled through Permit2.
+    function _settle(Currency currency, address payer, uint256 amount) internal {
+        if (amount == 0) return;
+        address token = Currency.unwrap(currency);
+        if (currency.isAddressZero() || payer == address(this)) {
+            require(_looseBalance(currency) >= amount, "settle: insufficient balance");
+        } else {
+            PERMIT2.transferFrom(payer, address(this), _toUint160(amount), token);
+        }
+        poolLocked[token] += amount;
+        _accountDelta(currency, int256(amount));
+    }
+
+    /// @dev Takes `amount` out of the pool's reserves; never pays from another position's stock or the loose balance.
+    function _take(Currency currency, address recipient, uint256 amount) internal {
+        if (amount == 0) return;
+        address token = Currency.unwrap(currency);
+        require(currency.balanceOfSelf() >= poolLocked[token], "take: pool reserves unbacked");
+        poolLocked[token] -= amount;
+        _accountDelta(currency, -int256(amount));
+        _transfer(currency, recipient, amount);
+    }
+
+    /// @dev This contract's own balance, apart from the pool's reserves (what SWEEP moves).
+    function _looseBalance(Currency currency) internal view returns (uint256) {
+        return currency.balanceOfSelf() - poolLocked[Currency.unwrap(currency)];
+    }
+
+    function _transfer(Currency currency, address to, uint256 amount) internal {
         if (currency.isAddressZero()) {
-            (bool success,) = recipient.call{value: amount}("");
+            (bool success,) = to.call{value: amount}("");
             require(success, "ETH transfer failed");
         } else {
             // Test mock: return value not checked intentionally.
             // forge-lint: disable-next-line(erc20-unchecked-transfer)
-            IERC20(token).transfer(recipient, amount);
+            IERC20(Currency.unwrap(currency)).transfer(to, amount);
         }
     }
 
-    IAllowanceTransfer constant PERMIT2 = IAllowanceTransfer(0x000000000022D473030F116dDEE9F6B43aC78BA3);
-
-    function _handleSettle(bytes memory data) internal {
-        (Currency currency, uint256 amount, bool payerIsUser) = abi.decode(data, (Currency, uint256, bool));
-        amount; // Silence unused variable warning.
-
-        if (payerIsUser) {
-            // Determine how much to pull: use the pending settle amount if available.
-            uint256 toPull;
-            if (Currency.unwrap(currency) == Currency.unwrap(_settleCurrency0) && _pendingSettle0 > 0) {
-                toPull = _pendingSettle0;
-                _pendingSettle0 = 0;
-            } else if (Currency.unwrap(currency) == Currency.unwrap(_settleCurrency1) && _pendingSettle1 > 0) {
-                toPull = _pendingSettle1;
-                _pendingSettle1 = 0;
-            }
-
-            if (!currency.isAddressZero() && toPull > 0) {
-                address token = Currency.unwrap(currency);
-                // Pull via Permit2, matching real PositionManager behavior.
-                // Safe: test mock; values in tests always fit in target type.
-                // forge-lint: disable-next-line(unsafe-typecast)
-                PERMIT2.transferFrom(msg.sender, address(this), uint160(toPull), token);
-            }
-            // For native ETH: msg.value already received
-        }
-        // payerIsUser=false: tokens already transferred to this contract
+    function _mapRecipient(address recipient) internal view returns (address) {
+        if (recipient == ActionConstants.MSG_SENDER) return msg.sender;
+        if (recipient == ActionConstants.ADDRESS_THIS) return address(this);
+        return recipient;
     }
 
-    function _handleSweep(bytes memory data) internal {
-        (Currency currency, address to) = abi.decode(data, (Currency, address));
+    function _toUint128(uint256 value) internal pure returns (uint128) {
+        require(value <= type(uint128).max, "uint128 overflow");
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return uint128(value);
+    }
 
-        // SETTLE pulls ERC-20s exactly, so only unused native value is ever left over for the caller. Donations and
-        // fee/principal stock held for other positions are never swept out.
-        if (currency.isAddressZero() && _nativeCredit > 0) {
-            uint256 refund = _nativeCredit;
-            _nativeCredit = 0;
-            (bool success,) = to.call{value: refund}("");
-            require(success, "ETH sweep failed");
-        }
+    function _toUint160(uint256 value) internal pure returns (uint160) {
+        require(value <= type(uint160).max, "uint160 overflow");
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return uint160(value);
     }
 
     // Accept ETH

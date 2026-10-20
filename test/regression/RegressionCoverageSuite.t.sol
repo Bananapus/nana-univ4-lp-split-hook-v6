@@ -235,8 +235,8 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
         uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertGt(tokenId, 0, "pool should be deployed with scopeCashOutsToLocalBalances=false");
 
-        // Accumulated project tokens should be cleared after deployment.
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "accumulated tokens should be zero after deploy");
+        // Accumulated project tokens should be placed after deployment: only V4 rounding stays ledgered.
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), amount, 0);
     }
 
     /// @notice Compare behavior: deploy with `scopeCashOutsToLocalBalances = true`

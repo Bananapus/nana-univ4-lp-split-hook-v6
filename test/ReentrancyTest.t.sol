@@ -317,12 +317,10 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
         );
         store.setBalance(address(malicious), PROJECT_ID, address(terminalToken), 10e18);
 
-        // 4. Fund the hook with real terminal-token dust, and configure the mock PositionManager to only use 80% of
-        // the amounts offered to MINT_POSITION (matching the pattern other tests use to exercise leftover-carry
-        // behavior). The unconsumed project-token side is carried into the accumulation ledger via a pure state write;
-        // the terminal side, when any, is carried into the terminal ledger — neither makes an external call.
+        // 4. Fund the hook with real terminal-token dust. Step 6 caps the ask at 80% of its liquidity with V4's
+        // per-tick cap, so the unconsumed project-token side is carried into the accumulation ledger via a pure state
+        // write; the terminal side, when any, is carried into the terminal ledger — neither makes an external call.
         terminalToken.mint(address(hook), 10e18);
-        positionManager.setUsagePercent(8000);
 
         // 5. Accumulate tokens through the malicious controller.
         uint256 accumulateAmount = 1000e18;
@@ -337,7 +335,9 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
         uint256 accBefore = hook.accumulatedProjectTokens(PROJECT_ID);
         assertEq(accBefore, accumulateAmount, "Pre-condition: tokens accumulated");
 
-        // 6. Arm re-entry (the malicious terminal would re-enter on `addToBalanceOf`) and deploy the pool.
+        // 6. Cap the ask at 80% of its liquidity, arm re-entry (the malicious terminal would re-enter on
+        // `addToBalanceOf`) and deploy the pool.
+        uint128 room = _capNextAsk({deploy: true, bps: 8000});
         malicious.enableReentry();
 
         vm.prank(owner);
@@ -355,9 +355,13 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
             "funded terminal must be untouched (never paired, never routed)"
         );
 
-        // 8. Only the 20% project-token leftover (at 80% mint usage) is carried back to the ledger — a pure state
-        // write with no external call.
-        uint256 legitimateLeftover = 200e18; // 20% of the 1000e18 deploy amount, per positionManager.setUsagePercent
+        // 8. Only the project-token leftover the capped ask could not place is carried back to the ledger — a pure
+        // state write with no external call.
+        uint256 askId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        assertEq(positionManager.getPositionLiquidity(askId), room, "the ask is capped at the per-tick room");
+        (uint256 cost0, uint256 cost1) = _mintCostAtSpot(askId);
+        uint256 legitimateLeftover = accumulateAmount - (cost0 + cost1);
+        assertGt(legitimateLeftover, 0, "the cap leaves a leftover");
         assertEq(
             hook.accumulatedProjectTokens(PROJECT_ID),
             legitimateLeftover,

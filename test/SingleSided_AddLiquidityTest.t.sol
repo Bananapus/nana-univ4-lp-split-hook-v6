@@ -92,7 +92,13 @@ contract SingleSided_AddLiquidityTest is LPSplitHookV4TestBase {
 
         uint256 cashOutCallsBefore = terminal.cashOutCallCount();
         uint256 accumulatedBefore = hook.accumulatedProjectTokens(PROJECT_ID);
-        assertEq(accumulatedBefore, 0.3e18, "ledger should hold exactly the post-deploy accumulation");
+        (,,,, uint256 deployed0, uint256 deployed1,) = positionManager._positions(firstTokenId);
+        assertEq(
+            accumulatedBefore,
+            0.5e18 - (deployed0 + deployed1) + 0.3e18,
+            "ledger holds the deploy's rounding plus the new accumulation"
+        );
+        (uint256 recovered0, uint256 recovered1) = _principalAtSpot(firstTokenId);
 
         vm.prank(owner);
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
@@ -107,16 +113,11 @@ contract SingleSided_AddLiquidityTest is LPSplitHookV4TestBase {
         );
 
         // (b) The new position holds ZERO terminal tokens (asks-only) and folds BOTH the burned first position's
-        // recovered project tokens (0.5e18) AND the post-deploy accumulation (0.3e18) into a single 0.8e18 ask.
-        (,,,, uint256 amount0Locked, uint256 amount1Locked,) = positionManager._positions(secondTokenId);
-        bool terminalIsToken0 = address(terminalToken) < address(projectToken);
-        if (terminalIsToken0) {
-            assertEq(amount0Locked, 0, "terminal-token side must be zero (asks-only)");
-            assertEq(amount1Locked, 0.8e18, "project side should fold recovered (0.5e18) + new accumulation (0.3e18)");
-        } else {
-            assertEq(amount1Locked, 0, "terminal-token side must be zero (asks-only)");
-            assertEq(amount0Locked, 0.8e18, "project side should fold recovered (0.5e18) + new accumulation (0.3e18)");
-        }
+        // recovered project tokens AND the ledger (the post-deploy 0.3e18 plus the deploy's rounding) into a single
+        // ask, leaving only V4 rounding in the ledger.
+        _assertPlacedExactly(
+            PROJECT_ID, address(projectToken), address(terminalToken), recovered0 + recovered1 + accumulatedBefore, 0
+        );
 
         // (c) The new ask's range sits exactly on the project-only side of the moved spot, bounded by the corridor.
         // In RAW tick terms that is `[spotCeil, corridorUpper]` when the project token is currency0, or the
@@ -126,12 +127,16 @@ contract SingleSided_AddLiquidityTest is LPSplitHookV4TestBase {
         // (d) The hook never cashed out to fund the add.
         assertEq(terminal.cashOutCallCount(), cashOutCallsBefore, "addLiquidity must never call cashOutTokensOf");
 
-        // (e) The ledger is fully cleared: the mock PositionManager consumes 100% of the offered amount by default,
-        // so accumulatedProjectTokens decreased by exactly the added amount (no leftover to carry forward).
+        // (e) Every project token is either in the pool or in the hook's ledger: nothing is stranded elsewhere.
         assertEq(
+            projectToken.balanceOf(address(positionManager)) + hook.accumulatedProjectTokens(PROJECT_ID),
+            0.8e18,
+            "the pool and the ledger hold every project token"
+        );
+        assertEq(
+            projectToken.balanceOf(address(hook)),
             hook.accumulatedProjectTokens(PROJECT_ID),
-            0,
-            "no leftover expected at 100% PositionManager usage; ledger should be fully consumed"
+            "the hook holds exactly its ledger"
         );
     }
 
@@ -211,6 +216,8 @@ contract SingleSided_AddLiquidityTest is LPSplitHookV4TestBase {
         int24 lift2 = lift1 + (corridorUpper - lift1) / 3;
         _setSpotTick(key, lift2);
         _accumulateTokens(PROJECT_ID, 0.2e18);
+        (uint256 recovered0, uint256 recovered1) = _principalAtSpot(t2);
+        uint256 projectIn = recovered0 + recovered1 + hook.accumulatedProjectTokens(PROJECT_ID);
         vm.prank(owner);
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
         uint256 t3 = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
@@ -224,13 +231,15 @@ contract SingleSided_AddLiquidityTest is LPSplitHookV4TestBase {
         assertEq(positionManager.getPositionLiquidity(t2), 0, "second position must be burned, not orphaned");
         assertGt(positionManager.getPositionLiquidity(t3), 0, "the tracked position must be live");
 
-        // The tracked position folds every accumulation (0.5 + 0.3 + 0.2 = 1.0e18) into one ask — nothing stranded.
-        (,,,, uint256 amount0Locked, uint256 amount1Locked,) = positionManager._positions(t3);
+        // The tracked position folds every accumulation (0.5 + 0.3 + 0.2 = 1.0e18) into one ask — nothing stranded:
+        // it holds all it recovered plus the ledger but V4 rounding, and every token is in the pool or the ledger.
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), projectIn, 0);
+        assertEq(
+            projectToken.balanceOf(address(positionManager)) + hook.accumulatedProjectTokens(PROJECT_ID),
+            1e18,
+            "the pool and the ledger hold the full 1.0e18 of accumulated project tokens"
+        );
         bool terminalIsToken0 = address(terminalToken) < address(projectToken);
-        uint256 projectSide = terminalIsToken0 ? amount1Locked : amount0Locked;
-        uint256 terminalSide = terminalIsToken0 ? amount0Locked : amount1Locked;
-        assertEq(projectSide, 1e18, "the single live position must hold the full 1.0e18 of accumulated project tokens");
-        assertEq(terminalSide, 0, "asks-only: the live position holds zero terminal tokens");
 
         // `collectAndRouteLPFees` still collects from the tracked position (proving no value is stranded on burned
         // ids).
@@ -270,11 +279,9 @@ contract SingleSided_AddLiquidityTest is LPSplitHookV4TestBase {
         uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(tokenId, 0, "deployPool should have minted a position");
 
-        // The position folds accumulated ERC-20 (0.5e18) + claimed credits (0.2e18) = 0.7e18 into its project side.
-        (,,,, uint256 amount0Locked, uint256 amount1Locked,) = positionManager._positions(tokenId);
-        bool terminalIsToken0 = address(terminalToken) < address(projectToken);
-        uint256 projectSide = terminalIsToken0 ? amount1Locked : amount0Locked;
-        assertEq(projectSide, 0.7e18, "credits must be folded into the position, not stranded");
+        // The position folds accumulated ERC-20 (0.5e18) + claimed credits (0.2e18) = 0.7e18 into its project side,
+        // leaving only V4 rounding in the ledger.
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), 0.7e18, 0);
 
         // The hook's credit balance was swept to zero.
         assertEq(

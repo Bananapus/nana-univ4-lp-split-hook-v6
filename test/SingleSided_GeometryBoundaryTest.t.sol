@@ -193,27 +193,36 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         _setPrincipal(tokenId, amount0, amount1);
     }
 
-    /// @notice Assert `tokenId` is live on exactly `[lower, upper]` holding only `projectSide`/`terminalSide`.
+    /// @notice Assert `tokenId` is live on exactly `[lower, upper]`, holding only the currency it was offered
+    /// (`projectIn` or `terminalIn`) at exactly its liquidity's cost, and as much liquidity as that inventory pays for:
+    /// only V4 rounding of the offered inventory is left unplaced.
+    /// @return projectPlaced The project tokens the position holds.
+    /// @return terminalPlaced The terminal tokens the position holds.
     function _assertPosition(
         uint256 tokenId,
         int24 lower,
         int24 upper,
-        uint256 projectSide,
-        uint256 terminalSide,
+        uint256 projectIn,
+        uint256 terminalIn,
         string memory label
     )
         internal
         view
+        returns (uint256 projectPlaced, uint256 terminalPlaced)
     {
         assertNotEq(tokenId, 0, string.concat(label, ": live"));
-        (int24 l, int24 u, uint128 liquidity, uint256 p, uint256 t) = _position(tokenId);
+        (int24 l, int24 u, uint128 liquidity,,) = _position(tokenId);
         assertGt(liquidity, 0, string.concat(label, ": liquidity"));
         assertEq(l, lower, string.concat(label, ": tickLower"));
         assertEq(u, upper, string.concat(label, ": tickUpper"));
         assertEq(l % SPACING, 0, string.concat(label, ": tickLower aligned"));
         assertEq(u % SPACING, 0, string.concat(label, ": tickUpper aligned"));
-        assertEq(p, projectSide, string.concat(label, ": project side"));
-        assertEq(t, terminalSide, string.concat(label, ": terminal side"));
+        (projectPlaced, terminalPlaced) = _costSidesOf(tokenId, address(proj));
+        if (projectIn == 0) assertEq(projectPlaced, 0, string.concat(label, ": no project side"));
+        if (terminalIn == 0) assertEq(terminalPlaced, 0, string.concat(label, ": no terminal side"));
+        assertLe(projectPlaced, projectIn, string.concat(label, ": project side within inventory"));
+        assertLe(terminalPlaced, terminalIn, string.concat(label, ": terminal side within inventory"));
+        _assertMaximalLiquidity(tokenId, projectIn + terminalIn);
     }
 
     /// @notice The hook holds exactly the project's ledgers (no fee claims, no other project uses these tokens).
@@ -234,15 +243,24 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         assertNotEq(_bidId(), 0, "precondition: bid live");
     }
 
-    /// @notice The terminal and project principal both live positions hold right now.
+    /// @notice The terminal and project principal both live positions hold at the live spot (what their burns
+    /// return).
     function _livePrincipal() internal view returns (uint256 projectSide, uint256 terminalSide) {
         uint256[2] memory ids = [_askId(), _bidId()];
         for (uint256 i; i < 2; i++) {
             if (ids[i] == 0) continue;
-            (,,, uint256 p, uint256 t) = _position(ids[i]);
+            (uint256 amount0, uint256 amount1) = _principalAtSpot(ids[i]);
+            (uint256 p, uint256 t) = projectIsToken0 ? (amount0, amount1) : (amount1, amount0);
             projectSide += p;
             terminalSide += t;
         }
+    }
+
+    /// @notice The project and terminal inventory a recycle has to place right now: the ledgers plus what burning the
+    /// live positions returns.
+    function _inventory() internal view returns (uint256 projectIn, uint256 terminalIn) {
+        (uint256 projectHeld, uint256 terminalHeld) = _livePrincipal();
+        return (_projLedger() + projectHeld, _termLedger() + terminalHeld);
     }
 
     function _maxId() internal view returns (uint256) {
@@ -264,39 +282,41 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         // Buyers take every ask: the spot reaches (or passes) the issuance ceiling.
         _swapTo(TickMath.getSqrtPriceAtTick(projectIsToken0 ? ceiling + beyond : ceiling - beyond));
         if (newProjectTokens != 0) _accumulate(newProjectTokens);
-        (uint256 projectHeld, uint256 terminalHeld) = _livePrincipal();
+        (uint256 projectHeld,) = _livePrincipal();
         assertEq(projectHeld, 0, "precondition: the filled positions hold only terminal");
+        (uint256 projectIn, uint256 terminalIn) = _inventory();
+        assertGe(projectIn, newProjectTokens, "precondition: the new project tokens are ledgered");
         uint256 idsBefore = _maxId();
 
         _recycle();
 
         assertEq(_askId(), 0, "no ask range at or past the ceiling");
-        _assertPosition({
+        (, uint256 bidPlaced) = _assertPosition({
             tokenId: _bidId(),
             lower: lower,
             upper: upper,
-            projectSide: 0,
-            terminalSide: terminalHeld,
+            projectIn: 0,
+            terminalIn: terminalIn,
             label: "corridor-bounded bid"
         });
         assertGt(_bidId(), idsBefore, "the bid is a fresh id");
-        assertEq(_projLedger(), newProjectTokens, "every project token is carried in the ask ledger");
-        assertEq(_termLedger(), 0, "the bid consumed every terminal token");
+        assertEq(_projLedger(), projectIn, "every project token is carried in the ask ledger");
+        assertEq(_termLedger(), terminalIn - bidPlaced, "the bid consumed every terminal token but V4 rounding");
         _assertLedgersBacked();
 
         // Restore the geometry: the spot trades back to mid-corridor and the carried inventory redeploys.
         _swapTo(TickMath.getSqrtPriceAtTick(mid));
-        (uint256 projectBack, uint256 terminalBack) = _livePrincipal();
+        (projectIn, terminalIn) = _inventory();
         idsBefore = _maxId();
         _recycle();
         (int24 bidLower, int24 bidUpper) = projectIsToken0 ? (lower, mid) : (mid, upper);
         (int24 askLower, int24 askUpper) = projectIsToken0 ? (mid, upper) : (lower, mid);
-        _assertPosition(_askId(), askLower, askUpper, newProjectTokens + projectBack, 0, "restored ask");
-        _assertPosition(_bidId(), bidLower, bidUpper, 0, terminalBack, "restored bid");
+        (uint256 askPlaced,) = _assertPosition(_askId(), askLower, askUpper, projectIn, 0, "restored ask");
+        (, bidPlaced) = _assertPosition(_bidId(), bidLower, bidUpper, 0, terminalIn, "restored bid");
         assertGt(_askId(), idsBefore, "restored ask is a fresh id");
         assertGt(_bidId(), idsBefore, "restored bid is a fresh id");
-        assertEq(_projLedger(), 0, "the carried project tokens redeployed");
-        assertEq(_termLedger(), 0, "the terminal redeployed");
+        assertEq(_projLedger(), projectIn - askPlaced, "the carried project tokens redeployed");
+        assertEq(_termLedger(), terminalIn - bidPlaced, "the terminal redeployed");
         _assertLedgersBacked();
     }
 
@@ -338,29 +358,34 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         _swapTo(TickMath.getSqrtPriceAtTick(projectIsToken0 ? floor - beyond : floor + beyond));
         uint256 fee = 0.2e18;
         _addTerminalFee(_askId(), fee);
-        (uint256 projectHeld, uint256 terminalHeld) = _livePrincipal();
+        (, uint256 terminalHeld) = _livePrincipal();
         assertEq(terminalHeld, 0, "precondition: the filled positions hold only project tokens");
+        (uint256 projectIn, uint256 terminalIn) = _inventory();
+        // The forgiven fee is collected by the recycle, joining the terminal inventory.
+        terminalIn += fee;
 
         _recycle();
 
         assertEq(_bidId(), 0, "no bid range at or past the floor");
-        _assertPosition(_askId(), lower, upper, projectHeld, 0, "corridor-bounded ask");
-        assertEq(_termLedger(), fee, "every terminal token stays in the bid ledger");
-        assertEq(_projLedger(), 0, "the ask consumed every project token");
+        (uint256 askPlaced,) = _assertPosition(_askId(), lower, upper, projectIn, 0, "corridor-bounded ask");
+        assertEq(_termLedger(), terminalIn, "every terminal token stays in the bid ledger");
+        assertEq(_projLedger(), projectIn - askPlaced, "the ask consumed every project token but V4 rounding");
         _assertLedgersBacked();
 
         // Restore the geometry: the carried terminal redeploys as a fresh bid.
         _swapTo(TickMath.getSqrtPriceAtTick(mid));
-        (uint256 projectBack, uint256 terminalBack) = _livePrincipal();
+        (projectIn, terminalIn) = _inventory();
+        assertGe(terminalIn, fee, "precondition: the carried fee is in the terminal inventory");
         uint256 idsBefore = _maxId();
         _recycle();
         (int24 bidLower, int24 bidUpper) = projectIsToken0 ? (lower, mid) : (mid, upper);
         (int24 askLower, int24 askUpper) = projectIsToken0 ? (mid, upper) : (lower, mid);
-        _assertPosition(_askId(), askLower, askUpper, projectBack, 0, "restored ask");
-        _assertPosition(_bidId(), bidLower, bidUpper, 0, fee + terminalBack, "restored bid");
+        (askPlaced,) = _assertPosition(_askId(), askLower, askUpper, projectIn, 0, "restored ask");
+        (, uint256 bidPlaced) = _assertPosition(_bidId(), bidLower, bidUpper, 0, terminalIn, "restored bid");
         assertGt(_askId(), idsBefore, "restored ask is a fresh id");
         assertGt(_bidId(), idsBefore, "restored bid is a fresh id");
-        assertEq(_termLedger(), 0, "the carried terminal redeployed");
+        assertEq(_termLedger(), terminalIn - bidPlaced, "the carried terminal redeployed");
+        assertEq(_projLedger(), projectIn - askPlaced, "the project tokens redeployed");
         _assertLedgersBacked();
     }
 
@@ -402,19 +427,25 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         assertEq(dustLiquidity, 0, "precondition: one wei of terminal yields zero bid liquidity");
 
         _addTerminalFee(_askId(), 1);
+        (uint256 projectIn, uint256 terminalIn) = _inventory();
+        assertEq(terminalIn, 0, "precondition: no terminal before the dust fee");
         _recycle();
 
         assertEq(_bidId(), 0, "a zero-liquidity bid is skipped");
-        _assertPosition(_askId(), askLower, askUpper, 1e18, 0, "ask");
+        _assertPosition(_askId(), askLower, askUpper, projectIn, 0, "ask");
         assertEq(_termLedger(), 1, "the dust terminal is carried, not lost");
         _assertLedgersBacked();
 
         _addTerminalFee(_askId(), 0.1e18);
+        (, terminalIn) = _inventory();
+        assertEq(terminalIn, 1, "precondition: the carried dust is the terminal ledger");
+        terminalIn += 0.1e18;
         uint256 idsBefore = _maxId();
         _recycle();
-        _assertPosition(_bidId(), bidLower, bidUpper, 0, 0.1e18 + 1, "bid with the carried dust");
+        (, uint256 bidPlaced) =
+            _assertPosition(_bidId(), bidLower, bidUpper, 0, terminalIn, "bid with the carried dust");
         assertGt(_bidId(), idsBefore, "fresh bid id");
-        assertEq(_termLedger(), 0, "the carried dust redeployed");
+        assertEq(_termLedger(), terminalIn - bidPlaced, "the carried dust redeployed but V4 rounding");
     }
 
     function test_DustBidRoundsToZeroLiquidity_ProjectToken0() public {
@@ -457,19 +488,24 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         uint256 terminalAmount = 0.5e18;
         _deployAt(sqrtPriceX96, projectAmount);
         _addTerminalFee(_askId(), terminalAmount);
+        (uint256 projectIn, uint256 terminalIn) = _inventory();
+        assertEq(terminalIn, 0, "precondition: the only terminal is the fee");
+        terminalIn = terminalAmount;
         _recycle();
         assertEq(_spot(), sqrtPriceX96, "the spot never moved");
 
         int24 token0Lower = kind == EXACT ? k : k + SPACING;
+        uint256 askPlaced;
+        uint256 bidPlaced;
         if (projectIsToken0) {
-            _assertPosition(_askId(), token0Lower, upper, projectAmount, 0, "token0 ask");
-            _assertPosition(_bidId(), lower, k, 0, terminalAmount, "token1 bid");
+            (askPlaced,) = _assertPosition(_askId(), token0Lower, upper, projectIn, 0, "token0 ask");
+            (, bidPlaced) = _assertPosition(_bidId(), lower, k, 0, terminalIn, "token1 bid");
         } else {
-            _assertPosition(_askId(), lower, k, projectAmount, 0, "token1 ask");
-            _assertPosition(_bidId(), token0Lower, upper, 0, terminalAmount, "token0 bid");
+            (askPlaced,) = _assertPosition(_askId(), lower, k, projectIn, 0, "token1 ask");
+            (, bidPlaced) = _assertPosition(_bidId(), token0Lower, upper, 0, terminalIn, "token0 bid");
         }
-        assertEq(_projLedger(), 0, "no project carry");
-        assertEq(_termLedger(), 0, "no terminal carry");
+        assertEq(_projLedger(), projectIn - askPlaced, "no project carry beyond V4 rounding");
+        assertEq(_termLedger(), terminalIn - bidPlaced, "no terminal carry beyond V4 rounding");
     }
 
     function test_Matrix_ProjectToken0_NegativeK_Exact() public {
@@ -540,21 +576,26 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         if (projectIsToken0) _addTerminalFee(_askId(), token1Inventory);
         else _accumulate(token1Inventory);
         (uint256 projectHeld, uint256 terminalHeld) = _livePrincipal();
-        uint256 token0Held = projectIsToken0 ? projectHeld : terminalHeld;
         assertEq(projectIsToken0 ? terminalHeld : projectHeld, 0, "precondition: every position is all token0");
+        (uint256 projectIn, uint256 terminalIn) = _inventory();
+        // A forgiven terminal fee is collected by the recycle, joining the terminal inventory.
+        if (projectIsToken0) terminalIn += token1Inventory;
+        assertGe(projectIsToken0 ? terminalIn : projectIn, token1Inventory, "precondition: token1 inventory");
 
         _recycle();
 
         if (projectIsToken0) {
-            _assertPosition(_askId(), lower, upper, token0Held, 0, "token0 ask clamped to the corridor");
+            (uint256 askPlaced,) =
+                _assertPosition(_askId(), lower, upper, projectIn, 0, "token0 ask clamped to the corridor");
             assertEq(_bidId(), 0, "token1 bid skipped");
-            assertEq(_termLedger(), token1Inventory, "token1 terminal carried");
-            assertEq(_projLedger(), 0, "token0 fully deployed");
+            assertEq(_termLedger(), terminalIn, "token1 terminal carried");
+            assertEq(_projLedger(), projectIn - askPlaced, "token0 fully deployed but V4 rounding");
         } else {
-            _assertPosition(_bidId(), lower, upper, 0, token0Held, "token0 bid clamped to the corridor");
+            (, uint256 bidPlaced) =
+                _assertPosition(_bidId(), lower, upper, 0, terminalIn, "token0 bid clamped to the corridor");
             assertEq(_askId(), 0, "token1 ask skipped");
-            assertEq(_projLedger(), token1Inventory, "token1 project carried");
-            assertEq(_termLedger(), 0, "token0 fully deployed");
+            assertEq(_projLedger(), projectIn, "token1 project carried");
+            assertEq(_termLedger(), terminalIn - bidPlaced, "token0 fully deployed but V4 rounding");
         }
         _assertLedgersBacked();
     }
@@ -638,8 +679,23 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         assertEq(_projLedger(), projectLedger + projectHeld + newTokens, "every project token is ledgered");
         assertEq(_termLedger(), terminalLedger + terminalHeld + fee, "every terminal token is ledgered");
         _assertLedgersBacked();
-        assertEq(proj.balanceOf(address(positionManager)), 0, "no project token left in the PositionManager");
-        assertEq(term.balanceOf(address(positionManager)), 0, "no terminal token left in the PositionManager");
+        // Only V4's rounding (at most one unit per burned position) stays in the pool; nothing else is left.
+        assertEq(
+            proj.balanceOf(address(positionManager)),
+            positionManager.poolLocked(address(proj)),
+            "the PositionManager holds only pool reserves"
+        );
+        assertEq(
+            term.balanceOf(address(positionManager)),
+            positionManager.poolLocked(address(term)),
+            "the PositionManager holds only pool reserves"
+        );
+        assertLe(
+            proj.balanceOf(address(positionManager)), positionManager.burnCallCount(), "project rounding in the pool"
+        );
+        assertLe(
+            term.balanceOf(address(positionManager)), positionManager.burnCallCount(), "terminal rounding in the pool"
+        );
 
         // Nothing left to retire: the recycle refuses and changes nothing.
         vm.expectRevert(
@@ -659,12 +715,12 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         _recycle();
         (int24 bidLower, int24 bidUpper) = projectIsToken0 ? (lower, mid) : (mid, upper);
         (int24 askLower, int24 askUpper) = projectIsToken0 ? (mid, upper) : (lower, mid);
-        _assertPosition(_askId(), askLower, askUpper, projectTotal, 0, "redeployed ask");
-        _assertPosition(_bidId(), bidLower, bidUpper, 0, terminalTotal, "redeployed bid");
+        (uint256 askPlaced,) = _assertPosition(_askId(), askLower, askUpper, projectTotal, 0, "redeployed ask");
+        (, uint256 bidPlaced) = _assertPosition(_bidId(), bidLower, bidUpper, 0, terminalTotal, "redeployed bid");
         assertGe(_askId(), nextId, "redeployed ask is a fresh id");
         assertGe(_bidId(), nextId, "redeployed bid is a fresh id");
-        assertEq(_projLedger(), 0, "the held project tokens redeployed");
-        assertEq(_termLedger(), 0, "the held terminal tokens redeployed");
+        assertEq(_projLedger(), projectTotal - askPlaced, "the held project tokens redeployed");
+        assertEq(_termLedger(), terminalTotal - bidPlaced, "the held terminal tokens redeployed");
         _assertLedgersBacked();
     }
 
@@ -698,11 +754,9 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         _restoreEconomics();
         vm.prank(user);
         hook.deployPool(PID);
-        (,,, uint256 askProject, uint256 askTerminal) = _position(_askId());
-        assertEq(askProject, 1e18, "normal economics: the ask holds every reserved token");
-        assertEq(askTerminal, 0, "normal economics: the ask holds no terminal");
+        // Normal economics: the ask holds every reserved token but V4 rounding, which stays ledgered, and no terminal.
         assertEq(_bidId(), 0, "normal economics: nothing to bid with");
-        assertEq(_projLedger(), 0, "normal economics: the ledger is deployed");
+        _assertPlacedExactly(PID, address(proj), address(term), 1e18, 0);
         _assertLedgersBacked();
     }
 

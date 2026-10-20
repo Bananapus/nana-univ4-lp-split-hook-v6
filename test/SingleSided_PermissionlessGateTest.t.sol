@@ -86,8 +86,10 @@ contract SingleSided_PermissionlessGateTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
         uint256 firstId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
-        // Accumulate more and extend as a stranger; the burn returns exactly the ask's principal.
+        // Accumulate more and extend as a stranger; the burn returns exactly the ask's principal at the spot.
         _accumulateTokens(PROJECT_ID, 0.3e18);
+        (uint256 recovered0, uint256 recovered1) = _principalAtSpot(firstId);
+        uint256 projectIn = recovered0 + recovered1 + hook.accumulatedProjectTokens(PROJECT_ID);
 
         vm.prank(STRANGER);
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
@@ -96,15 +98,9 @@ contract SingleSided_PermissionlessGateTest is LPSplitHookV4TestBase {
         assertNotEq(secondId, 0, "a stranger must be able to extend the pool");
         assertNotEq(secondId, firstId, "the extend consolidates into a fresh position");
 
-        // The fresh ask (plus any unminted remainder in the ledger) holds the recovered principal and the new tokens.
-        (,,,, uint256 amount0, uint256 amount1,) = positionManager._positions(secondId);
-        bool projectIsToken0 = address(projectToken) < address(terminalToken);
-        (uint256 askProject, uint256 askTerminal) = projectIsToken0 ? (amount0, amount1) : (amount1, amount0);
-        uint256 ledger = hook.accumulatedProjectTokens(PROJECT_ID);
-        assertEq(askProject + ledger, 1.3e18, "the ask plus the ledger hold the principal and the new tokens");
-        assertEq(askTerminal, 0, "the ask holds no terminal");
-        assertEq(projectToken.balanceOf(address(positionManager)), askProject, "the PositionManager holds the ask");
-        assertEq(projectToken.balanceOf(address(hook)), ledger, "the hook holds exactly its ledger");
+        // The fresh ask (plus V4 rounding left in the ledger) holds the recovered principal and the new tokens.
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), projectIn, 0);
+        _assertPoolAndLedgerHold(1.3e18);
     }
 
     /// @notice `addLiquidity` reverts `NoDeployableLiquidityAtSpot` once the issuance ceiling has reached the spot and

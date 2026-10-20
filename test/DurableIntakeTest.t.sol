@@ -350,7 +350,8 @@ contract DurableIntakeTest is LPSplitHookV4TestBase {
 
         // The automation itself completed exactly once with no double credit.
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "the outer automation should still complete");
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "the inventory must be credited exactly once");
+        // The inventory is credited exactly once: the ask plus the rounding left in the ledger is the whole amount.
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), amount, 0);
     }
 
     /// @notice Credits and fee-credit liabilities coexisting on one project: the backing check counts both, and

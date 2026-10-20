@@ -45,7 +45,8 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
 
         assertEq(terminal.cashOutCallCount(), 0, "deployPool must never call cashOutTokensOf");
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "the full accumulated balance should fund the ask");
+        // The full accumulated balance funds the ask; only V4 rounding stays ledgered.
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), 100e18, 0);
     }
 
     /// @notice A nonzero cash-out tax rate no longer affects `deployPool`: the deploy path carries no funding
@@ -101,7 +102,8 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "accumulatedProjectTokens should be 0 after deployment");
+        // The ledger keeps only what V4 rounding left unplaced.
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), 100e18, 0);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -247,9 +249,10 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
     /// @notice After pool is deployed, processSplitWith accumulates new tokens even when the accumulation ledger was
     ///         cleared to 0 at the time of deployment. Still no burn.
     function test_ProcessSplit_AccumulatesAfterDeploy_EvenFromZero() public {
-        // Deploy pool with some tokens. With the mock's 100% usage there is no leftover dust, so accumulated is 0.
+        // Deploy pool with some tokens: the ledger keeps only what V4 rounding left unplaced.
         _accumulateAndDeploy(PROJECT_ID, 100e18);
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "accumulated should be 0 after deploy");
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), 100e18, 0);
+        uint256 accumulatedAfterDeploy = hook.accumulatedProjectTokens(PROJECT_ID);
 
         uint256 burnCountAfterDeploy = controller.burnCallCount();
 
@@ -264,35 +267,45 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         vm.stopPrank();
 
         assertEq(controller.burnCallCount(), burnCountAfterDeploy, "no burn should occur post-deploy");
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), newAmount, "new tokens should accumulate after deploy");
+        assertEq(
+            hook.accumulatedProjectTokens(PROJECT_ID),
+            accumulatedAfterDeploy + newAmount,
+            "new tokens should accumulate after deploy"
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────────
     // 13. deployPool — carries leftover tokens forward when PositionManager uses < 100%
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice When PositionManager uses less than 100% of desired amounts (e.g., 80%), leftover project tokens are
-    ///         carried forward into the accumulation ledger (never burned).
+    /// @notice When V4's per-tick cap lets the ask place only part of the inventory (here 80% of its liquidity),
+    ///         the leftover project tokens are carried forward into the accumulation ledger (never burned).
     function test_DeployPool_CarriesLeftoversForward() public {
-        // Set PositionManager to only use 80% of desired amounts
-        positionManager.setUsagePercent(8000);
-
         _accumulateTokens(PROJECT_ID, 100e18);
+        uint128 room = _capNextAsk({deploy: true, bps: 8000});
 
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
+
+        uint256 askId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        assertEq(positionManager.getPositionLiquidity(askId), room, "the ask is capped at the per-tick room");
+        (uint256 cost0, uint256 cost1) = _mintCostAtSpot(askId);
 
         // The leftover project tokens are carried forward, not burned.
         assertEq(controller.burnCallCount(), 0, "no burn should occur on deploy");
         assertGt(
             hook.accumulatedProjectTokens(PROJECT_ID), 0, "leftover project tokens should be carried into accumulation"
         );
+        assertEq(
+            hook.accumulatedProjectTokens(PROJECT_ID),
+            100e18 - (cost0 + cost1),
+            "exactly what the capped ask did not cost is carried"
+        );
     }
 
     function test_DeployPool_PartialMintClearsPermit2Approvals() public {
-        positionManager.setUsagePercent(8000);
-
         _accumulateTokens(PROJECT_ID, 100e18);
+        _capNextAsk({deploy: true, bps: 8000});
 
         address permit2 = address(hook.PERMIT2());
 

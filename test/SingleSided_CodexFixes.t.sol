@@ -321,10 +321,10 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
-        (uint256 projectSide, uint256 terminalSide) =
-            _lockedSides(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)));
+        (, uint256 terminalSide) = _lockedSides(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)));
         assertEq(terminalSide, 0, "donated terminal must not be paired into the position (asks-only)");
-        assertEq(projectSide, 0.5e18, "the full project balance deploys as asks");
+        // The full project balance deploys as asks (only V4 rounding stays ledgered).
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), 0.5e18, 0);
         // The mid-corridor spot leaves room for a bid (see `test_Finding1_RecycleFoldsRecoveredTerminalIntoBid`), so a
         // captured donation would surface as a bid position.
         assertEq(hook.bidTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "the donation must not mint a bid");
@@ -367,21 +367,18 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertEq(hook.bidTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "no bid before any terminal is held");
 
-        // Inject this project's OWN terminal into its ask (as filled asks would), recovered on the burn.
-        uint256 bid = 1e18;
-        terminalToken.mint(address(positionManager), bid);
-        positionManager.injectPositionBalance(tokenId, address(terminalToken), bid);
+        // Buyers fill part of this project's OWN ask, leaving terminal in it that the burn recovers.
+        _fillHalfOf(tokenId);
+        (uint256 recoveredProject, uint256 recoveredTerminal) = _lockedSides(tokenId);
 
         _accumulateTokens(PROJECT_ID, 0.5e18);
+        uint256 projectIn = recoveredProject + hook.accumulatedProjectTokens(PROJECT_ID);
         vm.prank(user);
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
-        (uint256 askProject, uint256 askTerminal) = _lockedSides(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)));
-        (uint256 bidProject, uint256 bidTerminal) = _lockedSides(hook.bidTokenIdOf(PROJECT_ID, address(terminalToken)));
-        assertEq(askProject, 1e18, "the ask re-mints every project token");
-        assertEq(askTerminal, 0, "the ask holds no terminal");
-        assertEq(bidTerminal, bid, "the bid holds exactly the recovered terminal");
-        assertEq(bidProject, 0, "the bid holds no project token");
+        // The ask re-mints every project token and the bid exactly the recovered terminal.
+        assertNotEq(hook.bidTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "the recovered terminal mints a bid");
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), projectIn, recoveredTerminal);
         _assertRecycleGeometry(PROJECT_ID, address(terminalToken), address(projectToken));
     }
 
@@ -408,9 +405,9 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
         uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
-        // Give the position recovered terminal and MATERIAL pending terminal-side LP fees.
-        terminalToken.mint(address(positionManager), 1e18);
-        positionManager.injectPositionBalance(tokenId, address(terminalToken), 1e18);
+        // Give the position recovered terminal (buyers filled part of it) and MATERIAL pending terminal-side LP fees.
+        _fillHalfOf(tokenId);
+        (uint256 recoveredProject, uint256 recoveredTerminal) = _lockedSides(tokenId);
         uint256 fee = 60e18;
         bool terminalIsToken0 = address(terminalToken) < address(projectToken);
         if (terminalIsToken0) positionManager.setCollectableFees(tokenId, fee, 0);
@@ -422,6 +419,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         uint256 feeProjectBalanceBefore = terminalToken.balanceOf(address(terminal));
 
         _accumulateTokens(PROJECT_ID, 0.5e18);
+        uint256 projectIn = recoveredProject + hook.accumulatedProjectTokens(PROJECT_ID);
         vm.prank(user);
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
@@ -435,11 +433,8 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         // bid.
         uint256 feeCut = terminalToken.balanceOf(address(terminal)) - feeProjectBalanceBefore;
         assertLt(feeCut, fee, "only a cut of the fee leaves the hook");
-        (uint256 bidProject, uint256 bidTerminal) = _lockedSides(hook.bidTokenIdOf(PROJECT_ID, address(terminalToken)));
-        assertEq(bidTerminal, 1e18 + fee - feeCut, "recovered terminal plus the fee remainder re-mint as the bid");
-        assertEq(bidProject, 0, "the bid holds no project token");
-        assertEq(
-            hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)), 0, "the bid ledger is fully minted"
+        _assertPlacedExactly(
+            PROJECT_ID, address(projectToken), address(terminalToken), projectIn, recoveredTerminal + fee - feeCut
         );
         _assertRecycleGeometry(PROJECT_ID, address(terminalToken), address(projectToken));
     }
@@ -461,6 +456,8 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
         uint256 oldTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 deployRounding = hook.accumulatedProjectTokens(PROJECT_ID);
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), 1e18, 0);
 
         // A single wei arriving with full gas still skips the inline attempt (below `_MIN_ADD_ACCUMULATION`).
         projectToken.mint(address(controller), 1);
@@ -469,13 +466,16 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         hook.processSplitWith(_buildReservedContext(PROJECT_ID, 1));
         vm.stopPrank();
         assertEq(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), oldTokenId, "dust intake does not recycle");
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 1, "dust is held in the ledger");
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), deployRounding + 1, "dust is held in the ledger");
 
         // Anyone may still recycle explicitly; the dust joins the new ask.
+        (uint256 recovered0, uint256 recovered1) = _principalAtSpot(oldTokenId);
+        uint256 projectIn = recovered0 + recovered1 + hook.accumulatedProjectTokens(PROJECT_ID);
         vm.prank(user);
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
         assertNotEq(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), oldTokenId, "explicit recycle re-mints");
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "the dust is folded into the ask");
+        // The dust is folded into the ask: only V4 rounding of the whole re-mint stays ledgered.
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), projectIn, 0);
     }
 
     /// @notice A meaningful accumulation still adds liquidity (a fresh position is minted).
@@ -483,21 +483,19 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         _deployForAdd();
         uint256 oldTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         _accumulateTokens(PROJECT_ID, 0.5e18);
+        (uint256 recovered0, uint256 recovered1) = _principalAtSpot(oldTokenId);
+        uint256 projectIn = recovered0 + recovered1 + hook.accumulatedProjectTokens(PROJECT_ID);
 
         vm.prank(user);
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
         uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(newTokenId, oldTokenId, "meaningful accumulation must add");
 
-        // The re-minted ask (plus any unminted remainder in the ledger) holds the recovered principal and the new
-        // tokens exactly; nothing else funds it.
-        (uint256 askProject, uint256 askTerminal) = _lockedSides(newTokenId);
-        uint256 ledger = hook.accumulatedProjectTokens(PROJECT_ID);
-        assertEq(askProject + ledger, 1.5e18, "the ask plus the ledger hold the principal and the new tokens");
-        assertEq(askTerminal, 0, "the ask holds no terminal");
+        // The re-minted ask (plus V4 rounding left in the ledger) holds the recovered principal and the new tokens
+        // exactly; nothing else funds it.
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), projectIn, 0);
         assertEq(hook.bidTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "no terminal to bid with");
-        assertEq(projectToken.balanceOf(address(positionManager)), askProject, "the PositionManager holds the ask");
-        assertEq(projectToken.balanceOf(address(hook)), ledger, "the hook holds exactly its ledger");
+        _assertPoolAndLedgerHold(1.5e18);
     }
 
     // ─── Cold-start seed helpers (Fix A / Fix B) ───

@@ -70,7 +70,7 @@ contract TestRegressionGaps is TwoPositionFixture {
             FEE_PROJECT_ID, address(terminalToken), uint32(uint160(address(terminalToken))), 18
         );
 
-        (uint256 projectBefore, uint256 terminalBefore) = _inventory(askId, bidId);
+        (uint256 projectBefore, uint256 terminalBefore) = _recoverable(askId, bidId);
         uint256 cuts = 2e18 * FEE_PERCENT / 10_000 + 5e18 * FEE_PERCENT / 10_000;
         uint256 feeTerminalBefore = terminalToken.balanceOf(address(terminal));
 
@@ -94,6 +94,16 @@ contract TestRegressionGaps is TwoPositionFixture {
         (uint256 bidProject, uint256 bidTerminal) = _sides(bidId);
         project = askProject + bidProject + hook.accumulatedProjectTokens(PROJECT_ID);
         terminal_ = askTerminal + bidTerminal + hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken));
+    }
+
+    /// @notice What burning both positions returns at the live spot plus the project's ledgers, per currency.
+    function _recoverable(uint256 askId, uint256 bidId) internal view returns (uint256 project, uint256 terminal_) {
+        (uint256 ask0, uint256 ask1) = _principalAtSpot(askId);
+        (uint256 bid0, uint256 bid1) = _principalAtSpot(bidId);
+        (uint256 amount0, uint256 amount1) = (ask0 + bid0, ask1 + bid1);
+        (project, terminal_) = _projectIsToken0() ? (amount0, amount1) : (amount1, amount0);
+        project += hook.accumulatedProjectTokens(PROJECT_ID);
+        terminal_ += hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken));
     }
 
     /// @notice The PositionManager holds exactly its recorded principal and the hook exactly its ledgers.
@@ -239,21 +249,30 @@ contract TestRegressionGaps is TwoPositionFixture {
     // 6. Recycle with partial usage: leftover tokens handled correctly
     // -----------------------------------------------------------------------
 
-    /// @notice When the PositionManager uses less than 100% of provided tokens
-    ///         (simulating a price-shifted mint), project-token leftovers are carried back into the
-    ///         accumulation ledger (the hook never burns and never routes them to the treasury).
+    /// @notice When V4's per-tick cap lets the re-minted ask place only half its liquidity, project-token leftovers
+    ///         are carried back into the accumulation ledger (the hook never burns and never routes them to the
+    ///         treasury).
     function test_Recycle_PartialUsage_LeftoversHandled() public {
-        // Set PM to only use 50% of provided amounts
-        positionManager.setUsagePercent(5000);
-
         uint256 addToBalanceBefore = terminal.addToBalanceCallCount();
 
-        // The recycle re-mints the recovered 100e18 ask principal plus the 1e18 newly accumulated.
+        // The recycle re-mints the recovered ask principal plus the 1e18 newly accumulated.
+        uint256 oldAsk = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        (uint256 old0, uint256 old1) = _principalAtSpot(oldAsk);
         _accumulateTokens(PROJECT_ID, 1e18);
+        uint256 projectIn = old0 + old1 + hook.accumulatedProjectTokens(PROJECT_ID);
+        uint128 room = _capNextAsk({deploy: false, bps: 5000});
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
-        // Exactly the unconsumed half is carried back to the ledger; nothing is routed to the project balance.
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 50.5e18, "Unconsumed project tokens return to the ledger");
+        uint256 askId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        assertEq(positionManager.getPositionLiquidity(askId), room, "the ask is capped at half its liquidity");
+        (uint256 cost0, uint256 cost1) = _mintCostAtSpot(askId);
+
+        // Exactly the unconsumed part is carried back to the ledger; nothing is routed to the project balance.
+        assertEq(
+            hook.accumulatedProjectTokens(PROJECT_ID),
+            projectIn - (cost0 + cost1),
+            "Unconsumed project tokens return to the ledger"
+        );
         assertEq(terminal.addToBalanceCallCount(), addToBalanceBefore, "Leftovers are never added to balance");
 
         // Position should still be valid

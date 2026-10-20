@@ -122,13 +122,16 @@ contract BurnSlippageFloorTest is TwoPositionFixture {
     /// the PositionManager's slippage error and nothing changes.
     function _assertShortByOneReverts(uint256 tokenId, uint256 floor0, uint256 floor1) internal {
         assertTrue(floor0 > 0 || floor1 > 0, "fixture: a nonzero floor");
-        (,,,, uint256 locked0, uint256 locked1,) = positionManager._positions(tokenId);
+        (uint256 principal0, uint256 principal1) = _principalAtSpot(tokenId);
         for (uint256 side; side < 2; side++) {
             uint256 floor = side == 0 ? floor0 : floor1;
             if (floor == 0) continue;
 
             uint256 snapshot = vm.snapshotState();
-            _setPrincipal(tokenId, side == 0 ? floor - 1 : locked0, side == 1 ? floor - 1 : locked1);
+            // A pool hook keeps just enough of this side's principal that the burn returns one unit below its floor.
+            positionManager.setHookTakeOnRemove(
+                tokenId, side == 0 ? principal0 - floor + 1 : 0, side == 1 ? principal1 - floor + 1 : 0
+            );
             uint256 projectLedger = hook.accumulatedProjectTokens(PROJECT_ID);
             uint256 terminalLedger = hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken));
 
@@ -152,13 +155,12 @@ contract BurnSlippageFloorTest is TwoPositionFixture {
     /// @notice Every burn returns exactly its floor: the recycle succeeds and redeploys exactly what was recovered.
     function _assertExactFloorsAccepted() internal {
         Floors memory f = _recordFloors();
-        _setPrincipal(askId, f.ask0, f.ask1);
-        _setPrincipal(bidId, f.bid0, f.bid1);
-        (uint256 askProject, uint256 askTerminal) = _sides(askId);
-        (uint256 bidProject, uint256 bidTerminal) = _sides(bidId);
-        uint256 projectTotal = askProject + bidProject + hook.accumulatedProjectTokens(PROJECT_ID);
-        uint256 terminalTotal =
-            askTerminal + bidTerminal + hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken));
+        _returnExactly(askId, f.ask0, f.ask1);
+        _returnExactly(bidId, f.bid0, f.bid1);
+        (uint256 floor0, uint256 floor1) = (f.ask0 + f.bid0, f.ask1 + f.bid1);
+        (uint256 projectFloors, uint256 terminalFloors) = _projectIsToken0() ? (floor0, floor1) : (floor1, floor0);
+        uint256 projectTotal = projectFloors + hook.accumulatedProjectTokens(PROJECT_ID);
+        uint256 terminalTotal = terminalFloors + hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken));
 
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
@@ -177,5 +179,12 @@ contract BurnSlippageFloorTest is TwoPositionFixture {
             terminalTotal,
             "terminal tokens conserved"
         );
+    }
+
+    /// @notice A pool hook keeps everything above `amount0`/`amount1` of `tokenId`'s principal, so its burn returns
+    /// exactly those amounts.
+    function _returnExactly(uint256 tokenId, uint256 amount0, uint256 amount1) internal {
+        (uint256 principal0, uint256 principal1) = _principalAtSpot(tokenId);
+        positionManager.setHookTakeOnRemove(tokenId, principal0 - amount0, principal1 - amount1);
     }
 }

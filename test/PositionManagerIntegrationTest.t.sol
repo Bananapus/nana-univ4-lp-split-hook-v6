@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
+import {TwoPositionFixture} from "./regression/TwoPositionFixture.sol";
 import {JBUniswapV4LPSplitHookMath} from "../src/libraries/JBUniswapV4LPSplitHookMath.sol";
 import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
@@ -11,10 +11,10 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
 /// @notice Tests validating realistic PositionManager token flows.
-/// @dev The improved MockPositionManager tracks locked amounts, owed amounts, and
-///      enforces approval/balance during SETTLE. These tests verify the hook's
-///      token handling works correctly against that more realistic simulation.
-contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
+/// @dev MockPositionManager follows V4's PositionManager: exact-liquidity mints priced at the live spot, per-currency
+///      deltas that must settle, and SWEEP of its whole loose balance. These tests verify the hook's token handling
+///      against it.
+contract PositionManagerIntegrationTest is TwoPositionFixture {
     // ─── Deploy: tokens flow from hook → PositionManager via SETTLE ──
 
     /// @notice After deployPool, project tokens should be pulled from the hook
@@ -59,8 +59,8 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
 
     // ─── Recycle: burn returns tokens, then re-mints both sides ──────
 
-    /// @notice A recycle burns the old ask (returning its locked project AND filled terminal to the hook), then
-    /// re-mints a project-only ask and a terminal-only bid, leaving nothing on the hook or in the ledgers.
+    /// @notice A recycle burns the old ask (returning its project AND filled terminal to the hook), then re-mints a
+    /// project-only ask and a terminal-only bid, leaving on the hook only what those mints did not cost, ledgered.
     function test_Recycle_TokensReturnedAndRedeposited() public {
         _preInitAtMid();
         _accumulateAndDeploy(PROJECT_ID, 100e18);
@@ -68,12 +68,13 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         uint256 oldTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(oldTokenId, 0, "should have a position");
 
-        // Buyers filled part of the ask: the position now also holds terminal tokens the burn recovers.
-        terminalToken.mint(address(positionManager), 5e18);
-        positionManager.injectPositionBalance(oldTokenId, address(terminalToken), 5e18);
+        // Buyers filled part of the ask: the price moved into its range, so the burn also recovers terminal tokens.
+        _fillHalfOf(oldTokenId);
+        (uint256 recoveredProject, uint256 recoveredTerminal) = _sides(oldTokenId);
 
         uint256 burnsBefore = positionManager.burnCallCount();
         _accumulateTokens(PROJECT_ID, 1e18);
+        uint256 projectIn = recoveredProject + hook.accumulatedProjectTokens(PROJECT_ID);
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
         assertEq(positionManager.burnCallCount(), burnsBefore + 1, "the old ask is burned");
@@ -83,17 +84,19 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         uint256 askId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         uint256 bidId = hook.bidTokenIdOf(PROJECT_ID, address(terminalToken));
         assertTrue(askId != oldTokenId && bidId != oldTokenId && askId != bidId, "fresh, distinct ask and bid ids");
-        (uint256 askProject, uint256 askTerminal) = _lockedSides(askId);
-        (uint256 bidProject, uint256 bidTerminal) = _lockedSides(bidId);
-        assertEq(askProject, 101e18, "the ask re-deposits recovered plus new project tokens");
-        assertEq(askTerminal, 0, "the ask holds no terminal");
-        assertEq(bidTerminal, 5e18, "the bid re-deposits the recovered terminal");
-        assertEq(bidProject, 0, "the bid holds no project token");
+        assertGt(bidId, 0, "the recovered terminal mints a bid");
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), projectIn, recoveredTerminal);
 
-        assertEq(projectToken.balanceOf(address(hook)), 0, "no project tokens left on the hook");
-        assertEq(terminalToken.balanceOf(address(hook)), 0, "no terminal tokens left on the hook");
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "project ledger fully minted");
-        assertEq(hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)), 0, "terminal ledger fully minted");
+        assertEq(
+            projectToken.balanceOf(address(hook)),
+            hook.accumulatedProjectTokens(PROJECT_ID),
+            "the hook holds exactly its project ledger"
+        );
+        assertEq(
+            terminalToken.balanceOf(address(hook)),
+            hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)),
+            "the hook holds exactly its terminal ledger"
+        );
     }
 
     // ─── Fee collection: fees transfer from PM to hook ───────────────
@@ -187,6 +190,8 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         uint256 terminalHeldBefore = terminalToken.balanceOf(address(terminal));
 
         _accumulateTokens(PROJECT_ID, 1e18);
+        (uint256 recovered0, uint256 recovered1) = _principalAtSpot(tokenId);
+        uint256 projectIn = recovered0 + recovered1 + hook.accumulatedProjectTokens(PROJECT_ID);
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
         // The fee-project cut was paid; nothing was deposited into the project's treasury.
@@ -198,35 +203,51 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         // The remainder is the new bid; the ask re-mints every project token.
         uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(newTokenId, tokenId, "New position should be minted");
-        (uint256 askProject, uint256 askTerminal) = _lockedSides(newTokenId);
-        (uint256 bidProject, uint256 bidTerminal) = _lockedSides(hook.bidTokenIdOf(PROJECT_ID, address(terminalToken)));
-        assertEq(askProject, 101e18, "the ask holds every project token");
-        assertEq(askTerminal, 0, "the ask holds no terminal");
-        assertEq(bidTerminal, termFee - feeCut, "the bid holds exactly the fee remainder");
-        assertEq(bidProject, 0, "the bid holds no project token");
-        assertEq(terminalToken.balanceOf(address(hook)), 0, "no terminal stranded on the hook");
+        assertNotEq(hook.bidTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "the fee remainder mints a bid");
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), projectIn, termFee - feeCut);
+        assertEq(
+            terminalToken.balanceOf(address(hook)),
+            hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)),
+            "no terminal stranded on the hook beyond its ledgered rounding"
+        );
     }
 
-    // ─── Deploy: partial usage — sweep returns unused tokens ─────────
+    // ─── Mint: SWEEP returns the PositionManager's loose balance ─────
 
-    /// @notice When the PositionManager only uses a fraction of provided tokens,
-    ///         SWEEP should return the unused portion to the hook.
-    function test_Deploy_PartialUsage_SweepReturnsLeftover() public {
-        // Configure PM to only use 80% of provided amounts.
-        positionManager.setUsagePercent(8000);
-
+    /// @notice Like V4's, the PositionManager's SWEEP moves its whole loose balance of a currency (anything that is not
+    /// pool reserves) to the hook. Tokens left on the PositionManager reach the hook through both sweeps of a mint;
+    /// the pool keeps exactly the ask's cost.
+    function test_Deploy_SweepReturnsLooseManagerBalance() public {
         _accumulateTokens(PROJECT_ID, 100e18);
+        uint256 looseProject = 7e18;
+        uint256 looseTerminal = 3e18;
+        projectToken.mint(address(positionManager), looseProject);
+        terminalToken.mint(address(positionManager), looseTerminal);
 
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
-        // Position should still be created successfully.
-        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
-        assertNotEq(tokenId, 0, "Position should be created even with partial usage");
+        uint256 askId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 cost = _projectCost(askId);
+        (uint256 askProject, uint256 askTerminal) = _lockedSides(askId);
+        assertEq(askProject, cost, "the ask's reserves are exactly its cost");
+        assertEq(askTerminal, 0, "the ask holds no terminal");
 
-        // SWEEP returned the unused 20% and the ledger carries it forward for the next recycle.
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 20e18, "the unused 20% returns to the ledger");
-        assertEq(projectToken.balanceOf(address(hook)), 20e18, "the swept leftover is held by the hook");
+        // Source: the PositionManager keeps only the pool's reserves.
+        assertEq(projectToken.balanceOf(address(positionManager)), cost, "loose project tokens swept off the PM");
+        assertEq(terminalToken.balanceOf(address(positionManager)), 0, "loose terminal tokens swept off the PM");
+        // Destination: the hook receives every swept token on top of its unspent inventory.
+        assertEq(
+            projectToken.balanceOf(address(hook)),
+            100e18 - cost + looseProject,
+            "the hook holds its unspent inventory plus the swept project tokens"
+        );
+        assertEq(terminalToken.balanceOf(address(hook)), looseTerminal, "the hook received the swept terminal tokens");
+        assertEq(
+            hook.accumulatedProjectTokens(PROJECT_ID),
+            100e18 - cost + looseProject,
+            "the swept project tokens are carried in the ledger"
+        );
     }
 
     // ─── Helper
@@ -265,6 +286,12 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         (projectSide, terminalSide) = address(projectToken) < address(terminalToken)
             ? (amount0Locked, amount1Locked)
             : (amount1Locked, amount0Locked);
+    }
+
+    /// @notice The project-side cost of minting `tokenId`'s liquidity at the live spot.
+    function _projectCost(uint256 tokenId) internal view returns (uint256) {
+        (uint256 cost0, uint256 cost1) = _mintCostAtSpot(tokenId);
+        return _projectIsToken0() ? cost0 : cost1;
     }
 
     function _sortTokens(address tokenA, address tokenB) internal pure returns (address token0, address token1) {

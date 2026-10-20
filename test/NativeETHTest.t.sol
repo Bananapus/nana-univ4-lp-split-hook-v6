@@ -150,25 +150,7 @@ contract NativeETHTest is LPSplitHookV4TestBase {
     ///         as the terminal token. In V4, native ETH uses Currency.wrap(address(0))
     ///         so no WETH wrapping is needed.
     function test_DeployPool_NativeETH_EndToEnd() public {
-        // Wire directory for NATIVE_TOKEN
-        _setDirectoryTerminal(PROJECT_ID, NATIVE_TOKEN, address(terminal));
-        _addDirectoryTerminal(PROJECT_ID, address(terminal));
-
-        // Add accounting context for NATIVE_TOKEN
-        // Safe: NATIVE_TOKEN sentinel address is a known constant that fits in uint32.
-        // forge-lint: disable-next-line(unsafe-typecast)
-        terminal.setAccountingContext(PROJECT_ID, NATIVE_TOKEN, uint32(uint160(NATIVE_TOKEN)), 18);
-        terminal.addAccountingContext(
-            PROJECT_ID,
-            // forge-lint: disable-next-line(unsafe-typecast)
-            JBAccountingContext({token: NATIVE_TOKEN, decimals: 18, currency: uint32(uint160(NATIVE_TOKEN))})
-        );
-
-        // Set NATIVE_TOKEN as the terminal token for cash-outs
-        terminal.setProjectToken(PROJECT_ID, address(projectToken));
-
-        // Set NATIVE_TOKEN balance higher so auto-select picks it over the base terminalToken
-        store.setBalance(address(terminal), PROJECT_ID, NATIVE_TOKEN, 100e18);
+        _wireNativeTerminal();
 
         // Accumulate project tokens
         uint256 accAmount = 100e18;
@@ -196,10 +178,72 @@ contract NativeETHTest is LPSplitHookV4TestBase {
         // Verify PositionManager was called
         assertEq(positionManager.mintCallCount(), 1, "PositionManager mint should be called once");
 
-        // Verify accumulated tokens were cleared
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "Accumulated should be 0 after deploy");
+        // Verify accumulated tokens were placed: only V4 rounding stays ledgered
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), NATIVE_TOKEN, accAmount, 0);
 
         // Verify project is marked deployed
         assertTrue(hook.isPoolDeployed(PROJECT_ID, NATIVE_TOKEN), "projectDeployed should be true after deploy");
+    }
+
+    /// @notice Like V4's, the PositionManager's native SWEEP returns its whole loose ETH balance (here a balance left
+    /// on it plus whatever the bid's settle did not use) to the hook; the PositionManager keeps only pool reserves. The
+    /// loose balance is kept below the bid's cost, so the hook's balance-delta accounting ledgers all of it.
+    function test_Recycle_NativeSweepReturnsLooseEth() public {
+        _wireNativeTerminal();
+        _accumulateTokens(PROJECT_ID, 100e18);
+        vm.prank(owner);
+        hook.deployPool(PROJECT_ID);
+
+        // Buyers fill part of the ask with ETH, which the recycle recovers and re-mints as a native bid.
+        (uint256 recoveredEth,) = _fillHalfOf(hook.askTokenIdOf(PROJECT_ID, NATIVE_TOKEN));
+        uint256 looseEth = recoveredEth / 4;
+        vm.deal(address(positionManager), address(positionManager).balance + looseEth);
+        uint256 hookEthBefore = address(hook).balance;
+
+        hook.addLiquidity(PROJECT_ID, NATIVE_TOKEN);
+
+        uint256 bidId = hook.bidTokenIdOf(PROJECT_ID, NATIVE_TOKEN);
+        assertNotEq(bidId, 0, "the recovered ETH mints a native bid");
+        (uint256 bidCost,) = _mintCostAtSpot(bidId);
+        // Source: the PositionManager keeps only the pool's reserves.
+        assertEq(
+            address(positionManager).balance,
+            positionManager.poolLocked(address(0)),
+            "the PositionManager keeps no loose ETH"
+        );
+        // Destination: the hook gets back everything but the bid's exact cost, plus the swept loose ETH.
+        assertEq(
+            address(hook).balance,
+            hookEthBefore + recoveredEth - bidCost + looseEth,
+            "the hook received the unused bid ETH and the swept balance"
+        );
+        assertEq(
+            hook.accumulatedTerminalTokens(PROJECT_ID, NATIVE_TOKEN),
+            recoveredEth - bidCost + looseEth,
+            "the swept ETH is carried in the terminal ledger"
+        );
+    }
+
+    /// @notice Make native ETH `PROJECT_ID`'s highest-value terminal token.
+    function _wireNativeTerminal() internal {
+        // Wire directory for NATIVE_TOKEN
+        _setDirectoryTerminal(PROJECT_ID, NATIVE_TOKEN, address(terminal));
+        _addDirectoryTerminal(PROJECT_ID, address(terminal));
+
+        // Add accounting context for NATIVE_TOKEN
+        // Safe: NATIVE_TOKEN sentinel address is a known constant that fits in uint32.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        terminal.setAccountingContext(PROJECT_ID, NATIVE_TOKEN, uint32(uint160(NATIVE_TOKEN)), 18);
+        terminal.addAccountingContext(
+            PROJECT_ID,
+            // forge-lint: disable-next-line(unsafe-typecast)
+            JBAccountingContext({token: NATIVE_TOKEN, decimals: 18, currency: uint32(uint160(NATIVE_TOKEN))})
+        );
+
+        // Set NATIVE_TOKEN as the terminal token for cash-outs
+        terminal.setProjectToken(PROJECT_ID, address(projectToken));
+
+        // Set NATIVE_TOKEN balance higher so auto-select picks it over the base terminalToken
+        store.setBalance(address(terminal), PROJECT_ID, NATIVE_TOKEN, 100e18);
     }
 }

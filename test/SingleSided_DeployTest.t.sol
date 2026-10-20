@@ -72,14 +72,16 @@ contract SingleSided_DeployTest is LPSplitHookV4TestBase {
 
         // (b) The minted position holds ZERO terminal tokens (asks-only) and the full accumulated project-token
         // side — proving the mint really is single-sided, not just "some cash-out happened to round to zero".
+        // The project-token side is the full accumulated amount but V4 rounding, which stays ledgered.
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), 0.5e18, 0);
         (,,,, uint256 amount0Locked, uint256 amount1Locked,) = positionManager._positions(tokenId);
         bool terminalIsToken0 = address(terminalToken) < address(projectToken);
         if (terminalIsToken0) {
             assertEq(amount0Locked, 0, "terminal-token side must be zero (asks-only)");
-            assertEq(amount1Locked, 0.5e18, "project-token side should equal the full accumulated amount");
+            assertGt(amount1Locked, 0, "project-token side holds the accumulation");
         } else {
             assertEq(amount1Locked, 0, "terminal-token side must be zero (asks-only)");
-            assertEq(amount0Locked, 0.5e18, "project-token side should equal the full accumulated amount");
+            assertGt(amount0Locked, 0, "project-token side holds the accumulation");
         }
 
         // (c) The hook never cashed out to fund the deploy.
@@ -88,8 +90,12 @@ contract SingleSided_DeployTest is LPSplitHookV4TestBase {
         // (d) The store's surplus is left untouched (no reclaim ran against the bonding curve).
         assertEq(store.surplusPerToken(PROJECT_ID), surplusBefore, "surplus must be unchanged by a single-sided deploy");
 
-        // The ledger is fully cleared: the mock PositionManager consumes 100% of the offered amount by default, so
-        // there is no leftover to carry forward.
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "no leftover expected at 100% PositionManager usage");
+        // (e) Only V4 rounding is carried forward in the ledger (checked by `_assertPlacedExactly` above), and the hook
+        // holds exactly that ledger.
+        assertEq(
+            projectToken.balanceOf(address(hook)),
+            hook.accumulatedProjectTokens(PROJECT_ID),
+            "the hook holds exactly its ledger"
+        );
     }
 }

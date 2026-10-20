@@ -12,6 +12,13 @@ import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingCo
 import {IJBSplitHook} from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
 import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {Pool} from "@uniswap/v4-core/src/libraries/Pool.sol";
+import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 
@@ -57,6 +64,9 @@ contract MockPermit2 {
 
 /// @notice Shared test harness for JBUniswapV4LPSplitHook tests
 contract LPSplitHookV4TestBase is Test {
+    using PoolIdLibrary for PoolKey;
+    using CurrencyLibrary for Currency;
+
     // ─── Contracts Under Test
     JBUniswapV4LPSplitHook public hook;
 
@@ -333,5 +343,191 @@ contract LPSplitHookV4TestBase is Test {
         // initializePool, so StateLibrary.getSlot0 works in _addUniswapLiquidity.
         vm.prank(owner);
         hook.deployPool(projectId);
+    }
+
+    // ─── V4 Liquidity Helpers
+    // ───────────────────────────────────────────
+
+    /// @notice The token0/token1 amounts `liquidity` over `[lower, upper]` spans at `sqrtPriceX96`.
+    /// @dev Independent of the hook and the mock: the canonical V4 amount formulas. A mint pays them rounded up, a burn
+    /// returns them rounded down.
+    function _amountsForLiquidity(
+        uint160 sqrtPriceX96,
+        int24 lower,
+        int24 upper,
+        uint128 liquidity,
+        bool roundUp
+    )
+        internal
+        pure
+        returns (uint256 amount0, uint256 amount1)
+    {
+        uint160 sqrtA = TickMath.getSqrtPriceAtTick(lower);
+        uint160 sqrtB = TickMath.getSqrtPriceAtTick(upper);
+        uint160 sqrtP = sqrtPriceX96 < sqrtA ? sqrtA : sqrtPriceX96 > sqrtB ? sqrtB : sqrtPriceX96;
+        amount0 = SqrtPriceMath.getAmount0Delta(sqrtP, sqrtB, liquidity, roundUp);
+        amount1 = SqrtPriceMath.getAmount1Delta(sqrtA, sqrtP, liquidity, roundUp);
+    }
+
+    /// @notice What minting `tokenId`'s liquidity over its range costs at its pool's live price.
+    function _mintCostAtSpot(uint256 tokenId) internal view returns (uint256 amount0, uint256 amount1) {
+        (PoolKey memory key, int24 lower, int24 upper, uint128 liquidity,,,) = positionManager._positions(tokenId);
+        (uint160 sqrtPriceX96,,,) = StateLibrary.getSlot0(IPoolManager(address(poolManager)), key.toId());
+        return _amountsForLiquidity(sqrtPriceX96, lower, upper, liquidity, true);
+    }
+
+    /// @notice Other LPs hold all of V4's per-tick liquidity cap at both ends of `[lower, upper]` except `room`. The
+    /// hook's own liquidity already there is left free on top, because a recycle burns it before minting. A mint over
+    /// the range is then capped at `room` and the inventory it cannot place stays with the hook.
+    function _limitTickRoom(PoolKey memory key, int24 lower, int24 upper, uint128 room) internal {
+        uint128 maxPerTick = Pool.tickSpacingToMaxLiquidityPerTick(key.tickSpacing);
+        for (uint256 i; i < 2; i++) {
+            int24 tick = i == 0 ? lower : upper;
+            (uint128 held,) = StateLibrary.getTickLiquidity(IPoolManager(address(poolManager)), key.toId(), tick);
+            positionManager.setTickLiquidityGross(key, tick, maxPerTick - room + held);
+        }
+    }
+
+    /// @notice Dry-run the next deploy (or recycle) of `PROJECT_ID` to learn the ask it mints, undo it, then leave
+    /// per-tick room for only `bps` of that ask's liquidity (see `_limitTickRoom`).
+    /// @return room The liquidity the capped ask will hold.
+    function _capNextAsk(bool deploy, uint256 bps) internal returns (uint128 room) {
+        uint256 snapshot = vm.snapshotState();
+        if (deploy) {
+            vm.prank(owner);
+            hook.deployPool(PROJECT_ID);
+        } else {
+            hook.addLiquidity(PROJECT_ID, address(terminalToken));
+        }
+        (PoolKey memory key, int24 lower, int24 upper, uint128 liquidity,,,) =
+            positionManager._positions(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)));
+        vm.revertToState(snapshot);
+
+        // forge-lint: disable-next-line(unsafe-typecast)
+        room = uint128(uint256(liquidity) * bps / 10_000);
+        _limitTickRoom(key, lower, upper, room);
+    }
+
+    /// @notice Write `key`'s spot price into the mock PoolManager's Slot0, as swaps moving the price would.
+    function _writeSpot(PoolKey memory key, uint160 sqrtPriceX96) internal {
+        bytes32 stateSlot = keccak256(abi.encodePacked(PoolId.unwrap(key.toId()), bytes32(uint256(6))));
+        int24 tick = TickMath.getTickAtSqrtPrice(sqrtPriceX96);
+        // forge-lint: disable-next-line(unsafe-typecast)
+        bytes32 packed = bytes32((uint256(key.fee) << 208) | (uint256(uint24(tick)) << 160) | uint256(sqrtPriceX96));
+        poolManager.writeSlot(stateSlot, packed);
+    }
+
+    /// @notice The principal of a live mock position at its own pool's live spot, rounded down (what a burn returns).
+    function _principalAtSpot(uint256 tokenId) internal view returns (uint256 amount0, uint256 amount1) {
+        (PoolKey memory key, int24 lower, int24 upper, uint128 liquidity,,,) = positionManager._positions(tokenId);
+        (uint160 sqrtPriceX96,,,) = StateLibrary.getSlot0(IPoolManager(address(poolManager)), key.toId());
+        return _amountsForLiquidity(sqrtPriceX96, lower, upper, liquidity, false);
+    }
+
+    /// @notice Set the pool reserves the mock holds for `tokenId`, minting or removing the difference from the
+    /// PositionManager so its balances keep backing exactly what it records.
+    function _setPrincipal(uint256 tokenId, uint256 amount0, uint256 amount1) internal {
+        (PoolKey memory key,,,, uint256 old0, uint256 old1,) = positionManager._positions(tokenId);
+        _rebalance(key.currency0, old0, amount0);
+        _rebalance(key.currency1, old1, amount1);
+        positionManager.setPositionPrincipal(tokenId, amount0, amount1);
+    }
+
+    /// @notice Re-mark `tokenId`'s reserves to what its liquidity holds at the live spot, as if swaps had moved the
+    /// price through it (the swappers' tokens enter the pool and the tokens they bought leave it).
+    function _markToSpot(uint256 tokenId) internal {
+        (uint256 amount0, uint256 amount1) = _principalAtSpot(tokenId);
+        _setPrincipal(tokenId, amount0, amount1);
+    }
+
+    function _rebalance(Currency currency, uint256 oldAmount, uint256 newAmount) private {
+        address pm = address(positionManager);
+        if (currency.isAddressZero()) {
+            vm.deal(pm, pm.balance + newAmount - oldAmount);
+        } else if (newAmount > oldAmount) {
+            MockERC20(Currency.unwrap(currency)).mint(pm, newAmount - oldAmount);
+        } else if (oldAmount > newAmount) {
+            MockERC20(Currency.unwrap(currency)).burn(pm, oldAmount - newAmount);
+        }
+    }
+
+    /// @notice Buyers fill part of `tokenId`: the spot moves to the aligned middle of its range and the position is
+    /// marked to it, so a burn recovers both currencies (the base oracle tracks spot, so the TWAP guard still passes).
+    /// @return amount0 The token0 the position now holds.
+    /// @return amount1 The token1 the position now holds.
+    function _fillHalfOf(uint256 tokenId) internal returns (uint256 amount0, uint256 amount1) {
+        (PoolKey memory key, int24 lower, int24 upper,,,,) = positionManager._positions(tokenId);
+        _writeSpot(key, TickMath.getSqrtPriceAtTick((lower + upper) / 2 / key.tickSpacing * key.tickSpacing));
+        _markToSpot(tokenId);
+        (amount0, amount1) = _principalAtSpot(tokenId);
+        require(amount0 > 0 && amount1 > 0, "fixture: the filled position holds both currencies");
+    }
+
+    /// @notice `projectId`'s live ask and bid each hold exactly what their liquidity costs at the live spot (the ask
+    /// only project tokens, the bid only terminal tokens), and together with the hook's ledgers they account for
+    /// exactly `projectIn` project and `terminalIn` terminal tokens. What stays ledgered is only V4 rounding: each
+    /// position holds the most liquidity its inventory pays for.
+    function _assertPlacedExactly(
+        uint256 projectId,
+        address projectTokenAddr,
+        address terminalTokenAddr,
+        uint256 projectIn,
+        uint256 terminalIn
+    )
+        internal
+        view
+    {
+        uint256 askId = hook.askTokenIdOf(projectId, terminalTokenAddr);
+        uint256 bidId = hook.bidTokenIdOf(projectId, terminalTokenAddr);
+        (uint256 askProject, uint256 askTerminal) = _costSidesOf(askId, projectTokenAddr);
+        (uint256 bidProject, uint256 bidTerminal) = _costSidesOf(bidId, projectTokenAddr);
+        assertEq(askTerminal, 0, "the ask holds no terminal");
+        assertEq(bidProject, 0, "the bid holds no project token");
+        assertEq(
+            askProject + hook.accumulatedProjectTokens(projectId), projectIn, "the ask plus the ledger hold the project"
+        );
+        assertEq(
+            bidTerminal + hook.accumulatedTerminalTokens(projectId, terminalTokenAddr),
+            terminalIn,
+            "the bid plus the ledger hold the terminal"
+        );
+        _assertMaximalLiquidity(askId, projectIn);
+        _assertMaximalLiquidity(bidId, terminalIn);
+    }
+
+    /// @notice One more unit of `tokenId`'s liquidity would cost more than `available` at the live spot.
+    function _assertMaximalLiquidity(uint256 tokenId, uint256 available) internal view {
+        if (tokenId == 0) return;
+        (PoolKey memory key, int24 lower, int24 upper, uint128 liquidity,,,) = positionManager._positions(tokenId);
+        (uint160 sqrtPriceX96,,,) = StateLibrary.getSlot0(IPoolManager(address(poolManager)), key.toId());
+        (uint256 amount0, uint256 amount1) = _amountsForLiquidity(sqrtPriceX96, lower, upper, liquidity + 1, true);
+        assertGt(amount0 + amount1, available, "only V4 rounding is left unplaced");
+    }
+
+    /// @notice A live position's (project, terminal) reserves, each asserted equal to its liquidity's cost at spot.
+    function _costSidesOf(
+        uint256 tokenId,
+        address projectTokenAddr
+    )
+        internal
+        view
+        returns (uint256 projectSide, uint256 terminalSide)
+    {
+        if (tokenId == 0) return (0, 0);
+        (PoolKey memory key,,,, uint256 locked0, uint256 locked1,) = positionManager._positions(tokenId);
+        (uint256 cost0, uint256 cost1) = _mintCostAtSpot(tokenId);
+        assertEq(locked0, cost0, "a position's token0 is exactly its liquidity's cost");
+        assertEq(locked1, cost1, "a position's token1 is exactly its liquidity's cost");
+        return Currency.unwrap(key.currency0) == projectTokenAddr ? (locked0, locked1) : (locked1, locked0);
+    }
+
+    /// @notice Every one of the `total` project tokens is in the pool's reserves or the hook's ledger, and each of
+    /// them holds exactly what it records: nothing is stranded or leaked.
+    function _assertPoolAndLedgerHold(uint256 total) internal view {
+        uint256 ledger = hook.accumulatedProjectTokens(PROJECT_ID);
+        uint256 pooled = projectToken.balanceOf(address(positionManager));
+        assertEq(pooled, positionManager.poolLocked(address(projectToken)), "the PositionManager holds only reserves");
+        assertEq(projectToken.balanceOf(address(hook)), ledger, "the hook holds exactly its ledger");
+        assertEq(pooled + ledger, total, "the pool and the ledger hold every project token");
     }
 }
