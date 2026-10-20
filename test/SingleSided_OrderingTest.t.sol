@@ -51,7 +51,7 @@ contract SingleSided_OrderingTest is LPSplitHookV4TestBase {
             PID, JBAccountingContext({token: address(term), decimals: 18, currency: uint32(uint160(address(term)))})
         );
         jbTokens.setToken(PID, address(proj));
-        store.setTaxedCashOutCurve({projectId: PID, surplus: 100e18, supply: 2e18, taxRate: 4000});
+        _setWideTaxedCurve(PID);
         store.setBalance(address(terminal), PID, address(term), 10e18);
         _addDirectoryTerminal(PID, address(terminal));
     }
@@ -167,7 +167,7 @@ contract SingleSided_OrderingTest is LPSplitHookV4TestBase {
         terminal.addAccountingContext(
             PROJECT_ID, JBAccountingContext({token: NATIVE, decimals: 18, currency: uint32(uint160(NATIVE))})
         );
-        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
+        _setWideTaxedCurve(PROJECT_ID);
         store.setBalance(address(terminal), PROJECT_ID, NATIVE, 10e18);
         // Zero the base ERC-20 terminal's balance so `findHighestValueTerminalTokenOf` auto-selects native ETH.
         store.setBalance(address(terminal), PROJECT_ID, address(terminalToken), 0);

@@ -3,6 +3,8 @@ pragma solidity 0.8.28;
 
 import {TwoPositionFixture} from "./regression/TwoPositionFixture.sol";
 import {MockERC20} from "./mock/MockERC20.sol";
+import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
+import {IJBUniswapV4LPSplitHook} from "../src/interfaces/IJBUniswapV4LPSplitHook.sol";
 import {JBUniswapV4LPSplitHookMath} from "../src/libraries/JBUniswapV4LPSplitHookMath.sol";
 import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
@@ -22,7 +24,10 @@ import {LiquidityAmounts} from "@uniswap/v4-core/test/utils/LiquidityAmounts.sol
 ///   - the exact-price matrix: a spot exactly on an aligned tick `k` (both positions touch `k`), one wei above it, and
 ///     one wei below the next aligned tick, for negative and positive `k`;
 ///   - the MIN_TICK partial spacing: a recycle at `MIN_SQRT_PRICE` and `MIN_SQRT_PRICE + 1` mints token0 clamped to
-///     the corridor and skips token1 without an out-of-range TickMath call.
+///     the corridor and skips token1 without an out-of-range TickMath call;
+///   - the inverted corridor: once the cash-out value exceeds the issuance price the corridor is empty, a recycle
+///     retires both live positions and holds every token in the ledgers, a recycle or deploy with nothing to retire
+///     reverts `InvertedCorridor`, and fresh positions redeploy once the economics are normal again.
 /// @dev Spot moves go through `_swapTo`, which re-marks every live position to exactly the principal its liquidity
 /// holds at the new price (the shared `TwoPositionFixture` helpers keep the PositionManager's balances backing it), so
 /// burns always recover real principal and satisfy contract-derived burn minimums. The mocked TWAP tracks the spot.
@@ -63,7 +68,7 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         );
         jbTokens.setToken(PID, address(proj));
         // A non-inverted corridor: the cash-out floor sits genuinely below the issuance ceiling.
-        store.setTaxedCashOutCurve({projectId: PID, surplus: 1e18, supply: 1_000_000e18, taxRate: 4000});
+        _setWideTaxedCurve(PID);
         store.setBalance(address(terminal), PID, address(term), 10e18);
         _addDirectoryTerminal(PID, address(terminal));
 
@@ -568,5 +573,144 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
 
     function test_MinSqrtPricePlusOne_ProjectToken1() public {
         _runMinPrice(false, TickMath.MIN_SQRT_PRICE + 1);
+    }
+
+    // ─── Inverted corridor lifecycle (both orderings)
+    // ────────────────────────────────────────────────
+
+    /// @notice Cash-out value above the issuance price: one terminal token per project token against an issuance
+    /// price of 1/900 terminal tokens.
+    function _invertEconomics() internal {
+        store.setTaxedCashOutCurve({projectId: PID, surplus: 1_000_000e18, supply: 1_000_000e18, taxRate: 0});
+    }
+
+    /// @notice The `_wire` economics: the cash-out floor genuinely below the issuance ceiling.
+    function _restoreEconomics() internal {
+        _setWideTaxedCurve(PID);
+    }
+
+    function _assertCorridorEmpty() internal view {
+        (int24 lower, int24 upper) = _corridor();
+        assertEq(lower, 0, "inverted corridor: lower is 0");
+        assertEq(upper, 0, "inverted corridor: upper is 0");
+    }
+
+    function _assertRetired(uint256 tokenId, string memory label) internal view {
+        (,,,,,, bool exists) = positionManager._positions(tokenId);
+        assertFalse(exists, label);
+    }
+
+    /// @notice Live ask and bid, then the economics invert: the recycle retires both, mints nothing and holds every
+    /// token (principal, forgiven fee, new reserved tokens) exactly in the ledgers. A second recycle has nothing to
+    /// retire and reverts. Normal economics redeploy everything into fresh positions.
+    function _runInvertedRecycle(bool wantProjectToken0) internal {
+        _wire(wantProjectToken0);
+        int24 mid = _deployBothAtMid(1e18, 0.5e18);
+        (int24 lower, int24 upper) = _corridor();
+        uint256 oldAsk = _askId();
+        uint256 oldBid = _bidId();
+        (uint256 projectHeld, uint256 terminalHeld) = _livePrincipal();
+        assertGt(projectHeld, 0, "precondition: the ask holds project principal");
+        assertGt(terminalHeld, 0, "precondition: the bid holds terminal principal");
+        uint256 projectLedger = _projLedger();
+        uint256 terminalLedger = _termLedger();
+        uint256 fee = 0.05e18;
+        uint256 newTokens = 0.2e18;
+        _addTerminalFee(oldAsk, fee);
+        _accumulate(newTokens);
+
+        _invertEconomics();
+        _assertCorridorEmpty();
+
+        uint256 nextId = positionManager.nextTokenId();
+        vm.expectEmit(true, true, true, true, address(hook));
+        emit IJBUniswapV4LPSplitHook.LiquidityAdded({
+            projectId: PID, terminalToken: address(term), askTokenId: 0, bidTokenId: 0, caller: user
+        });
+        _recycle();
+
+        assertEq(_askId(), 0, "inverted: no ask");
+        assertEq(_bidId(), 0, "inverted: no bid");
+        assertEq(positionManager.nextTokenId(), nextId, "inverted: nothing minted");
+        _assertRetired(oldAsk, "inverted: the old ask is burned");
+        _assertRetired(oldBid, "inverted: the old bid is burned");
+        assertTrue(hook.isPoolDeployed(PID, address(term)), "the pool stays deployed");
+        assertEq(_projLedger(), projectLedger + projectHeld + newTokens, "every project token is ledgered");
+        assertEq(_termLedger(), terminalLedger + terminalHeld + fee, "every terminal token is ledgered");
+        _assertLedgersBacked();
+        assertEq(proj.balanceOf(address(positionManager)), 0, "no project token left in the PositionManager");
+        assertEq(term.balanceOf(address(positionManager)), 0, "no terminal token left in the PositionManager");
+
+        // Nothing left to retire: the recycle refuses and changes nothing.
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvertedCorridor.selector, PID, address(term)
+            )
+        );
+        _recycle();
+
+        // The economics normalize: the held inventory redeploys around the unchanged mid-corridor spot.
+        _restoreEconomics();
+        (int24 restoredLower, int24 restoredUpper) = _corridor();
+        assertEq(restoredLower, lower, "restored corridor lower");
+        assertEq(restoredUpper, upper, "restored corridor upper");
+        uint256 projectTotal = _projLedger();
+        uint256 terminalTotal = _termLedger();
+        _recycle();
+        (int24 bidLower, int24 bidUpper) = projectIsToken0 ? (lower, mid) : (mid, upper);
+        (int24 askLower, int24 askUpper) = projectIsToken0 ? (mid, upper) : (lower, mid);
+        _assertPosition(_askId(), askLower, askUpper, projectTotal, 0, "redeployed ask");
+        _assertPosition(_bidId(), bidLower, bidUpper, 0, terminalTotal, "redeployed bid");
+        assertGe(_askId(), nextId, "redeployed ask is a fresh id");
+        assertGe(_bidId(), nextId, "redeployed bid is a fresh id");
+        assertEq(_projLedger(), 0, "the held project tokens redeployed");
+        assertEq(_termLedger(), 0, "the held terminal tokens redeployed");
+        _assertLedgersBacked();
+    }
+
+    function test_InvertedCorridor_RecycleRetiresAndHolds_ProjectToken0() public {
+        _runInvertedRecycle(true);
+    }
+
+    function test_InvertedCorridor_RecycleRetiresAndHolds_ProjectToken1() public {
+        _runInvertedRecycle(false);
+    }
+
+    /// @notice A first deploy under inverted economics has nothing to retire: it reverts, leaving the pool undeployed
+    /// and the reserved tokens ledgered. Normal economics then deploy them.
+    function _runInvertedDeploy(bool wantProjectToken0) internal {
+        _wire(wantProjectToken0);
+        _invertEconomics();
+        _assertCorridorEmpty();
+        _accumulate(1e18);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvertedCorridor.selector, PID, address(term)
+            )
+        );
+        vm.prank(user);
+        hook.deployPool(PID);
+        assertFalse(hook.isPoolDeployed(PID, address(term)), "inverted: the pool is not deployed");
+        assertEq(_projLedger(), 1e18, "inverted: the reserved tokens stay ledgered");
+        assertEq(proj.balanceOf(address(hook)), 1e18, "inverted: the hook still holds them");
+
+        _restoreEconomics();
+        vm.prank(user);
+        hook.deployPool(PID);
+        (,,, uint256 askProject, uint256 askTerminal) = _position(_askId());
+        assertEq(askProject, 1e18, "normal economics: the ask holds every reserved token");
+        assertEq(askTerminal, 0, "normal economics: the ask holds no terminal");
+        assertEq(_bidId(), 0, "normal economics: nothing to bid with");
+        assertEq(_projLedger(), 0, "normal economics: the ledger is deployed");
+        _assertLedgersBacked();
+    }
+
+    function test_InvertedCorridor_DeployReverts_ProjectToken0() public {
+        _runInvertedDeploy(true);
+    }
+
+    function test_InvertedCorridor_DeployReverts_ProjectToken1() public {
+        _runInvertedDeploy(false);
     }
 }

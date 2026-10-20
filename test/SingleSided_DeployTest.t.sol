@@ -23,7 +23,7 @@ contract SingleSided_DeployTest is LPSplitHookV4TestBase {
         // Realistic corridor: a real bonding-curve floor via the mock store's taxed-curve model (nonzero
         // cashOutTaxRate), so `getCashOutRate` returns an actual floor rather than falling back to a degenerate
         // band.
-        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
+        _setWideTaxedCurve(PROJECT_ID);
 
         // Compute the project's economic corridor via the same math helper `deployPool` uses internally, so the
         // pre-initialized spot below is guaranteed to land strictly between the floor and the ceiling.

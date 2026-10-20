@@ -20,8 +20,10 @@ import {TwoPositionFixture} from "./TwoPositionFixture.sol";
 contract StaleTokenIdOfTest is TwoPositionFixture {
     address internal constant PERMIT2 = 0x000000000022D473030F116dDEE9F6B43aC78BA3;
 
-    /// @notice A cash-out surplus that narrows this fixture's corridor to exactly one tick spacing.
-    uint256 internal constant ONE_SPACING_SURPLUS = 1.14e15;
+    /// @notice A cash-out surplus that narrows this fixture's corridor to exactly one tick spacing: a cash-out value
+    /// just below the issuance price (1/900 ~= 1.111e15). With the terminal token as token0 the issuance tick (~68,027)
+    /// aligns up to 68,200 and the cash-out tick (~68,494) aligns down to 68,400.
+    uint256 internal constant ONE_SPACING_SURPLUS = 1.06e15;
 
     uint256 internal constant NEW_ALLOCATION = 7e18;
 

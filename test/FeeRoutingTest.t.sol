@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
+import {LPSplitHookV4TestBase, DEFAULT_SURPLUS_PER_TOKEN} from "./TestBaseV4.sol";
 import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 import {IJBUniswapV4LPSplitHook} from "../src/interfaces/IJBUniswapV4LPSplitHook.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
@@ -86,7 +86,7 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
                 token: address(terminalToken), decimals: 18, currency: uint32(uint160(address(terminalToken)))
             })
         );
-        store.setSurplus(FEE_PROJECT_ID, 0.5e18);
+        store.setSurplus(FEE_PROJECT_ID, DEFAULT_SURPLUS_PER_TOKEN);
         store.setBalance(address(terminal), FEE_PROJECT_ID, address(terminalToken), 10e18);
         _addDirectoryTerminal(FEE_PROJECT_ID, address(terminal));
     }

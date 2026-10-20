@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
+import {LPSplitHookV4TestBase, DEFAULT_SURPLUS_PER_TOKEN} from "../TestBaseV4.sol";
 import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/IJBBuybackHookRegistry.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
 import {JBUniswapV4LPSplitHookMath} from "../../src/libraries/JBUniswapV4LPSplitHookMath.sol";
@@ -167,8 +167,8 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
             })
         );
 
-        // Set surplus so cash-out rate is nonzero (0.5e18 per project token).
-        store.setSurplus(TEST_PROJECT_ID, 0.5e18);
+        // Set surplus so the cash-out rate is nonzero and below the issuance price.
+        store.setSurplus(TEST_PROJECT_ID, DEFAULT_SURPLUS_PER_TOKEN);
 
         // Set balance so auto-select picks lowTerminalToken for this project.
         store.setBalance(address(terminal), TEST_PROJECT_ID, address(lowTerminalToken), 10e18);
@@ -197,18 +197,12 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
             TEST_PROJECT_ID, address(lowTerminalToken), address(highProjectToken)
         );
 
-        // When terminal is token0:
-        //   cashOut sqrtPrice  = sqrt(WAD^2 / cashOutRate) = sqrt(1e36 / 0.5e18) ~ sqrt(2e18)
+        // When terminal is token0 the price is project tokens per terminal token:
+        //   cashOut sqrtPrice  = sqrt(WAD^2 / cashOutRate) = sqrt(1e36 / 0.0005e18) = sqrt(2000e18)
         //   issuance sqrtPrice = sqrt(issuanceRate)         = sqrt(900e18)
-        //
-        // For the default mock values (cashOutRate=0.5e18, issuanceRate=900e18):
-        //   issuance sqrtPrice > cashOut sqrtPrice because 900 > 2.
-        //   The inversion becomes obvious with much lower cashOutRate (see next test).
-        //
-        // Verify that both sqrtPrices are nonzero and distinct.
-        assertGt(sqrtPriceCashOut, 0, "CashOut sqrtPrice should be nonzero");
+        // A cash-out value below the issuance price puts the cash-out tick ABOVE the issuance tick in this ordering.
         assertGt(sqrtPriceIssuance, 0, "Issuance sqrtPrice should be nonzero");
-        assertNotEq(sqrtPriceCashOut, sqrtPriceIssuance, "CashOut and issuance sqrtPrices should differ");
+        assertGt(sqrtPriceCashOut, sqrtPriceIssuance, "CashOut sqrtPrice sits above issuance when terminal is token0");
     }
 
     /// @notice The fix ensures _calculateTickBounds produces a wide economic range
@@ -332,6 +326,42 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
         uint256 tokenId = hook.askTokenIdOf(TEST_PROJECT_ID, address(lowTerminalToken));
         assertNotEq(tokenId, 0, "tokenIdOf should be nonzero after deploy");
         assertTrue(hook.isPoolDeployed(TEST_PROJECT_ID, address(lowTerminalToken)), "projectDeployed should be true");
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Economic inversion: cash-out value above the issuance price
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice A cash-out value of 0.5 terminal tokens per project token exceeds the issuance price (1/900): no price
+    /// respects both bounds, so the corridor is empty instead of sorted, and a first deploy refuses.
+    function test_economicInversion_emptyCorridor_deployReverts_whenTerminalIsToken0() public {
+        store.setSurplus(TEST_PROJECT_ID, 0.5e18);
+
+        (int24 tickLower, int24 tickUpper) = testableHook.exposed_calculateTickBounds(
+            TEST_PROJECT_ID, address(lowTerminalToken), address(highProjectToken)
+        );
+        assertEq(tickLower, 0, "inverted economics: empty corridor lower");
+        assertEq(tickUpper, 0, "inverted economics: empty corridor upper");
+
+        uint256 accAmount = 100e18;
+        highProjectToken.mint(address(controller), accAmount);
+        vm.startPrank(address(controller));
+        highProjectToken.approve(address(hook), accAmount);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(
+            _buildContext(TEST_PROJECT_ID, address(highProjectToken), accAmount, 1)
+        );
+        vm.stopPrank();
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvertedCorridor.selector,
+                TEST_PROJECT_ID,
+                address(lowTerminalToken)
+            )
+        );
+        vm.prank(owner);
+        hook.deployPool(TEST_PROJECT_ID);
+        assertEq(hook.accumulatedProjectTokens(TEST_PROJECT_ID), accAmount, "the reserved tokens stay ledgered");
     }
 
     // ─── Helper

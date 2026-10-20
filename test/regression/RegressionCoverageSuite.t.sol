@@ -3,7 +3,7 @@ pragma solidity 0.8.28;
 
 // ─── Test base and imports
 // ────────────────────────────────────────────
-import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
+import {LPSplitHookV4TestBase, DEFAULT_SURPLUS_PER_TOKEN} from "../TestBaseV4.sol";
 import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/IJBBuybackHookRegistry.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
 import {MockJBController} from "../mock/MockJBContracts.sol";
@@ -198,7 +198,7 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
         _setDirectoryController(FEE_PROJECT_ID, address(tsController));
 
         // Set a non-zero total surplus so the cashout rate is non-zero.
-        store.setSurplus(PROJECT_ID, 0.5e18);
+        store.setSurplus(PROJECT_ID, DEFAULT_SURPLUS_PER_TOKEN);
     }
 
     // ─── Helper: accumulate tokens via the custom controller ─
@@ -274,7 +274,7 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
                 token: address(terminalToken), decimals: 18, currency: uint32(uint160(address(terminalToken)))
             })
         );
-        store.setSurplus(projectB, 0.5e18);
+        store.setSurplus(projectB, DEFAULT_SURPLUS_PER_TOKEN);
         store.setBalance(address(terminal), projectB, address(terminalToken), 10e18);
 
         // Accumulate and deploy.
@@ -343,7 +343,7 @@ contract FeeTokensExcludedFromRecycleTest is LPSplitHookV4TestBase {
         _setDirectoryController(FEE_PROJECT_ID, address(burnController));
 
         // Set surplus for fee project so fee token routing works.
-        store.setSurplus(FEE_PROJECT_ID, 0.5e18);
+        store.setSurplus(FEE_PROJECT_ID, DEFAULT_SURPLUS_PER_TOKEN);
     }
 
     /// @notice Helper: accumulate with the burning controller as caller.
@@ -456,7 +456,7 @@ contract FeeTokensExcludedFromSplitBalanceCheckTest is LPSplitHookV4TestBase {
         controller = MockJBController(address(burnController));
         _setDirectoryController(PROJECT_ID, address(burnController));
         _setDirectoryController(FEE_PROJECT_ID, address(burnController));
-        store.setSurplus(FEE_PROJECT_ID, 0.5e18);
+        store.setSurplus(FEE_PROJECT_ID, DEFAULT_SURPLUS_PER_TOKEN);
     }
 
     /// @notice Set up a second project (project 3) that shares the same hook clone
@@ -514,7 +514,7 @@ contract FeeTokensExcludedFromSplitBalanceCheckTest is LPSplitHookV4TestBase {
         // JBTokens maps project 3 to the fee project token.
         jbTokens.setToken(projectB, address(feeProjectToken));
         terminal.setProjectToken(projectB, address(feeProjectToken));
-        store.setSurplus(projectB, 0.5e18);
+        store.setSurplus(projectB, DEFAULT_SURPLUS_PER_TOKEN);
 
         // ── Step 3: Accumulate project tokens for project 3. ──
 

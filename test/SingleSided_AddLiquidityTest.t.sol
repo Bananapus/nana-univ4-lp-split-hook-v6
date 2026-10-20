@@ -40,7 +40,7 @@ contract SingleSided_AddLiquidityTest is LPSplitHookV4TestBase {
     function test_AddLiquidity_MintsAnotherSingleSidedAsk_NoCashOut() public {
         // Realistic corridor via the mock store's taxed-curve model (nonzero cashOutTaxRate), matching
         // SingleSided_DeployTest so the pre-set spot is guaranteed to land strictly inside [floor, ceiling].
-        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
+        _setWideTaxedCurve(PROJECT_ID);
 
         (JBRuleset memory ruleset,) = controller.currentRulesetOf(PROJECT_ID);
         (int24 corridorLower, int24 corridorUpper) = JBUniswapV4LPSplitHookMath.calculateTickBounds({
@@ -154,7 +154,7 @@ contract SingleSided_AddLiquidityTest is LPSplitHookV4TestBase {
     /// @notice Initialize the pool a fifth of the way up a realistic corridor and return the pool key plus the
     /// corridor bounds, so the fragmentation/credit tests can drive spot moves that stay strictly inside the band.
     function _initPoolAtLowerFifth() internal returns (PoolKey memory key, int24 corridorLower, int24 corridorUpper) {
-        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
+        _setWideTaxedCurve(PROJECT_ID);
         (JBRuleset memory ruleset,) = controller.currentRulesetOf(PROJECT_ID);
         (corridorLower, corridorUpper) = JBUniswapV4LPSplitHookMath.calculateTickBounds({
             directory: IJBDirectory(address(directory)),

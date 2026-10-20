@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
+import {LPSplitHookV4TestBase, DEFAULT_SURPLUS_PER_TOKEN} from "./TestBaseV4.sol";
 import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 import {IJBUniswapV4LPSplitHook} from "../src/interfaces/IJBUniswapV4LPSplitHook.sol";
 import {JBUniswapV4LPSplitHookMath} from "../src/libraries/JBUniswapV4LPSplitHookMath.sol";
@@ -102,7 +102,7 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
     /// live spot sits above the cash-out floor and a later mint has room to seed a comparable terminal bid leg below
     /// spot. Uses a realistic taxed cash-out curve so the corridor is well-formed.
     function _deployAAtMid(uint256 projectAmount) internal returns (uint256 tokenId) {
-        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
+        _setWideTaxedCurve(PROJECT_ID);
         (int24 floorTick, int24 ceilingTick) = _corridorA();
         positionManager.initializePool(
             _poolKeyA(), TickMath.getSqrtPriceAtTick(floorTick + (ceilingTick - floorTick) / 2)
@@ -185,7 +185,7 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
             })
         );
         jbTokens.setToken(PROJECT_B, address(projectTokenB));
-        store.setSurplus(PROJECT_B, 0.5e18);
+        store.setSurplus(PROJECT_B, DEFAULT_SURPLUS_PER_TOKEN);
         store.setBalance(address(terminal), PROJECT_B, address(terminalToken), 10e18);
         _addDirectoryTerminal(PROJECT_B, address(terminal));
     }

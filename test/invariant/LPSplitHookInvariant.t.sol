@@ -18,6 +18,7 @@ import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionMa
 import {LibClone} from "solady/src/utils/LibClone.sol";
 
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
+import {DEFAULT_SURPLUS_PER_TOKEN} from "../TestBaseV4.sol";
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
 import {MockPositionManager} from "../mock/MockPositionManager.sol";
@@ -101,6 +102,21 @@ contract LPSplitHookHandler is Test {
     /// @dev Ghost variable: number of successful addLiquidity (recycle) calls.
     uint256 public recycleCallCount;
 
+    /// @dev Ghost variable: gross LP fees injected into each project's live positions and not yet collected.
+    mapping(uint256 projectId => uint256 amount) public uncollectedFees;
+
+    /// @dev Ghost variables: successful collections / recycles that collected a nonzero injected fee.
+    uint256 public feeCollectionCount;
+    uint256 public feeRecycleCount;
+
+    /// @dev Failure latch: every caught revert a handler cannot justify under a checked precondition is counted here
+    /// (with its revert data), and `invariant_noUnexpectedFailures` fails the campaign on the first one.
+    uint256 public unexpectedFailures;
+    bytes public lastUnexpectedFailure;
+
+    /// @dev Below this many accumulated tokens a fresh single-sided ask may round to zero liquidity.
+    uint256 public constant DUST = 1e6;
+
     constructor(
         JBUniswapV4LPSplitHook _hook,
         MockERC20 _projectToken,
@@ -129,7 +145,6 @@ contract LPSplitHookHandler is Test {
 
         // Mint tokens to the controller and approve the hook.
         projectToken.mint(address(controller), amount);
-        totalMintedToHook[projectId] += amount;
 
         // Build the split hook context.
         JBSplitHookContext memory context = JBSplitHookContext({
@@ -149,12 +164,16 @@ contract LPSplitHookHandler is Test {
         });
 
         // Call processSplitWith as the controller (the authorized caller).
+        // Intake from the authorized controller never reverts.
         vm.startPrank(address(controller));
         projectToken.approve(address(hook), amount);
-        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
+        try hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context) {
+            totalMintedToHook[projectId] += amount;
+            callCount++;
+        } catch (bytes memory reason) {
+            _latch(reason);
+        }
         vm.stopPrank();
-
-        callCount++;
     }
 
     /// @notice Call processSplitWith with zero amount (edge case).
@@ -179,9 +198,11 @@ contract LPSplitHookHandler is Test {
         });
 
         vm.prank(address(controller));
-        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
-
-        callCount++;
+        try hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context) {
+            callCount++;
+        } catch (bytes memory reason) {
+            _latch(reason);
+        }
     }
 
     /// @notice Deploy a project's pool from its accumulated tokens. Permissionless.
@@ -190,10 +211,62 @@ contract LPSplitHookHandler is Test {
         uint256 projectId = bound(projectIdSeed, 1, MAX_PROJECT_ID);
         if (hook.hasDeployedPool(projectId)) return;
 
+        uint256 accumulated = hook.accumulatedProjectTokens(projectId);
         try hook.deployPool(projectId) {
             deployCallCount++;
-        } catch {
-            // Revert is acceptable — e.g. nothing accumulated yet, or no deployable liquidity at spot.
+        } catch (bytes memory reason) {
+            // Justified only when nothing is accumulated, or when a dust accumulation rounds to zero liquidity (the
+            // corridor and spot never move in this campaign, so nothing else can make a deploy fail).
+            bytes4 selector = _selectorOf(reason);
+            if (
+                accumulated == 0
+                    && selector == JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoTokensAccumulated.selector
+            ) {
+                return;
+            }
+            if (
+                accumulated < DUST
+                    && selector == JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot.selector
+            ) {
+                return;
+            }
+            _latch(reason);
+        }
+    }
+
+    function _latch(bytes memory reason) internal {
+        unexpectedFailures++;
+        lastUnexpectedFailure = reason;
+    }
+
+    function _selectorOf(bytes memory reason) internal pure returns (bytes4 selector) {
+        if (reason.length >= 4) selector = bytes4(reason);
+    }
+
+    /// @notice A deployed project chosen by `seed` (project 1 is always deployed by the seed activity).
+    function _deployedProject(uint256 seed) internal view returns (uint256) {
+        uint256[MAX_PROJECT_ID] memory deployed;
+        uint256 count;
+        for (uint256 i = 1; i <= MAX_PROJECT_ID; i++) {
+            if (hook.hasDeployedPool(i)) deployed[count++] = i;
+        }
+        return deployed[seed % count];
+    }
+
+    /// @notice Give every live position of `projectId` that holds no uncollected fee a distinct nonzero fee on both
+    /// sides, derived from `seed`.
+    function _injectNonzeroFees(uint256 projectId, uint256 seed) internal {
+        uint256[2] memory ids = [
+            hook.askTokenIdOf(projectId, address(terminalToken)), hook.bidTokenIdOf(projectId, address(terminalToken))
+        ];
+        for (uint256 j; j < 2; j++) {
+            _injectFee({
+                projectId: projectId,
+                tokenId: ids[j],
+                fee0Seed: uint256(keccak256(abi.encode(seed, j, 0))),
+                fee1Seed: uint256(keccak256(abi.encode(seed, j, 1))),
+                minFee: 1
+            });
         }
     }
 
@@ -209,18 +282,26 @@ contract LPSplitHookHandler is Test {
         external
     {
         uint256 projectId = bound(projectIdSeed, 1, MAX_PROJECT_ID);
-        _injectFee(projectId, hook.askTokenIdOf(projectId, address(terminalToken)), askFee0Seed, askFee1Seed);
-        _injectFee(projectId, hook.bidTokenIdOf(projectId, address(terminalToken)), bidFee0Seed, bidFee1Seed);
+        _injectFee(projectId, hook.askTokenIdOf(projectId, address(terminalToken)), askFee0Seed, askFee1Seed, 0);
+        _injectFee(projectId, hook.bidTokenIdOf(projectId, address(terminalToken)), bidFee0Seed, bidFee1Seed, 0);
     }
 
-    function _injectFee(uint256 projectId, uint256 tokenId, uint256 fee0Seed, uint256 fee1Seed) internal {
+    function _injectFee(
+        uint256 projectId,
+        uint256 tokenId,
+        uint256 fee0Seed,
+        uint256 fee1Seed,
+        uint256 minFee
+    )
+        internal
+    {
         if (tokenId == 0) return;
         if (positionManager.collectableAmount0(tokenId) != 0 || positionManager.collectableAmount1(tokenId) != 0) {
             return;
         }
-        // Bound fee amounts to realistic range [0, 1e24] to avoid overflow.
-        uint256 fee0 = bound(fee0Seed, 0, 1e24);
-        uint256 fee1 = bound(fee1Seed, 0, 1e24);
+        // Bound fee amounts to realistic range [minFee, 1e24] to avoid overflow.
+        uint256 fee0 = bound(fee0Seed, minFee, 1e24);
+        uint256 fee1 = bound(fee1Seed, minFee, 1e24);
         positionManager.setCollectableFees(tokenId, fee0, fee1);
 
         // Fund the position manager in each pool currency so it can pay the fees on TAKE_PAIR.
@@ -231,58 +312,72 @@ contract LPSplitHookHandler is Test {
         projectFeesInjected[projectId] += projectFee;
         terminalFeesInjected[projectId] += terminalFee;
         pendingExpectedClaims[projectId] += (terminalFee * FEE_PERCENT) / BPS;
+        uncollectedFees[projectId] += projectFee + terminalFee;
     }
 
     /// @notice A successful collection or recycle collected every live position's injected fees.
-    function _settleCollectedFees(uint256 projectId) internal {
+    /// @return collectedFees Whether a nonzero injected fee was collected.
+    function _settleCollectedFees(uint256 projectId) internal returns (bool collectedFees) {
+        collectedFees = uncollectedFees[projectId] != 0;
+        uncollectedFees[projectId] = 0;
         expectedClaims[projectId] += pendingExpectedClaims[projectId];
         pendingExpectedClaims[projectId] = 0;
     }
 
-    /// @notice Collect LP fees from a project's live ask and bid and route them. Permissionless.
-    /// @param projectIdSeed Fuzzed seed, reduced to valid project ID range.
+    /// @notice Collect LP fees from a deployed project's live ask and bid and route them. Permissionless.
+    /// @dev Every live position without uncollected fees first gets a nonzero fee, so each collection moves real
+    /// fees. A deployed project always holds a live position and the PositionManager is funded for every injected
+    /// fee, so no revert is justified.
+    /// @param projectIdSeed Fuzzed seed, reduced to a deployed project.
+    /// @param feeSeed Fuzzed seed for the injected fees.
     // forge-lint: disable-next-line(mixed-case-function)
-    function collectAndRouteLPFees(uint256 projectIdSeed) external {
-        uint256 projectId = bound(projectIdSeed, 1, MAX_PROJECT_ID);
-        if (hook.askTokenIdOf(projectId, address(terminalToken)) == 0) {
-            if (hook.bidTokenIdOf(projectId, address(terminalToken)) == 0) return;
-        }
+    function collectAndRouteLPFees(uint256 projectIdSeed, uint256 feeSeed) external {
+        uint256 projectId = _deployedProject(projectIdSeed);
+        _injectNonzeroFees(projectId, feeSeed);
 
         try hook.collectAndRouteLPFees(projectId, address(terminalToken)) {
-            _settleCollectedFees(projectId);
+            if (_settleCollectedFees(projectId)) feeCollectionCount++;
             collectFeeCallCount++;
-        } catch {
-            // Revert is acceptable here; the injected fees stay collectable for a later call.
+        } catch (bytes memory reason) {
+            _latch(reason);
         }
     }
 
-    /// @notice Recycle a project's positions (collect fees, burn ask and bid, re-mint both single-sided).
-    /// @dev Permissionless. Uses try/catch since the recycle can revert (e.g. NoDeployableLiquidityAtSpot).
-    /// @param projectIdSeed Fuzzed seed, reduced to valid project ID range.
-    function addLiquidity(uint256 projectIdSeed) external {
-        uint256 projectId = bound(projectIdSeed, 1, MAX_PROJECT_ID);
-        if (!hook.hasDeployedPool(projectId)) return;
+    /// @notice Recycle a deployed project's positions (collect fees, burn ask and bid, re-mint both single-sided).
+    /// @dev Permissionless. Every live position without uncollected fees first gets a nonzero fee. The spot, TWAP and
+    /// corridor never move in this campaign and the retired principal can always be re-minted, so no revert is
+    /// justified.
+    /// @param projectIdSeed Fuzzed seed, reduced to a deployed project.
+    /// @param feeSeed Fuzzed seed for the injected fees.
+    function addLiquidity(uint256 projectIdSeed, uint256 feeSeed) external {
+        uint256 projectId = _deployedProject(projectIdSeed);
+        _injectNonzeroFees(projectId, feeSeed);
 
         try hook.addLiquidity(projectId, address(terminalToken)) {
             // The recycle collected both positions' fees before burning them.
-            _settleCollectedFees(projectId);
+            if (_settleCollectedFees(projectId)) feeRecycleCount++;
             recycleCallCount++;
-        } catch {
-            // Revert is expected in some cases, e.g. NoDeployableLiquidityAtSpot or a TWAP deviation.
+        } catch (bytes memory reason) {
+            _latch(reason);
         }
     }
 }
 
 /// @notice Invariant tests for JBUniswapV4LPSplitHook accounting properties.
 /// @dev Verifies:
-///   1. the project-token ledgers plus claimable fee tokens never exceed the hook's actual ERC20 balance
+///   1. exact global backing per currency (no donations in this campaign): the hook holds exactly its ledgers plus
+///      claimable fee tokens, the PositionManager exactly the live principal plus uncollected fees, and the fee
+///      terminal exactly the independently computed cuts
 ///   2. a project has a live ask or bid iff hasDeployedPool[projectId] is true
 ///   3. accumulatedProjectTokens[projectId] == sum of all amounts passed to processSplitWith before deployment
 ///      (cross-checked against ghost variable)
-///   4. each project's ledgers plus its positions' principal never exceed what entered its books
+///   4. exact per-project conservation per currency: ledgers plus live principal plus uncollected fees equal what
+///      entered the project's books, net of the independently computed cuts
 ///   5. claimableFeeTokens equals the claims derived independently from the injected fees (cut and payout)
 ///   6. at most two positions per project are alive, and every live position is a tracked ask or bid
-///   7. every campaign includes a successful deploy, fee collection and recycle (seeded in setUp)
+///   7. every campaign includes a successful deploy, fee collection and recycle (seeded in setUp), no handler call
+///      fails without a justified error under a checked precondition, and every run ends with post-seed
+///      collections and recycles of nonzero fees
 contract LPSplitHookInvariantTest is StdInvariant, Test {
     JBUniswapV4LPSplitHook public hook;
     LPSplitHookHandler public handler;
@@ -308,6 +403,10 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
     uint256 public constant DEFAULT_WEIGHT = 1000e18;
 
     address public owner;
+
+    /// @dev Fee-moving collections and recycles performed by the seed activity.
+    uint256 public seedFeeCollections;
+    uint256 public seedFeeRecycles;
 
     function setUp() public {
         owner = makeAddr("owner");
@@ -398,10 +497,12 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
         handler.deployPool(1);
         assertEq(handler.deployCallCount(), 1, "seed: deploy must succeed");
         handler.injectFees(1, 3e18, 5e18, 0, 0);
-        handler.collectAndRouteLPFees(1);
+        handler.collectAndRouteLPFees(1, 0);
         assertEq(handler.collectFeeCallCount(), 1, "seed: fee collection must succeed");
-        handler.addLiquidity(1);
+        handler.addLiquidity(1, 0);
         assertEq(handler.recycleCallCount(), 1, "seed: recycle must succeed");
+        seedFeeCollections = handler.feeCollectionCount();
+        seedFeeRecycles = handler.feeRecycleCount();
         assertNotEq(hook.askTokenIdOf(1, address(terminalToken)), 0, "seed: ask live");
         assertNotEq(hook.bidTokenIdOf(1, address(terminalToken)), 0, "seed: bid live");
     }
@@ -436,8 +537,8 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
         // Wire JB tokens
         jbTokens.setToken(projectId, address(projectToken));
 
-        // Set surplus for cash out rate
-        store.setSurplus(projectId, 0.5e18);
+        // Set surplus for a cash-out rate below the issuance price (a non-inverted corridor).
+        store.setSurplus(projectId, DEFAULT_SURPLUS_PER_TOKEN);
         // Give the project a terminal balance so `deployPool` can select its terminal token.
         store.setBalance(address(terminal), projectId, address(terminalToken), 10e18);
 
@@ -491,7 +592,7 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
             projectIsToken0 ? fees[3] : fees[2]
         );
         uint256 payCalls = terminal.payCallCount();
-        handler.collectAndRouteLPFees(1);
+        handler.collectAndRouteLPFees(1, 0);
         assertEq(handler.collectFeeCallCount(), 2, "standalone collection succeeded");
 
         assertEq(terminal.payCallCount(), payCalls + 2, "one terminal-side cut paid per position");
@@ -522,7 +623,7 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
         uint256 accumulatedBefore = hook.accumulatedProjectTokens(1);
         uint256 terminalBefore = hook.accumulatedTerminalTokens(1, address(terminalToken));
         uint256 cuts2 = _cut(fees2[1]) + _cut(fees2[3]);
-        handler.addLiquidity(1);
+        handler.addLiquidity(1, 0);
         assertEq(handler.recycleCallCount(), 2, "the zero-accumulation recycle succeeded");
 
         assertEq(hook.claimableFeeTokens(1), claims + cuts + cuts2, "the recycle cut both positions' fees exactly");
@@ -558,31 +659,51 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Invariant 1: Accumulated accounting never exceeds actual token balance
+    // Invariant 1: Exact global backing per currency
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice For every project, the hook's internal accounting of accumulated tokens (plus the fee tokens it holds
-    ///         for claims, which share the project token here) must never exceed the actual ERC20 balances it holds.
-    /// @dev This catches any scenario where `_accumulateTokens` increments the counter
-    ///      without a corresponding token transfer actually reaching the hook.
-    function invariant_accumulatedNeverExceedsBalance() public view {
-        uint256 totalAccumulated;
-        uint256 totalTerminalAccumulated;
-        for (uint256 i = 1; i <= handler.MAX_PROJECT_ID(); i++) {
-            totalAccumulated += hook.accumulatedProjectTokens(i) + hook.claimableFeeTokens(i);
-            totalTerminalAccumulated += hook.accumulatedTerminalTokens(i, address(terminalToken));
+    /// @notice The live principal and uncollected fees of every position the PositionManager holds, by side.
+    function _positionManagerBooks() internal view returns (uint256 projectSide, uint256 terminalSide) {
+        bool projectIsToken0 = address(projectToken) < address(terminalToken);
+        for (uint256 id = 1; id < positionManager.nextTokenId(); id++) {
+            (,,,, uint256 locked0, uint256 locked1, bool exists) = positionManager._positions(id);
+            if (!exists) continue;
+            uint256 amount0 = locked0 + positionManager.collectableAmount0(id);
+            uint256 amount1 = locked1 + positionManager.collectableAmount1(id);
+            projectSide += projectIsToken0 ? amount0 : amount1;
+            terminalSide += projectIsToken0 ? amount1 : amount0;
         }
+    }
 
-        assertLe(
-            totalAccumulated,
-            projectToken.balanceOf(address(hook)),
-            "INVARIANT VIOLATED: sum of accumulatedProjectTokens exceeds actual token balance"
+    /// @notice Nothing is donated in this campaign, so every balance is exactly its books: the hook holds its ledgers
+    ///         plus the fee tokens it owes (which share the project token here), the PositionManager holds the live
+    ///         principal plus uncollected fees, and the fee terminal holds exactly the independently computed cuts.
+    /// @dev Catches tokens credited without arriving, ledgers erased while their tokens strand, and cuts that are
+    ///      over- or under-paid.
+    function invariant_exactGlobalBacking() public view {
+        uint256 hookProjectBooks;
+        uint256 hookTerminalBooks;
+        uint256 cuts;
+        for (uint256 i = 1; i <= handler.MAX_PROJECT_ID(); i++) {
+            hookProjectBooks += hook.accumulatedProjectTokens(i) + hook.claimableFeeTokens(i);
+            hookTerminalBooks += hook.accumulatedTerminalTokens(i, address(terminalToken));
+            cuts += handler.expectedClaims(i);
+        }
+        (uint256 pmProjectBooks, uint256 pmTerminalBooks) = _positionManagerBooks();
+
+        assertEq(projectToken.balanceOf(address(hook)), hookProjectBooks, "INVARIANT VIOLATED: hook project backing");
+        assertEq(terminalToken.balanceOf(address(hook)), hookTerminalBooks, "INVARIANT VIOLATED: hook terminal backing");
+        assertEq(
+            projectToken.balanceOf(address(positionManager)),
+            pmProjectBooks,
+            "INVARIANT VIOLATED: PositionManager project backing"
         );
-        assertLe(
-            totalTerminalAccumulated,
-            terminalToken.balanceOf(address(hook)),
-            "INVARIANT VIOLATED: sum of accumulatedTerminalTokens exceeds actual token balance"
+        assertEq(
+            terminalToken.balanceOf(address(positionManager)),
+            pmTerminalBooks,
+            "INVARIANT VIOLATED: PositionManager terminal backing"
         );
+        assertEq(terminalToken.balanceOf(address(terminal)), cuts, "INVARIANT VIOLATED: fee terminal holds the cuts");
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -632,14 +753,16 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Invariant 4: Per-project books never exceed what entered them
+    // Invariant 4: Exact per-project conservation per currency
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice For each individual project, its ledgers plus the principal locked in its live ask and bid must be
-    ///         <= the reserved tokens minted for it plus the gross LP fees injected into its positions.
-    /// @dev A per-project version of invariant 1 that follows tokens through deploy and recycle, catching any
-    ///      cross-project leakage or value creation (recycled principal is credited back exactly once).
-    function invariant_perProjectAccountingBounded() public view {
+    /// @notice For each project, its ledgers plus the principal and uncollected fees of its live ask and bid equal
+    ///         exactly what entered its books: every reserved token minted for it plus every project-side fee
+    ///         injected (the project-side cut is forgiven), and every terminal-side fee injected minus the cuts
+    ///         computed independently from the collected fees.
+    /// @dev Follows tokens through deploy, collection and recycle, catching any loss, cross-project leakage or value
+    ///      creation (recycled principal is credited back exactly once).
+    function invariant_exactPerProjectConservation() public view {
         bool projectIsToken0 = address(projectToken) < address(terminalToken);
         for (uint256 i = 1; i <= handler.MAX_PROJECT_ID(); i++) {
             uint256 projectBooks = hook.accumulatedProjectTokens(i);
@@ -647,20 +770,22 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
             uint256[2] memory ids =
                 [hook.askTokenIdOf(i, address(terminalToken)), hook.bidTokenIdOf(i, address(terminalToken))];
             for (uint256 j; j < 2; j++) {
+                if (ids[j] == 0) continue;
                 (,,,, uint256 locked0, uint256 locked1,) = positionManager._positions(ids[j]);
-                projectBooks += projectIsToken0 ? locked0 : locked1;
-                terminalBooks += projectIsToken0 ? locked1 : locked0;
+                uint256 amount0 = locked0 + positionManager.collectableAmount0(ids[j]);
+                uint256 amount1 = locked1 + positionManager.collectableAmount1(ids[j]);
+                projectBooks += projectIsToken0 ? amount0 : amount1;
+                terminalBooks += projectIsToken0 ? amount1 : amount0;
             }
-            assertLe(
+            assertEq(
                 projectBooks,
                 handler.totalMintedToHook(i) + handler.projectFeesInjected(i),
-                "INVARIANT VIOLATED: per-project project-token books exceed what entered them"
+                "INVARIANT VIOLATED: per-project project-token books differ from what entered them"
             );
-            // Every expected claim was minted 1:1 for a terminal-side cut that left the project's books.
-            assertLe(
+            assertEq(
                 terminalBooks,
                 handler.terminalFeesInjected(i) - handler.expectedClaims(i),
-                "INVARIANT VIOLATED: per-project terminal-token books exceed fees injected net of paid cuts"
+                "INVARIANT VIOLATED: per-project terminal-token books differ from fees injected net of paid cuts"
             );
         }
     }
@@ -690,7 +815,8 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
     /// @notice Every live position NFT is exactly one project's tracked ask or bid: a deployed project has one or two
     ///         live positions, recycles burn the ids they replace, and no NFT is ever left orphaned.
     /// @dev A recycle reverts (`NoDeployableLiquidityAtSpot`) rather than storing two zero ids, so a deployed project
-    ///      always keeps at least one live position.
+    ///      always keeps at least one live position. (Only an inverted corridor retires both into the ledgers; the
+    ///      economics never change in this campaign.)
     function invariant_positionLifecycleConsistency() public view {
         uint256 trackedLive;
         for (uint256 i = 1; i <= handler.MAX_PROJECT_ID(); i++) {
@@ -735,5 +861,16 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
         assertGt(handler.collectFeeCallCount(), 0, "no successful fee collection");
         assertGt(handler.deployCallCount(), 0, "no successful deploy");
         assertGt(handler.recycleCallCount(), 0, "no successful recycle");
+    }
+
+    /// @notice No handler call failed without a justified error under a checked precondition.
+    function invariant_noUnexpectedFailures() public view {
+        assertEq(handler.unexpectedFailures(), 0, vm.toString(handler.lastUnexpectedFailure()));
+    }
+
+    /// @notice Each run, beyond the seed, collects and recycles real (nonzero) injected fees successfully.
+    function afterInvariant() public view {
+        assertGt(handler.feeCollectionCount(), seedFeeCollections, "no post-seed collection of nonzero fees");
+        assertGt(handler.feeRecycleCount(), seedFeeRecycles, "no post-seed recycle of nonzero fees");
     }
 }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
+import {LPSplitHookV4TestBase, DEFAULT_SURPLUS_PER_TOKEN} from "./TestBaseV4.sol";
 import {MockERC20} from "./mock/MockERC20.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
@@ -232,7 +232,7 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
                 token: address(terminalToken), decimals: 18, currency: uint32(uint160(address(terminalToken)))
             })
         );
-        store.setSurplus(PROJECT_3, 0.5e18);
+        store.setSurplus(PROJECT_3, DEFAULT_SURPLUS_PER_TOKEN);
         store.setBalance(address(terminal), PROJECT_3, address(terminalToken), 10e18);
 
         // Set project 3 ownership

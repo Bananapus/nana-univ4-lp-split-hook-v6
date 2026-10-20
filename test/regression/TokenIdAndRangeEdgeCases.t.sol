@@ -28,7 +28,9 @@ contract RegressionRegressionsTest is LPSplitHookV4TestBase {
             hooks: hook.oracleHook()
         });
 
-        int24 attackerTick = 50_000;
+        // Inside the default corridor (issuance ceiling 68,200 to cash-out floor 76,000 with the terminal token as
+        // token0; see RegressionFixM4Test).
+        int24 attackerTick = 72_000;
         uint160 attackerSqrtPrice = TickMath.getSqrtPriceAtTick(attackerTick);
         positionManager.initializePool(key, attackerSqrtPrice);
 

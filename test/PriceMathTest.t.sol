@@ -183,13 +183,13 @@ contract TestableJBUniswapV4LPSplitHook {
 ///   - weight = 1000e18, reservedPercent = 1000 (10%), baseCurrency = 1 (ETH)
 ///   - accountingContext currency = uint32(uint160(terminalToken)) (not 1)
 ///   - prices.pricePerUnitOf returns 1e18 by default
-///   - store surplus = 0.5e18 per project token
+///   - store surplus = DEFAULT_SURPLUS_PER_TOKEN = 0.0005e18 per project token
 ///
 /// Therefore:
 ///   weightRatio = 1e18 (from prices mock, since currencies differ)
 ///   rawTokensOut(1e18 input) = mulDiv(1e18, 1000e18, 1e18) = 1000e18
 ///   issuanceRate = 1000e18 * (10000-1000)/10000 = 900e18
-///   cashOutRate  = (0.5e18 * 1e18) / 1e18 = 0.5e18
+///   cashOutRate  = (0.0005e18 * 1e18) / 1e18 = 0.0005e18 (below the issuance price 1e18 / 900)
 contract PriceMathTest is LPSplitHookV4TestBase {
     TestableJBUniswapV4LPSplitHook public testableHook;
 
@@ -245,12 +245,12 @@ contract PriceMathTest is LPSplitHookV4TestBase {
     // 4. Cash out rate with positive surplus
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice With surplus = 0.5e18, cash out rate for 1e18 project tokens = 0.5e18.
+    /// @notice With surplus = 0.0005e18, cash out rate for 1e18 project tokens = 0.0005e18.
     function test_CashOutRate_PositiveSurplus() public view {
         uint256 rate = testableHook.exposed_getCashOutRate(PROJECT_ID, address(terminalToken));
 
-        // store returns (0.5e18 * 1e18) / 1e18 = 0.5e18
-        assertEq(rate, 0.5e18, "Cash out rate should be 0.5e18 for default surplus");
+        // store returns (0.0005e18 * 1e18) / 1e18 = 0.0005e18
+        assertEq(rate, 0.0005e18, "Cash out rate should be 0.0005e18 for default surplus");
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -567,14 +567,16 @@ contract PriceMathTest is LPSplitHookV4TestBase {
     // ─────────────────────────────────────────────────────────────────────
 
     /// @notice With pre-held terminal tokens H, the cash-out must be reduced so the position's terminal:project ratio
-    ///         is unchanged: (c·r + H)/(T − c) must equal the same ratio R the no-pre-held optimum targets. The old
+    ///         is unchanged: (c*r + H)/(T − c) must equal the same ratio R the no-pre-held optimum targets. The old
     ///         logic subtracted H/r (the cash-out rate alone), which over-subtracts because the position also needs
     ///         R terminal per project — the correct offset is H/(r+R). This test pins the post-cash-out ratio.
     function test_OptimalCashOut_PreHeldPreservesPositionRatio() public view {
         uint256 totalTokens = 100e18;
-        // Pre-held must be small enough to be fully consumable by the position (H < R·T), so the cashed-out + pre-held
+        // Pre-held must be small enough to be fully consumable by the position (H < R*T), so the cashed-out + pre-held
         // terminal side still lands on the target ratio rather than leaving excess terminal as leftover.
-        uint256 preHeld = 1e18; // terminal tokens recovered from a (hypothetical) re-range burn
+        // At the default economics R is below 0.001 terminal per project token, so R * T is under 0.1e18 for T =
+        // 100e18.
+        uint256 preHeld = 0.01e18; // terminal tokens recovered from a (hypothetical) re-range burn
 
         (int24 tickLower, int24 tickUpper) =
             testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));

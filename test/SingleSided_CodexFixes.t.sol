@@ -135,7 +135,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
     function test_Finding9_FreshPoolSeedsAtFloor() public {
         // A non-inverted corridor: cash-out value (floor) sits genuinely below the issuance ceiling. A low surplus
         // relative to a large supply keeps the cash-out rate small, so the cash-out price is the economic floor.
-        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 1e18, supply: 1_000_000e18, taxRate: 4000});
+        _setWideTaxedCurve(PROJECT_ID);
 
         (int24 corridorLower, int24 corridorUpper) =
             _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
@@ -243,7 +243,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
     // ─── Finding 2: deployPool validates spot against the oracle TWAP on a pre-initialized pool ───
 
     function _preInitAtMid() internal returns (int24 midTick) {
-        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
+        _setWideTaxedCurve(PROJECT_ID);
         (int24 corridorLower, int24 corridorUpper) =
             _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
         midTick = corridorLower + (corridorUpper - corridorLower) / 2;
@@ -255,7 +255,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
     function test_Finding2_DeployOnPreInitPool_RevertsWhenSpotOffTwap() public {
         // The pool key includes the oracle hook, so install the fixed oracle BEFORE pre-initializing so the pre-init
         // pool and the hook's computed key match.
-        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
+        _setWideTaxedCurve(PROJECT_ID);
         (int24 corridorLower, int24 corridorUpper) =
             _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
         int24 midTick = corridorLower + (corridorUpper - corridorLower) / 2;
@@ -284,7 +284,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
     /// @notice A fresh pool the hook initializes itself has no TWAP history, so the guard is skipped and the cold-start
     /// deploy still succeeds even when the oracle would revert.
     function test_Finding2_FreshPoolColdStart_SkipsTwapGuard() public {
-        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
+        _setWideTaxedCurve(PROJECT_ID);
 
         MockGeomeanOracle revertingOracle = new MockGeomeanOracle();
         revertingOracle.setShouldRevert(true);
@@ -386,7 +386,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
     }
 
     function _corridorAtMid() internal returns (int24 lo, int24 hi) {
-        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
+        _setWideTaxedCurve(PROJECT_ID);
         (lo, hi) = _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
     }
 
@@ -451,8 +451,6 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, 1e18);
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
-        projectToken.mint(address(positionManager), 1000e18);
-        terminalToken.mint(address(positionManager), 1000e18);
     }
 
     /// @notice A dust accumulation never triggers an inline recycle, but an explicit recycle folds it into the ask.
@@ -488,9 +486,18 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
 
         vm.prank(user);
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
-        assertNotEq(
-            hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), oldTokenId, "meaningful accumulation must add"
-        );
+        uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        assertNotEq(newTokenId, oldTokenId, "meaningful accumulation must add");
+
+        // The re-minted ask (plus any unminted remainder in the ledger) holds the recovered principal and the new
+        // tokens exactly; nothing else funds it.
+        (uint256 askProject, uint256 askTerminal) = _lockedSides(newTokenId);
+        uint256 ledger = hook.accumulatedProjectTokens(PROJECT_ID);
+        assertEq(askProject + ledger, 1.5e18, "the ask plus the ledger hold the principal and the new tokens");
+        assertEq(askTerminal, 0, "the ask holds no terminal");
+        assertEq(hook.bidTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "no terminal to bid with");
+        assertEq(projectToken.balanceOf(address(positionManager)), askProject, "the PositionManager holds the ask");
+        assertEq(projectToken.balanceOf(address(hook)), ledger, "the hook holds exactly its ledger");
     }
 
     // ─── Cold-start seed helpers (Fix A / Fix B) ───
@@ -682,7 +689,7 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         uint256 pid = 23;
         (MockERC20 proj, MockERC20 term) = _wireProjectToken0Codex(pid);
         // A low surplus over a large supply keeps the cash-out floor genuinely below the issuance ceiling (wide band).
-        store.setTaxedCashOutCurve({projectId: pid, surplus: 1e18, supply: 1_000_000e18, taxRate: 4000});
+        _setWideTaxedCurve(pid);
 
         (int24 corridorLower, int24 corridorUpper) = _corridorOf(pid, address(term), address(proj));
         // project = token0 → the cash-out floor is the corridor's LOWER tick; the seed sits one spacing inside it.

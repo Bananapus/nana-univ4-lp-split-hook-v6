@@ -14,7 +14,7 @@ import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 import {IJBUniswapV4LPSplitHook} from "../src/interfaces/IJBUniswapV4LPSplitHook.sol";
 import {JBUniswapV4LPSplitHookMath} from "../src/libraries/JBUniswapV4LPSplitHookMath.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
-import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
+import {LPSplitHookV4TestBase, DEFAULT_SURPLUS_PER_TOKEN} from "./TestBaseV4.sol";
 import {MockERC20} from "./mock/MockERC20.sol";
 
 /// @notice Oracle stand-in whose every call reverts with a 1MB revert-data bomb, exercising the hook's bounded
@@ -177,7 +177,7 @@ contract DurableIntakeTest is LPSplitHookV4TestBase {
                 token: address(terminalToken), decimals: 18, currency: uint32(uint160(address(terminalToken)))
             })
         );
-        store.setSurplus(CREDITS_PROJECT_ID, 0.5e18);
+        store.setSurplus(CREDITS_PROJECT_ID, DEFAULT_SURPLUS_PER_TOKEN);
         store.setBalance(address(terminal), CREDITS_PROJECT_ID, address(terminalToken), 10e18);
 
         hook.deployPool(CREDITS_PROJECT_ID);
@@ -268,7 +268,7 @@ contract DurableIntakeTest is LPSplitHookV4TestBase {
                 token: address(terminalToken), decimals: 18, currency: uint32(uint160(address(terminalToken)))
             })
         );
-        store.setSurplus(NO_TERMINAL_PROJECT_ID, 0.5e18);
+        store.setSurplus(NO_TERMINAL_PROJECT_ID, DEFAULT_SURPLUS_PER_TOKEN);
         store.setBalance(address(terminal), NO_TERMINAL_PROJECT_ID, address(terminalToken), 10e18);
 
         hook.deployPool(NO_TERMINAL_PROJECT_ID);
@@ -396,7 +396,7 @@ contract DurableIntakeTest is LPSplitHookV4TestBase {
                 token: address(terminalToken), decimals: 18, currency: uint32(uint160(address(terminalToken)))
             })
         );
-        store.setSurplus(FEE_PROJECT_ID, 0.5e18);
+        store.setSurplus(FEE_PROJECT_ID, DEFAULT_SURPLUS_PER_TOKEN);
         store.setBalance(address(terminal), FEE_PROJECT_ID, address(terminalToken), 10e18);
 
         hook.deployPool(FEE_PROJECT_ID);

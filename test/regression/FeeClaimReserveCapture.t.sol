@@ -2,6 +2,7 @@
 pragma solidity 0.8.28;
 
 import {TwoPositionFixture} from "./TwoPositionFixture.sol";
+import {DEFAULT_SURPLUS_PER_TOKEN} from "../TestBaseV4.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -141,7 +142,7 @@ contract FeeClaimReserveCaptureRegression is TwoPositionFixture {
         controller.setFirstWeight(PROJECT_B, DEFAULT_FIRST_WEIGHT);
         controller.setReservedPercent(PROJECT_B, DEFAULT_RESERVED_PERCENT);
         controller.setBaseCurrency(PROJECT_B, 1);
-        store.setSurplus(PROJECT_B, 0.5e18);
+        store.setSurplus(PROJECT_B, DEFAULT_SURPLUS_PER_TOKEN);
 
         // Project B is paired with the SAME terminal token (feeProjectToken) that project A's reserved fee claim
         // will be denominated in — the scenario where cross-project bleed-through would matter.

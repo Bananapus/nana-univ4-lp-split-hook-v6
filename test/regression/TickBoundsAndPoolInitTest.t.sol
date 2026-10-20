@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
+import {LPSplitHookV4TestBase, DEFAULT_SURPLUS_PER_TOKEN} from "../TestBaseV4.sol";
 import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/IJBBuybackHookRegistry.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
 import {JBUniswapV4LPSplitHookMath} from "../../src/libraries/JBUniswapV4LPSplitHookMath.sol";
@@ -107,9 +107,11 @@ contract RegressionFixM4Test is LPSplitHookV4TestBase {
             hooks: hook.oracleHook()
         });
 
-        // Pre-initialize the pool at a price within the project's economic bounds.
-        // Tick 50,000 falls within the cashout-to-issuance range for default test config.
-        int24 inBoundsTick = int24(50_000);
+        // Pre-initialize the pool at a price within the project's economic bounds. With the terminal token as
+        // token0 (default fixture ordering) the price is project tokens per terminal token: the issuance ceiling
+        // (900) sits at tick ~68,023 (aligned up to 68,200) and the cash-out floor (1 / 0.0005 = 2000) at tick
+        // ~76,013 (aligned down to 76,000), so tick 72,000 is inside the corridor.
+        int24 inBoundsTick = int24(72_000);
         uint160 inBoundsSqrtPrice = TickMath.getSqrtPriceAtTick(inBoundsTick);
         positionManager.initializePool(key, inBoundsSqrtPrice);
 
@@ -308,8 +310,10 @@ contract RegressionFixL6Test is LPSplitHookV4TestBase {
     /// @notice When the current Juicebox price maps to a tick near MAX_TICK, the fallback
     ///         calculation (currentTick + TICK_SPACING) would exceed MAX_TICK without clamping.
     function test_L6_FallbackTickNearMaxTick_ClampedToValidRange() public {
-        // Force the fallback branch: make cashOut and issuance rates nearly equal.
-        store.setSurplus(PROJECT_ID, 900e18);
+        // Force the fallback branch: make cashOut and issuance rates nearly equal. The issuance price is
+        // 1e36 / weight terminal-token wei per 1e18 project tokens; a cash-out value 1% below it keeps the corridor
+        // non-inverted but about 100 ticks wide, less than one spacing, so the aligned bounds collapse.
+        store.setSurplus(PROJECT_ID, (1e36 / uint256(type(uint88).max)) * 99 / 100);
 
         // Set extremely high weight to push currentTick toward MAX_TICK.
         // High issuance rate means: for 1 WAD terminal tokens, lots of project tokens.
@@ -338,9 +342,9 @@ contract RegressionFixL6Test is LPSplitHookV4TestBase {
     /// @notice When cashOut and issuance rates produce well-separated ticks (middle of range),
     ///         the normal (non-fallback) path produces valid, clamped tick bounds.
     function test_L6_NormalTicks_ValidBounds() public {
-        // With moderate surplus and default weight, cashout and issuance ticks are well-separated,
-        // so the normal path runs (not the fallback).
-        store.setSurplus(PROJECT_ID, 900e18);
+        // With moderate surplus and default weight, cashout and issuance ticks are well-separated (cash-out value
+        // 0.0005 vs issuance price 1/900, about 39 spacings), so the normal path runs (not the fallback).
+        store.setSurplus(PROJECT_ID, DEFAULT_SURPLUS_PER_TOKEN);
 
         (int24 tickLower, int24 tickUpper) =
             testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));

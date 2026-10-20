@@ -2,9 +2,11 @@
 pragma solidity 0.8.28;
 
 import {TwoPositionFixture} from "./regression/TwoPositionFixture.sol";
+import {DEFAULT_SURPLUS_PER_TOKEN} from "./TestBaseV4.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
 import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
+import {MockERC20} from "./mock/MockERC20.sol";
 
 /// @notice Regression gap tests: MEV/sandwich simulation on the `addLiquidity` recycle and extreme price scenarios.
 /// @dev These tests verify that the recycle (collect, burn both positions, re-mint both single-sided) is resistant to
@@ -273,12 +275,23 @@ contract TestRegressionGaps is TwoPositionFixture {
         uint256 highWeightProject = 3;
         _setupProject(highWeightProject);
 
-        // Set a very high weight: 1e30 project tokens per terminal token
+        // A fresh project token, so this project's pool is not the one setUp already initialized.
+        MockERC20 freshToken = new MockERC20("Fresh", "FRESH", 18);
+        jbTokens.setToken(highWeightProject, address(freshToken));
+        terminal.setProjectToken(highWeightProject, address(freshToken));
+
+        // Set a very high weight: 1e30 project tokens per terminal token (issuance price ~1.1e-12 terminal tokens
+        // after the 10% reserve), with a cash-out value an order of magnitude below it (1e-13).
         uint256 extremeWeight = 1e30;
         controller.setWeight(highWeightProject, extremeWeight);
         controller.setFirstWeight(highWeightProject, extremeWeight);
+        store.setSurplus(highWeightProject, 1e5);
 
-        _accumulateTokensForProject(highWeightProject, 1000e18);
+        freshToken.mint(address(controller), 1000e18);
+        vm.startPrank(address(controller));
+        freshToken.approve(address(hook), 1000e18);
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(_buildContext(highWeightProject, address(freshToken), 1000e18, 1));
+        vm.stopPrank();
 
         vm.prank(owner);
         hook.deployPool(highWeightProject);
@@ -302,6 +315,8 @@ contract TestRegressionGaps is TwoPositionFixture {
 
         _accumulateTokensForProject(lowWeightProject, 1000e18);
 
+        _raiseFloorAboveExistingSpot(lowWeightProject);
+
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
         hook.deployPool(lowWeightProject);
@@ -323,6 +338,8 @@ contract TestRegressionGaps is TwoPositionFixture {
         controller.setFirstWeight(lowWeightProject, 100);
 
         _accumulateTokensForProject(lowWeightProject, 1000e18);
+
+        _raiseFloorAboveExistingSpot(lowWeightProject);
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
@@ -385,9 +402,9 @@ contract TestRegressionGaps is TwoPositionFixture {
     // 11. Deploy with very high surplus (extreme cash out rate)
     // -----------------------------------------------------------------------
 
-    /// @notice A very high quoted surplus no longer affects `deployPool`: the deploy path carries no funding
-    /// cash-out (single-sided asks-only), so there is no cash-out-derived slippage floor for the terminal to
-    /// under-deliver against.
+    /// @notice A surplus so high that the cash-out value (1 terminal token per project token) exceeds the issuance
+    /// price (1/900) leaves no price inside the corridor: `deployPool` refuses with `InvertedCorridor`, never calls
+    /// `cashOutTokensOf`, and keeps the reserved tokens ledgered.
     function test_ExtremePrice_HighSurplus() public {
         uint256 highSurplusProject = 6;
         _setupProject(highSurplusProject);
@@ -398,9 +415,17 @@ contract TestRegressionGaps is TwoPositionFixture {
         _accumulateTokensForProject(highSurplusProject, 500e18);
 
         vm.prank(owner);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvertedCorridor.selector,
+                highSurplusProject,
+                address(terminalToken)
+            )
+        );
         hook.deployPool(highSurplusProject);
 
-        assertTrue(hook.hasDeployedPool(highSurplusProject), "high surplus project should still deploy");
+        assertFalse(hook.hasDeployedPool(highSurplusProject), "an inverted corridor does not deploy");
+        assertEq(hook.accumulatedProjectTokens(highSurplusProject), 500e18, "the reserved tokens stay ledgered");
         assertEq(terminal.cashOutCallCount(), 0, "deployPool must never call cashOutTokensOf");
     }
 
@@ -418,6 +443,8 @@ contract TestRegressionGaps is TwoPositionFixture {
         controller.setFirstWeight(minWeightProject, 1);
 
         _accumulateTokensForProject(minWeightProject, 500e18);
+
+        _raiseFloorAboveExistingSpot(minWeightProject);
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
@@ -439,6 +466,8 @@ contract TestRegressionGaps is TwoPositionFixture {
 
         _accumulateTokensForProject(maxReservedProject, 500e18);
 
+        _raiseFloorAboveExistingSpot(maxReservedProject);
+
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
         hook.deployPool(maxReservedProject);
@@ -458,6 +487,8 @@ contract TestRegressionGaps is TwoPositionFixture {
         controller.setReservedPercent(highReservedProject, 9900);
 
         _accumulateTokensForProject(highReservedProject, 500e18);
+
+        _raiseFloorAboveExistingSpot(highReservedProject);
 
         vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ExistingPoolPriceOutOfBounds.selector);
@@ -541,11 +572,10 @@ contract TestRegressionGaps is TwoPositionFixture {
     /// @notice With issuance rate close to cash-out rate, tick bounds are very
     ///         narrow. The recycle should handle narrow ranges correctly.
     function test_ExtremePrice_NarrowTickRange_Recycle() public {
-        // Set surplus very close to the issuance price (high surplus = narrow spread)
-        // The issuance rate at weight=1000e18 is 1000 tokens per terminal token.
-        // If surplus gives 999 tokens per terminal token, the spread is tiny.
-        // surplus of 0.999e18 means reclaimable = 0.999 * cashOutCount / 1e18
-        store.setSurplus(PROJECT_ID, 999e15); // 0.999e18
+        // Set the cash-out value just below the issuance price (a narrow spread). The issuance rate at weight=1000e18
+        // with a 10% reserve is 900 tokens per terminal token, a price of 1/900 ~= 0.001111e18 terminal tokens; a
+        // surplus of 0.0011e18 per token puts the cash-out value about 100 ticks (half a spacing) below it.
+        store.setSurplus(PROJECT_ID, 0.0011e18);
 
         _accumulateTokens(PROJECT_ID, 1e18);
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
@@ -557,6 +587,13 @@ contract TestRegressionGaps is TwoPositionFixture {
     // =========================================================================
     // Helper Functions
     // =========================================================================
+
+    /// @notice Put `projectId`'s cash-out floor (0.05 terminal tokens per project token) 100x above the spot of the
+    /// pool setUp initialized (one spacing inside PROJECT_ID's 0.0005 floor), so that pool's price sits outside its
+    /// corridor without inverting it.
+    function _raiseFloorAboveExistingSpot(uint256 projectId) internal {
+        store.setSurplus(projectId, 0.05e18);
+    }
 
     /// @notice Set up a new project with all the required mock wiring.
     function _setupProject(uint256 projectId) internal {
@@ -577,7 +614,7 @@ contract TestRegressionGaps is TwoPositionFixture {
                 token: address(terminalToken), decimals: 18, currency: uint32(uint160(address(terminalToken)))
             })
         );
-        store.setSurplus(projectId, 0.5e18);
+        store.setSurplus(projectId, DEFAULT_SURPLUS_PER_TOKEN);
         store.setBalance(address(terminal), projectId, address(terminalToken), 10e18);
     }
 

@@ -66,7 +66,7 @@ contract SingleSided_PermissionlessGateTest is LPSplitHookV4TestBase {
 
     /// @notice A complete stranger (no owner permission, no weight decay) can seed the pool permissionlessly.
     function test_Deploy_Permissionless_StrangerCanSeed() public {
-        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
+        _setWideTaxedCurve(PROJECT_ID);
         _accumulateTokens(PROJECT_ID, 1e18);
 
         // The old owner-gate would revert `JBPermissioned_Unauthorized` here (weight is undecayed). It's gone.
@@ -80,15 +80,13 @@ contract SingleSided_PermissionlessGateTest is LPSplitHookV4TestBase {
 
     /// @notice A stranger can extend an existing pool permissionlessly while a live corridor remains.
     function test_AddLiquidity_Permissionless_StrangerCanExtend() public {
-        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
+        _setWideTaxedCurve(PROJECT_ID);
         _accumulateTokens(PROJECT_ID, 1e18);
         vm.prank(STRANGER);
         hook.deployPool(PROJECT_ID);
         uint256 firstId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
-        // Fund the PositionManager for the burn+re-mint consolidation, then accumulate more and extend as a stranger.
-        projectToken.mint(address(positionManager), 100e18);
-        terminalToken.mint(address(positionManager), 100e18);
+        // Accumulate more and extend as a stranger; the burn returns exactly the ask's principal.
         _accumulateTokens(PROJECT_ID, 0.3e18);
 
         vm.prank(STRANGER);
@@ -97,6 +95,16 @@ contract SingleSided_PermissionlessGateTest is LPSplitHookV4TestBase {
         uint256 secondId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(secondId, 0, "a stranger must be able to extend the pool");
         assertNotEq(secondId, firstId, "the extend consolidates into a fresh position");
+
+        // The fresh ask (plus any unminted remainder in the ledger) holds the recovered principal and the new tokens.
+        (,,,, uint256 amount0, uint256 amount1,) = positionManager._positions(secondId);
+        bool projectIsToken0 = address(projectToken) < address(terminalToken);
+        (uint256 askProject, uint256 askTerminal) = projectIsToken0 ? (amount0, amount1) : (amount1, amount0);
+        uint256 ledger = hook.accumulatedProjectTokens(PROJECT_ID);
+        assertEq(askProject + ledger, 1.3e18, "the ask plus the ledger hold the principal and the new tokens");
+        assertEq(askTerminal, 0, "the ask holds no terminal");
+        assertEq(projectToken.balanceOf(address(positionManager)), askProject, "the PositionManager holds the ask");
+        assertEq(projectToken.balanceOf(address(hook)), ledger, "the hook holds exactly its ledger");
     }
 
     /// @notice `addLiquidity` reverts `NoDeployableLiquidityAtSpot` once the issuance ceiling has reached the spot and
@@ -107,7 +115,7 @@ contract SingleSided_PermissionlessGateTest is LPSplitHookV4TestBase {
     /// have filled into terminal tokens, which the recycle then deploys as a bid.
     function test_AddLiquidity_RevertsWhenSpotAtCeilingWithNothingToBidWith() public {
         // A non-inverted corridor: the cash-out floor sits genuinely below the issuance ceiling.
-        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 1e18, supply: 1_000_000e18, taxRate: 4000});
+        _setWideTaxedCurve(PROJECT_ID);
         (int24 lower, int24 upper) = _corridor();
         int24 midTick = ((lower + (upper - lower) / 2) / hook.TICK_SPACING()) * hook.TICK_SPACING();
         positionManager.initializePool(_key(), TickMath.getSqrtPriceAtTick(midTick));

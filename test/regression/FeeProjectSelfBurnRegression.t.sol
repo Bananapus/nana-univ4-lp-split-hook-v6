@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
+import {LPSplitHookV4TestBase, DEFAULT_SURPLUS_PER_TOKEN} from "../TestBaseV4.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
 import {MockJBController} from "../mock/MockJBContracts.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
@@ -199,7 +199,7 @@ contract FeeProjectSelfBurnRegression is LPSplitHookV4TestBase {
         controller = MockJBController(address(burningController));
         _setDirectoryController(PROJECT_ID, address(burningController));
         _setDirectoryController(FEE_PROJECT_ID, address(burningController));
-        store.setSurplus(FEE_PROJECT_ID, 0.5e18);
+        store.setSurplus(FEE_PROJECT_ID, DEFAULT_SURPLUS_PER_TOKEN);
 
         drainingTerminal = new DrainingAddToBalanceTerminal();
         drainingTerminal.setStore(address(store));
@@ -346,7 +346,7 @@ contract FeeProjectSelfBurnRegression is LPSplitHookV4TestBase {
                 token: address(terminalToken), decimals: 18, currency: uint32(uint160(address(terminalToken)))
             })
         );
-        store.setSurplus(PROJECT_B, 0.5e18);
+        store.setSurplus(PROJECT_B, DEFAULT_SURPLUS_PER_TOKEN);
         store.setBalance(address(terminal), PROJECT_B, address(terminalToken), 10e18);
 
         // Deploy pools for both projects.
@@ -446,7 +446,7 @@ contract FeeProjectSelfBurnRegression is LPSplitHookV4TestBase {
         drainingTerminal.setAccountingContext(
             PROJECT_B, address(feeProjectToken), uint32(uint160(address(feeProjectToken))), 18
         );
-        store.setSurplus(PROJECT_B, 0.5e18);
+        store.setSurplus(PROJECT_B, DEFAULT_SURPLUS_PER_TOKEN);
         store.setBalance(address(drainingTerminal), PROJECT_B, address(feeProjectToken), 10e18);
 
         _accumulateTokensFor(PROJECT_B, projectToken, 100e18);

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
+import {LPSplitHookV4TestBase, DEFAULT_SURPLUS_PER_TOKEN} from "../TestBaseV4.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
 import {ReentrancyGuard} from "solady/src/utils/ReentrancyGuard.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
@@ -253,7 +253,7 @@ contract RegressionRegression is LPSplitHookV4TestBase {
         burning.setBaseCurrency(FEE_PROJECT_ID, 1);
         burning.setProjectToken(PROJECT_ID, projectToken);
         burning.setProjectToken(FEE_PROJECT_ID, feeProjectToken);
-        store.setSurplus(FEE_PROJECT_ID, 0.5e18);
+        store.setSurplus(FEE_PROJECT_ID, DEFAULT_SURPLUS_PER_TOKEN);
 
         _setDirectoryController(PROJECT_ID, address(burning));
         _setDirectoryController(FEE_PROJECT_ID, address(burning));

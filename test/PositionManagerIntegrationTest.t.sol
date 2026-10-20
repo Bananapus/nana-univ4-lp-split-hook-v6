@@ -125,19 +125,20 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         assertTrue(feesProcessed, "Fee routing should call pay or addToBalance");
     }
 
-    // ─── Deploy: conservation — no tokens created from thin air ──────
+    // ─── Deploy: conservation — no tokens created or lost ──────
 
-    /// @notice The total token supply across hook + PM should be conserved during deploy.
-    ///         (Minus any tokens burned by the hook.)
+    /// @notice A deploy is fee-free and single-sided: every accumulated project token moves from the hook into the
+    ///         ask (or stays in the ledger), and no terminal token moves anywhere.
     function test_Deploy_TokenConservation() public {
         uint256 accumAmount = 100e18;
         _accumulateTokens(PROJECT_ID, accumAmount);
 
-        // Record total supply across hook + PM + terminal (terminal may receive cash-out tokens).
+        // Record total supply across hook + PM + terminal.
         uint256 totalProjectBefore = projectToken.balanceOf(address(hook))
             + projectToken.balanceOf(address(positionManager)) + projectToken.balanceOf(address(terminal));
         uint256 totalTermBefore = terminalToken.balanceOf(address(hook))
             + terminalToken.balanceOf(address(positionManager)) + terminalToken.balanceOf(address(terminal));
+        assertEq(totalProjectBefore, accumAmount, "precondition: the only project tokens are the accumulated ones");
 
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
@@ -147,11 +148,18 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         uint256 totalTermAfter = terminalToken.balanceOf(address(hook))
             + terminalToken.balanceOf(address(positionManager)) + terminalToken.balanceOf(address(terminal));
 
-        // Project tokens may decrease (burned by _handleLeftoverTokens), but never increase.
-        assertLe(totalProjectAfter, totalProjectBefore, "Project tokens should not be created");
-        // Terminal tokens are minted by mock terminal during cash-out, so they can increase.
-        // But they should never be lost (terminal tokens across all contracts >= before).
-        assertGe(totalTermAfter, totalTermBefore, "Terminal tokens should not be destroyed");
+        assertEq(totalProjectAfter, totalProjectBefore, "a fee-free deploy neither creates nor loses project tokens");
+        assertEq(totalTermAfter, totalTermBefore, "a single-sided deploy moves no terminal tokens");
+
+        // Every accumulated project token is in the ask or still ledgered on the hook, and the hook holds exactly its
+        // ledger.
+        (uint256 askProject, uint256 askTerminal) = _lockedSides(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)));
+        uint256 ledger = hook.accumulatedProjectTokens(PROJECT_ID);
+        assertEq(askProject + ledger, accumAmount, "the ask plus the ledger hold every accumulated project token");
+        assertEq(askTerminal, 0, "the ask holds no terminal");
+        assertEq(projectToken.balanceOf(address(positionManager)), askProject, "the PositionManager holds the ask");
+        assertEq(projectToken.balanceOf(address(hook)), ledger, "the hook holds exactly its ledger");
+        assertEq(hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)), 0, "no terminal ledgered");
     }
 
     // ─── Recycle with fees: full cycle collect → route → burn → mint ─
@@ -227,7 +235,7 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
     /// @notice Pre-initialize the pool mid-corridor so the recycle has room for both an ask and a bid around spot
     /// (a hook-seeded pool sits one spacing inside the cash-out floor, leaving no bid range).
     function _preInitAtMid() internal {
-        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
+        _setWideTaxedCurve(PROJECT_ID);
         (JBRuleset memory ruleset,) = controller.currentRulesetOf(PROJECT_ID);
         (int24 corridorLower, int24 corridorUpper) = JBUniswapV4LPSplitHookMath.calculateTickBounds({
             directory: IJBDirectory(address(directory)),

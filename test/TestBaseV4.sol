@@ -33,6 +33,10 @@ import {
     MockJBPermissions
 } from "./mock/MockJBContracts.sol";
 
+// Terminal tokens reclaimable per 1e18 project tokens in the shared fixtures. Below the issuance price (1e18 /
+// 900 after the 10% reserve), so the corridor is not inverted: about 7,980 ticks (39 spacings) from floor to ceiling.
+uint256 constant DEFAULT_SURPLUS_PER_TOKEN = 0.0005e18;
+
 /// @notice Minimal mock so the hook can call PERMIT2.approve() in unit tests.
 contract MockPermit2 {
     mapping(address owner => mapping(address token => mapping(address spender => uint256))) public allowances;
@@ -181,7 +185,7 @@ contract LPSplitHookV4TestBase is Test {
         jbTokens.setToken(FEE_PROJECT_ID, address(feeProjectToken));
 
         // Set surplus for cash out rate
-        store.setSurplus(PROJECT_ID, 0.5e18);
+        store.setSurplus(PROJECT_ID, DEFAULT_SURPLUS_PER_TOKEN);
 
         // Set a default terminal balance (needed for permissionless auto-select)
         store.setBalance(address(terminal), PROJECT_ID, address(terminalToken), 10e18);
@@ -234,6 +238,12 @@ contract LPSplitHookV4TestBase is Test {
     /// @param newOracle The oracle to install as the hook's `oracleHook`.
     function _overrideOracleHook(address newOracle) internal {
         vm.store(address(hook), bytes32(SLOT_ORACLE_HOOK), bytes32(uint256(uint160(newOracle))));
+    }
+
+    /// @notice Give `projectId` a convex (40% cash-out tax) curve whose cash-out value per token sits far below the
+    /// issuance price: a wide, non-inverted corridor.
+    function _setWideTaxedCurve(uint256 projectId) internal {
+        store.setTaxedCashOutCurve({projectId: projectId, surplus: 1e18, supply: 1_000_000e18, taxRate: 4000});
     }
 
     // ─── Directory Helpers (write to fallback-based mock) ───────────────
