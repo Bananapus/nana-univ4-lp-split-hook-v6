@@ -202,21 +202,11 @@ contract Integration_SingleSidedRevnet is ForkDeployHelper {
         // ── 2. Pre-initialize the pool mid-corridor (the revnet norm: the pool exists before the hook allocates).
         // Native ETH always sorts as currency0, so the project token is currency1: its asks rest BELOW the spot down
         // to `ascLower` (the issuance ceiling) and the hook's bids rest ABOVE the spot up to `ascUpper` (the floor).
-        (JBRuleset memory ruleset,) = jbController.currentRulesetOf(pid);
-        (int24 ascLower, int24 ascUpper) = JBUniswapV4LPSplitHookMath.calculateTickBounds({
-            directory: jbDirectory,
-            suckerRegistry: IJBSuckerRegistry(address(0)),
-            projectId: pid,
-            terminalToken: JBConstants.NATIVE_TOKEN,
-            projectToken: address(pToken),
-            controller: address(jbController),
-            ruleset: ruleset
-        });
+        (int24 ascLower, int24 ascUpper) = _corridorOf(pid, address(pToken));
         int24 tickSpacing = hook.TICK_SPACING();
         assertTrue(ascUpper - ascLower > 4 * tickSpacing, "corridor too narrow for this test's tick offsets");
-        int24 initTick = JBLPSplitHookHelpers.alignTickToSpacing({
-            tick: ascLower + (ascUpper - ascLower) / 2, spacing: tickSpacing
-        });
+        int24 initTick =
+            JBLPSplitHookHelpers.alignTickToSpacing({tick: ascLower + (ascUpper - ascLower) / 2, spacing: tickSpacing});
 
         PoolKey memory key = PoolKey({
             currency0: JBLPSplitHookHelpers.toCurrency(JBConstants.NATIVE_TOKEN),
@@ -278,6 +268,8 @@ contract Integration_SingleSidedRevnet is ForkDeployHelper {
         assertEq(bid1, 0, "the bid is single-sided terminal tokens");
         assertApproxEqRel(bid0, filledAsk0, 0.01e18, "the bid carries the ask's filled terminal (+ fee remainder)");
         assertTrue(ask1 > 100_000e18, "the ask carries the unfilled seed plus the new distribution");
+        // Minting reserved tokens grows supply, which moves the cash-out floor, so compare against the live corridor.
+        (ascLower, ascUpper) = _corridorOf(pid, address(pToken));
         _assertAskBelowSpot(askId, key, ascLower, ascUpper);
         _assertBidAboveSpot(bidId, key, ascLower, ascUpper);
 
@@ -296,8 +288,10 @@ contract Integration_SingleSidedRevnet is ForkDeployHelper {
         // ── 7. The next distribution recycles again: the project tokens the bid bought go back into the ask.
         _accumulateTokens(pid, address(pToken), 100_000e18);
         _mockOracleTwapEqualsSpot(hook.oracleHook(), V4_POOL_MANAGER, key);
+        uint256 gasBefore = gasleft();
         vm.prank(randomRecycler);
         hook.addLiquidity(pid, JBConstants.NATIVE_TOKEN);
+        emit log_named_uint("  full two-position recycle gas", gasBefore - gasleft());
 
         uint256 askId2 = hook.askTokenIdOf(pid, JBConstants.NATIVE_TOKEN);
         uint256 bidId2 = hook.bidTokenIdOf(pid, JBConstants.NATIVE_TOKEN);
@@ -309,6 +303,7 @@ contract Integration_SingleSidedRevnet is ForkDeployHelper {
         assertApproxEqRel(
             ask1After, ask1 + 100_000e18 + filledBid1, 0.01e18, "the ask absorbs the bid's fills and the distribution"
         );
+        (ascLower, ascUpper) = _corridorOf(pid, address(pToken));
         _assertAskBelowSpot(askId2, key, ascLower, ascUpper);
         _assertBidAboveSpot(bidId2, key, ascLower, ascUpper);
 
@@ -320,6 +315,20 @@ contract Integration_SingleSidedRevnet is ForkDeployHelper {
             balAfterDeploy,
             "recycling must never reduce the project's terminal balance"
         );
+    }
+
+    /// @notice The project's live corridor, computed with the same linked math the hook uses.
+    function _corridorOf(uint256 pid, address pToken) internal view returns (int24 ascLower, int24 ascUpper) {
+        (JBRuleset memory ruleset,) = jbController.currentRulesetOf(pid);
+        return JBUniswapV4LPSplitHookMath.calculateTickBounds({
+            directory: jbDirectory,
+            suckerRegistry: IJBSuckerRegistry(address(0)),
+            projectId: pid,
+            terminalToken: JBConstants.NATIVE_TOKEN,
+            projectToken: pToken,
+            controller: address(jbController),
+            ruleset: ruleset
+        });
     }
 
     /// @notice The live tick range of a hook position, read from the PositionManager.

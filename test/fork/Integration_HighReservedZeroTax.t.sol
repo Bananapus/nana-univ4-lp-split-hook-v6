@@ -92,10 +92,10 @@ contract Integration_HighReservedZeroTax is ForkDeployHelper {
             bytes4 selector = bytes4(reason);
             assertEq(
                 selector,
-                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ZeroLiquidity.selector,
-                "Only ZeroLiquidity revert is acceptable"
+                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot.selector,
+                "Only NoDeployableLiquidityAtSpot revert is acceptable"
             );
-            emit log("  Reverted with ZeroLiquidity (expected for one-sided LP with zero cash-out)");
+            emit log("  Reverted with NoDeployableLiquidityAtSpot (expected for one-sided LP with zero cash-out)");
         }
     }
 

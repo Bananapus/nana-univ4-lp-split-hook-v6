@@ -1,75 +1,93 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
+import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
 
-/// @notice tokenIdOf becomes stale when rebalance yields zero liquidity.
-/// @dev rebalanceLiquidity now reverts with InsufficientLiquidity when
-///      the new position would have zero liquidity, rather than silently zeroing tokenIdOf.
-///      This prevents the bricking scenario where tokenIdOf=0 + projectDeployed=true creates
-///      a permanent circular dependency.
+/// @notice The stored position IDs become stale when a recycle burns the live positions but mints nothing.
+/// @dev A recycle that cannot mint either side now reverts with NoDeployableLiquidityAtSpot, rolling back the burns,
+///      rather than leaving askTokenIdOf/bidTokenIdOf zeroed (or pointing at burned positions) while the project is
+///      marked deployed, which would brick it. A recycle that does mint replaces BOTH stored IDs with fresh ones and
+///      never keeps a burned ID.
 contract StaleTokenIdOfTest is LPSplitHookV4TestBase {
+    using PoolIdLibrary for PoolKey;
+
     uint256 poolTokenId;
 
     function setUp() public override {
         super.setUp();
 
-        // Deploy a pool so we have a position to rebalance
+        // Deploy a pool so we have a position to recycle.
         _accumulateAndDeploy(PROJECT_ID, 100e18);
         poolTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(poolTokenId, 0, "Initial tokenId should be nonzero");
 
-        // Move the economic corridor (drop issuance ~10%) so every rebalance below clears its corridor-drift guard.
-        controller.setWeight(PROJECT_ID, 900e18);
+        // A new reserved distribution clears addLiquidity's accumulation threshold.
+        _accumulateTokens(PROJECT_ID, 10e18);
     }
 
-    /// @notice When the project holds nothing to deploy on either leg, rebalance reverts with
-    ///         NoDeployableLiquidityAtSpot. This prevents the state inconsistency that would brick the project.
-    function test_rebalance_zeroLiquidity_reverts() public {
-        // Drain all tokens from the mock PositionManager so burn's TAKE_PAIR sends 0
-        uint256 pmProjectBal = projectToken.balanceOf(address(positionManager));
-        uint256 pmTerminalBal = terminalToken.balanceOf(address(positionManager));
-        vm.startPrank(address(positionManager));
-        // forge-lint: disable-next-line(erc20-unchecked-transfer)
-        if (pmProjectBal > 0) projectToken.transfer(address(0xdead), pmProjectBal);
-        // forge-lint: disable-next-line(erc20-unchecked-transfer)
-        if (pmTerminalBal > 0) terminalToken.transfer(address(0xdead), pmTerminalBal);
-        vm.stopPrank();
+    /// @notice Write the pool's spot tick (the base oracle tracks spot, so the TWAP guard keeps passing).
+    function _setSpotTick(PoolKey memory key, int24 tick) internal {
+        bytes32 stateSlot = keccak256(abi.encodePacked(PoolId.unwrap(key.toId()), bytes32(uint256(6))));
+        // forge-lint: disable-next-line(unsafe-typecast)
+        bytes32 packed = bytes32(
+            (uint256(key.fee) << 208) | (uint256(uint24(tick)) << 160) | uint256(TickMath.getSqrtPriceAtTick(tick))
+        );
+        poolManager.writeSlot(stateSlot, packed);
+    }
 
-        // Also drain any tokens the hook might have
-        uint256 hookProjectBal = projectToken.balanceOf(address(hook));
-        uint256 hookTerminalBal = terminalToken.balanceOf(address(hook));
-        vm.startPrank(address(hook));
-        // forge-lint: disable-next-line(erc20-unchecked-transfer)
-        if (hookProjectBal > 0) projectToken.transfer(address(0xdead), hookProjectBal);
-        // forge-lint: disable-next-line(erc20-unchecked-transfer)
-        if (hookTerminalBal > 0) terminalToken.transfer(address(0xdead), hookTerminalBal);
-        vm.stopPrank();
+    /// @notice When the project holds only project tokens and the spot is past the issuance ceiling, neither side can
+    ///         be minted, so the recycle reverts with NoDeployableLiquidityAtSpot and the stored IDs (and the live
+    ///         position) survive. This prevents the state inconsistency that would brick the project.
+    function test_recycle_noDeployableSide_reverts_keepsTokenIds() public {
+        // The seed spot sits at the ask range's floor-side end; push it well past the opposite (ceiling) end.
+        (PoolKey memory key, int24 askLower, int24 askUpper,,,,) = positionManager._positions(poolTokenId);
+        (, int24 seedTick,,) = StateLibrary.getSlot0(IPoolManager(address(poolManager)), key.toId());
+        _setSpotTick(key, seedTick >= askUpper ? askLower - 10 * key.tickSpacing : askUpper + 10 * key.tickSpacing);
 
-        // Rebalance now reverts instead of zeroing tokenIdOf
-        vm.prank(owner);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot.selector);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
-        // tokenIdOf should remain unchanged (revert rolled back state)
-        uint256 tokenIdAfter = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
-        assertEq(tokenIdAfter, poolTokenId, "tokenIdOf should remain unchanged after revert");
+        // The revert rolled back the burn: both stored IDs and the live position are unchanged.
+        assertEq(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), poolTokenId, "ask ID unchanged after revert");
+        assertEq(hook.bidTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "bid ID unchanged after revert");
+        assertGt(positionManager.getPositionLiquidity(poolTokenId), 0, "live position not burned");
     }
 
-    /// @notice Normal rebalance (with nonzero liquidity) still updates tokenIdOf correctly.
-    function test_rebalance_nonzeroLiquidity_updates_tokenIdOf() public {
-        // Ensure PositionManager has tokens for the rebalance
-        projectToken.mint(address(positionManager), 50e18);
-        terminalToken.mint(address(positionManager), 50e18);
+    /// @notice A recycle that mints replaces both stored IDs with fresh positions; burned IDs are never kept.
+    function test_recycle_replacesBothTokenIds_neverKeepsBurnedIds() public {
+        // Buyers fill part of the ask: the spot moves into the ask range and terminal tokens become its principal.
+        (PoolKey memory key, int24 askLower, int24 askUpper,,,,) = positionManager._positions(poolTokenId);
+        _setSpotTick(key, (askLower + askUpper) / 2 / key.tickSpacing * key.tickSpacing);
+        terminalToken.mint(address(positionManager), 5e18);
+        positionManager.injectPositionBalance(poolTokenId, address(terminalToken), 5e18);
 
-        uint256 originalTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
-        vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
+        uint256 askId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 bidId = hook.bidTokenIdOf(PROJECT_ID, address(terminalToken));
+        assertTrue(askId != 0 && bidId != 0, "both sides minted");
+        assertTrue(askId != poolTokenId && bidId != poolTokenId, "burned ID not kept");
+        assertEq(positionManager.getPositionLiquidity(poolTokenId), 0, "original position burned");
 
-        uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
-        assertNotEq(newTokenId, 0, "tokenIdOf should be nonzero after normal rebalance");
-        assertNotEq(newTokenId, originalTokenId, "tokenIdOf should change after rebalance");
+        // A second recycle retires both and stores two new IDs.
+        _accumulateTokens(PROJECT_ID, 10e18);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
+
+        uint256 newAskId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 newBidId = hook.bidTokenIdOf(PROJECT_ID, address(terminalToken));
+        assertTrue(newAskId != 0 && newBidId != 0, "both sides re-minted");
+        assertTrue(newAskId != askId && newAskId != bidId, "ask ID is fresh");
+        assertTrue(newBidId != askId && newBidId != bidId, "bid ID is fresh");
+        assertEq(positionManager.getPositionLiquidity(askId), 0, "previous ask burned");
+        assertEq(positionManager.getPositionLiquidity(bidId), 0, "previous bid burned");
+        assertGt(positionManager.getPositionLiquidity(newAskId), 0, "new ask live");
+        assertGt(positionManager.getPositionLiquidity(newBidId), 0, "new bid live");
     }
 }

@@ -3,12 +3,11 @@ pragma solidity 0.8.28;
 
 import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
 import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
-import {JBPermissionIds} from "@bananapus/permission-ids-v6/src/JBPermissionIds.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {MockERC20} from "./mock/MockERC20.sol";
 
-/// @notice Regression tests for rebalance authorization, fee routing, and per-token deployment flags.
+/// @notice Regression tests for recycle-time fee routing and per-token deployment flags.
 contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
     uint256 poolTokenId;
     bool terminalTokenIsToken0;
@@ -16,11 +15,11 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
     function setUp() public override {
         super.setUp();
 
-        // Deploy a pool so we have a position to test rebalance
+        // Deploy a pool so we have a position to recycle
         _accumulateAndDeploy(PROJECT_ID, 100e18);
         poolTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
-        // Ensure PositionManager has tokens for rebalance
+        // Ensure PositionManager has tokens for the recycle
         projectToken.mint(address(positionManager), 50e18);
         terminalToken.mint(address(positionManager), 50e18);
 
@@ -29,108 +28,13 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Permissionless Rebalance Can Permanently Brick Project LP
-    // ═══════════════════════════════════════════════════════════════════════
-
-    /// @notice rebalanceLiquidity reverts when called by an unauthorized account.
-    function test_H2_rebalance_unauthorized_reverts() public {
-        address attacker = makeAddr("attacker");
-
-        vm.prank(attacker);
-        vm.expectRevert();
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
-
-        // Verify the position was not disturbed
-        uint256 tokenIdAfter = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
-        assertEq(tokenIdAfter, poolTokenId, "tokenIdOf should remain unchanged after unauthorized attempt");
-    }
-
-    /// @notice rebalanceLiquidity succeeds when called by the project owner.
-    function test_H2_rebalance_owner_succeeds() public {
-        uint256 originalTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
-        assertNotEq(originalTokenId, 0, "should have an active position");
-
-        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
-        controller.setWeight(PROJECT_ID, 900e18);
-
-        vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
-
-        uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
-        assertNotEq(newTokenId, 0, "new tokenId should be nonzero");
-        assertNotEq(newTokenId, originalTokenId, "tokenId should change after rebalance");
-    }
-
-    /// @notice rebalanceLiquidity succeeds when called by an authorized operator.
-    function test_H2_rebalance_authorizedOperator_succeeds() public {
-        address operator = makeAddr("operator");
-
-        // Grant SET_BUYBACK_POOL permission to operator
-        permissions.setPermission(operator, owner, PROJECT_ID, JBPermissionIds.SET_BUYBACK_POOL, true);
-
-        uint256 originalTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
-
-        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
-        controller.setWeight(PROJECT_ID, 900e18);
-
-        vm.prank(operator);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
-
-        uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
-        assertNotEq(newTokenId, 0, "new tokenId should be nonzero");
-        assertNotEq(newTokenId, originalTokenId, "tokenId should change after authorized rebalance");
-    }
-
-    /// @notice rebalanceLiquidity reverts with NoDeployableLiquidityAtSpot when the project holds neither project
-    ///         tokens to offer as asks nor terminal tokens to offer as bids (prevents bricking via tokenIdOf=0).
-    function test_H2_rebalance_zeroLiquidity_reverts() public {
-        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard and
-        // reaches the zero-liquidity check.
-        controller.setWeight(PROJECT_ID, 900e18);
-
-        // Drain all tokens from PositionManager and hook so burn returns 0
-        uint256 pmProjectBal = projectToken.balanceOf(address(positionManager));
-        uint256 pmTerminalBal = terminalToken.balanceOf(address(positionManager));
-        // Test helper: draining mock balances; return value not relevant.
-        vm.startPrank(address(positionManager));
-        // forge-lint: disable-next-line(erc20-unchecked-transfer)
-        if (pmProjectBal > 0) projectToken.transfer(address(0xdead), pmProjectBal);
-        // forge-lint: disable-next-line(erc20-unchecked-transfer)
-        if (pmTerminalBal > 0) terminalToken.transfer(address(0xdead), pmTerminalBal);
-        vm.stopPrank();
-
-        uint256 hookProjectBal = projectToken.balanceOf(address(hook));
-        uint256 hookTerminalBal = terminalToken.balanceOf(address(hook));
-        // Test helper: draining mock balances; return value not relevant.
-        vm.startPrank(address(hook));
-        // forge-lint: disable-next-line(erc20-unchecked-transfer)
-        if (hookProjectBal > 0) projectToken.transfer(address(0xdead), hookProjectBal);
-        // forge-lint: disable-next-line(erc20-unchecked-transfer)
-        if (hookTerminalBal > 0) terminalToken.transfer(address(0xdead), hookTerminalBal);
-        vm.stopPrank();
-
-        // Should revert instead of zeroing tokenIdOf
-        vm.prank(owner);
-        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot.selector);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
-
-        // tokenIdOf should remain unchanged (revert rolled back state)
-        assertEq(
-            hook.askTokenIdOf(PROJECT_ID, address(terminalToken)),
-            poolTokenId,
-            "tokenIdOf should remain unchanged after revert"
-        );
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════
     // Placeholder _getAmountForCurrency() Disables Fee Routing
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice Fees collected during rebalanceLiquidity are properly
-    ///         routed via balance-delta tracking (same pattern as collectAndRouteLPFees).
-    ///         Note: The balance delta includes both principal and fees from the burned position.
-    ///         The fee-splitting is applied to the full terminal-token delta.
-    function test_M1_rebalance_routesFeesDuringBurn() public {
+    /// @notice Fees collected during an `addLiquidity` recycle are routed via balance-delta tracking (same pattern
+    ///         as collectAndRouteLPFees). The fee-project cut applies to the collected trading fees only, never to
+    ///         the principal recovered by the burn.
+    function test_M1_addLiquidity_routesFeesDuringBurn() public {
         // Set up collectable fees on the terminal token side
         uint256 feeAmount = 10e18;
         if (terminalTokenIsToken0) {
@@ -146,30 +50,19 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         );
 
         uint256 payCountBefore = terminal.payCallCount();
-        uint256 addToBalanceCountBefore = terminal.addToBalanceCallCount();
 
-        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
-        controller.setWeight(PROJECT_ID, 900e18);
+        // Accumulate enough for a recycle, then trigger it permissionlessly.
+        _accumulateTokens(PROJECT_ID, 1e18);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
-        vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
-
-        // Verify fees were routed: pay (for fee project) and/or addToBalance (for project)
-        bool feesRouted =
-            (terminal.payCallCount() > payCountBefore) || (terminal.addToBalanceCallCount() > addToBalanceCountBefore);
-        assertTrue(feesRouted, "Fees collected during rebalance burn should be routed");
-
-        // Verify routing targets the fee project
-        if (terminal.payCallCount() > payCountBefore) {
-            assertEq(terminal.lastPayProjectId(), FEE_PROJECT_ID, "Fee payment should target FEE_PROJECT_ID");
-            // The pay amount is FEE_PERCENT of the total terminal token balance delta
-            // (principal + fees), not just the fee portion.
-            assertGt(terminal.lastPayAmount(), 0, "Fee payment amount should be nonzero");
-        }
+        // The fee project is paid exactly its cut of the collected terminal-token fees (principal is never cut).
+        assertEq(terminal.payCallCount(), payCountBefore + 1, "Fees collected during the recycle should be routed");
+        assertEq(terminal.lastPayProjectId(), FEE_PROJECT_ID, "Fee payment should target FEE_PROJECT_ID");
+        assertEq(terminal.lastPayAmount(), feeAmount * FEE_PERCENT / 10_000, "Fee cut applies to fees only");
     }
 
-    /// @notice Verify that claimable fee tokens are generated during rebalance.
-    function test_M1_rebalance_generatesClaimableFeeTokens() public {
+    /// @notice Verify that claimable fee tokens are generated during an `addLiquidity` recycle.
+    function test_M1_addLiquidity_generatesClaimableFeeTokens() public {
         // Set up collectable fees on the terminal token side
         uint256 feeAmount = 100e18;
         if (terminalTokenIsToken0) {
@@ -186,14 +79,11 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
 
         uint256 claimableBefore = hook.claimableFeeTokens(PROJECT_ID);
 
-        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
-        controller.setWeight(PROJECT_ID, 900e18);
-
-        vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
+        _accumulateTokens(PROJECT_ID, 1e18);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
         uint256 claimableAfter = hook.claimableFeeTokens(PROJECT_ID);
-        assertGt(claimableAfter, claimableBefore, "claimableFeeTokens should increase after rebalance with fees");
+        assertGt(claimableAfter, claimableBefore, "claimableFeeTokens should increase after a recycle with fees");
     }
 
     // ═══════════════════════════════════════════════════════════════════════

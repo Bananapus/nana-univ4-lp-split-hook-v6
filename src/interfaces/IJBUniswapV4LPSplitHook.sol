@@ -25,11 +25,7 @@ interface IJBUniswapV4LPSplitHook {
     /// @param bidTokenId The bid position's token ID (zero if no bid range or terminal tokens were available).
     /// @param caller The address that triggered the recycle.
     event LiquidityAdded(
-        uint256 indexed projectId,
-        address indexed terminalToken,
-        uint256 askTokenId,
-        uint256 bidTokenId,
-        address caller
+        uint256 indexed projectId, address indexed terminalToken, uint256 askTokenId, uint256 bidTokenId, address caller
     );
 
     /// @notice Emitted when a best-effort inline automation attempt (pool deployment or liquidity addition) fails
@@ -57,7 +53,6 @@ interface IJBUniswapV4LPSplitHook {
         uint256 feeTokensMinted,
         address caller
     );
-
 
     /// @notice Emitted when a project transitions from Stage 1 to Stage 2 by deploying a pool.
     /// @param projectId The Juicebox project ID.
@@ -96,9 +91,9 @@ interface IJBUniswapV4LPSplitHook {
     /// @return key The Uniswap V4 PoolKey.
     function poolKeyOf(uint256 projectId, address terminalToken) external view returns (PoolKey memory key);
 
-    /// @notice Recycle the project's positions with its post-deployment accumulated reserved tokens: collect fees, burn
-    /// the ask and bid, and re-mint both single-sided around the live spot. Permissionless, gated by a minimum
-    /// accumulation and the oracle-TWAP deviation guard.
+    /// @notice Recycle the project's positions, folding in any accumulated reserved tokens: collect fees, burn the ask
+    /// and bid, and re-mint both single-sided around the live spot. Permissionless at any time, gated by the
+    /// oracle-TWAP deviation guard.
     /// @param projectId The Juicebox project ID.
     /// @param terminalToken The terminal token paired with the project token in the deployed pool.
     function addLiquidity(uint256 projectId, address terminalToken) external;

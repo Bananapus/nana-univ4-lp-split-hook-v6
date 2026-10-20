@@ -1,5 +1,13 @@
 # V5 to V6 Changelog
 
+## 1.5.0 — Two single-sided positions, recycled on every distribution
+
+- Each project holds at most **two single-sided positions**: an ask of project tokens from just past the spot to the issuance ceiling (never below the cash-out floor), tracked in `askTokenIdOf`, and a bid of terminal tokens from just past the spot to the cash-out floor (never above the issuance ceiling), tracked in `bidTokenIdOf`. Both sit on opposite sides of a gap of at most one spacing around the spot, so every mint is single-sided.
+- Every recycle (inline on each reserved-token distribution, or the permissionless `deployPool`/`addLiquidity`) routes both positions' fees, burns both, and re-mints the ask from every project token held and the bid from every terminal token held. Whatever trading converted is recycled to the side it belongs on.
+- Removed `rebalanceLiquidity` and the adaptive two-sided solver, with the corridor-drift guard, `activeTickLowerOf`/`activeTickUpperOf`, `rangedCorridorLowerOf`/`rangedCorridorUpperOf`, `PermissionlessRebalanced`, `DriftBelowThreshold`, `AccumulationBelowThreshold`, `ZeroLiquidity`, `InsufficientLiquidity`, and `TerminalNotFound`. `addLiquidity` recycles at any time, with or without new tokens, under the TWAP guard. `tokenIdOf` is replaced by `askTokenIdOf` and `bidTokenIdOf`; `LiquidityAdded` carries both ids.
+- Reserved-token intake is durable: `processSplitWith` accounts the allocation (ERC-20 or credits) first, then makes a best-effort, gas-bounded deploy or recycle attempt whose failure is reported through `LiquidityAutomationFailed` and retryable through `deployPool`/`addLiquidity`. The attempt starts only with at least 1,000,000 gas left (a full recycle measured ~955k on a mainnet fork).
+- Ships at fresh library, hook, and deployer addresses. Existing 1.4.0 clones are unchanged; a project adopts this version by routing its reserved split to a new clone.
+
 ## 1.4.0 — Single-sided, cash-out-free, permissionless redesign
 
 - The hook seeds a project's Uniswap V4 buyback pool with **single-sided liquidity**: at seed it is asks-only, offering the accumulated project tokens from the live spot up to the issuance ceiling. It maintains **exactly one adaptive position per `(projectId, terminalToken)`** via consolidate-and-re-mint — route accrued LP fees, burn the prior V4 position, and fold recovered principal, the accumulation ledger, and swept credits into one fresh position.

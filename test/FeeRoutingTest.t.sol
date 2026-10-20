@@ -200,8 +200,8 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
 
     /// @notice collectAndRouteLPFees should revert when tokenIdOf is cleared.
     function test_CollectFees_RevertsIfNoTokenId() public {
-        // tokenIdOf is: mapping(uint256 => mapping(address => uint256)) at `SLOT_ASK_TOKEN_ID_OF` (see TestBaseV4 for the
-        // full hook storage layout).
+        // tokenIdOf is: mapping(uint256 => mapping(address => uint256)) at `SLOT_ASK_TOKEN_ID_OF` (see TestBaseV4 for
+        // the full hook storage layout).
         bytes32 outerSlot = keccak256(abi.encode(PROJECT_ID, SLOT_ASK_TOKEN_ID_OF));
         bytes32 slot = keccak256(abi.encode(address(terminalToken), outerSlot));
         vm.store(address(hook), slot, bytes32(0));

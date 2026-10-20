@@ -10,11 +10,13 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
+import {JBLPSplitHookHelpers} from "../src/libraries/JBLPSplitHookHelpers.sol";
 
-/// @notice Task 4: `addLiquidity` mints ANOTHER single-sided ask position from the project's post-deployment
-/// accumulated reserved tokens — no funding cash-out — through the same `_addSingleSidedLiquidity` executor
-/// `deployPool` uses. Covers the primary path: pool deployed, spot lifted by trading, more tokens accumulated, then
-/// `addLiquidity` mints asks above the (new) live spot up to the corridor ceiling.
+/// @notice `addLiquidity` recycles the project's ask through the same `_recycle` executor `deployPool` uses: it burns
+/// the live ask and re-mints a single-sided ask from the recovered principal plus the post-deployment accumulation —
+/// no
+/// funding cash-out. Covers the primary path: pool deployed, spot moved by trading, more tokens accumulated, then
+/// `addLiquidity` mints the ask on the project-only side of the (new) live spot, bounded by the corridor.
 contract SingleSided_AddLiquidityTest is LPSplitHookV4TestBase {
     using PoolIdLibrary for PoolKey;
 
@@ -96,7 +98,7 @@ contract SingleSided_AddLiquidityTest is LPSplitHookV4TestBase {
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
         // (a) A (second) position is tracked, minted above the lifted spot; the first is BURNED, not orphaned — the
-        // consolidation invariant means the hook tracks exactly one live position.
+        // recycle burns the old ask, and with no terminal held there is no bid.
         uint256 secondTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(secondTokenId, 0, "tokenIdOf should be nonzero after addLiquidity");
         assertNotEq(secondTokenId, firstTokenId, "addLiquidity should mint a fresh ask, not overwrite in place");
@@ -116,20 +118,10 @@ contract SingleSided_AddLiquidityTest is LPSplitHookV4TestBase {
             assertEq(amount0Locked, 0.8e18, "project side should fold recovered (0.5e18) + new accumulation (0.3e18)");
         }
 
-        // (c) The new ask's range sits on the "above current spot, up to the ceiling" side of the corridor. In RAW
-        // tick terms this is `[>=liftedTick, corridorUpper]` when the project token is currency0, or the mirror
-        // `[corridorLower, <=liftedTick]` when the project token is currency1 (raw ticks price token1 in terms of
-        // token0, so a project-as-token1 "ask" sits at or below the current tick) — `_addSingleSidedLiquidity`
-        // branches on token ordering for exactly this reason.
-        int24 newLower = hook.activeTickLowerOf(PROJECT_ID, address(terminalToken));
-        int24 newUpper = hook.activeTickUpperOf(PROJECT_ID, address(terminalToken));
-        if (terminalIsToken0) {
-            assertEq(newLower, corridorLower, "the new ask should start at the corridor floor");
-            assertLe(newUpper, liftedTick, "the new ask must not extend past the lifted spot");
-        } else {
-            assertGe(newLower, liftedTick, "the new ask must not dip below the lifted spot");
-            assertEq(newUpper, corridorUpper, "the new ask should reach the corridor ceiling");
-        }
+        // (c) The new ask's range sits exactly on the project-only side of the moved spot, bounded by the corridor.
+        // In RAW tick terms that is `[spotCeil, corridorUpper]` when the project token is currency0, or the
+        // mirror `[corridorLower, spotFloor]` when it is currency1 (raw ticks price token1 in terms of token0).
+        _assertAskOnly(liftedTick, corridorLower, corridorUpper);
 
         // (d) The hook never cashed out to fund the add.
         assertEq(terminal.cashOutCallCount(), cashOutCallsBefore, "addLiquidity must never call cashOutTokensOf");
@@ -141,6 +133,22 @@ contract SingleSided_AddLiquidityTest is LPSplitHookV4TestBase {
             0,
             "no leftover expected at 100% PositionManager usage; ledger should be fully consumed"
         );
+    }
+
+    /// @notice Assert the project holds no bid and its ask sits exactly on the recycle geometry for `spotTick`.
+    function _assertAskOnly(int24 spotTick, int24 corridorLower, int24 corridorUpper) internal view {
+        assertEq(hook.bidTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "no bid without terminal tokens");
+        int24 spotFloor = JBLPSplitHookHelpers.alignTickToSpacing({tick: spotTick, spacing: hook.TICK_SPACING()});
+        (, int24 tickLower, int24 tickUpper,,,,) =
+            positionManager._positions(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)));
+        if (address(terminalToken) < address(projectToken)) {
+            assertEq(tickLower, corridorLower, "project=token1: the ask starts at the corridor lower bound");
+            assertEq(tickUpper, spotFloor, "project=token1: the ask ends at the aligned spot");
+        } else {
+            int24 spotCeil = spotTick == spotFloor ? spotFloor : spotFloor + hook.TICK_SPACING();
+            assertEq(tickLower, spotCeil, "project=token0: the ask starts at the first aligned tick at or above spot");
+            assertEq(tickUpper, corridorUpper, "project=token0: the ask ends at the corridor upper bound");
+        }
     }
 
     /// @notice Initialize the pool a fifth of the way up a realistic corridor and return the pool key plus the
@@ -191,7 +199,7 @@ contract SingleSided_AddLiquidityTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
         uint256 t1 = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
-        // Buy #1 lifts spot; more tokens accumulate; add consolidates (burns t1, mints t2).
+        // Buy #1 lifts spot; more tokens accumulate; add recycles (burns t1, mints t2).
         int24 lift1 = initialTick + (corridorUpper - initialTick) / 3;
         _setSpotTick(key, lift1);
         _accumulateTokens(PROJECT_ID, 0.3e18);
@@ -199,7 +207,7 @@ contract SingleSided_AddLiquidityTest is LPSplitHookV4TestBase {
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
         uint256 t2 = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
-        // Buy #2 lifts spot again; add consolidates (burns t2, mints t3).
+        // Buy #2 lifts spot again; add recycles (burns t2, mints t3).
         int24 lift2 = lift1 + (corridorUpper - lift1) / 3;
         _setSpotTick(key, lift2);
         _accumulateTokens(PROJECT_ID, 0.2e18);
@@ -207,8 +215,11 @@ contract SingleSided_AddLiquidityTest is LPSplitHookV4TestBase {
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
         uint256 t3 = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
+        // Asks-only throughout: no bid exists and the ask sits on the exact geometry for the final spot.
+        _assertAskOnly(lift2, corridorLower, corridorUpper);
+
         // Exactly one live position: each add re-mints a distinct id; the prior ids are burned.
-        assertTrue(t1 != t2 && t2 != t3 && t1 != t3, "each consolidation should mint a distinct id");
+        assertTrue(t1 != t2 && t2 != t3 && t1 != t3, "each recycle should mint a distinct id");
         assertEq(positionManager.getPositionLiquidity(t1), 0, "first position must be burned, not orphaned");
         assertEq(positionManager.getPositionLiquidity(t2), 0, "second position must be burned, not orphaned");
         assertGt(positionManager.getPositionLiquidity(t3), 0, "the tracked position must be live");

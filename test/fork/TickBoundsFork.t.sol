@@ -86,9 +86,9 @@ contract TickBoundsFork is ForkDeployHelper {
             // forge-lint: disable-next-line(unsafe-typecast)
             bytes4 err = bytes4(reason);
             assertTrue(
-                err == JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_ZeroLiquidity.selector
+                err == JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot.selector
                     || err == JBUniswapV4LPSplitHookMath.JBUniswapV4LPSplitHookMath_NoTerminalTokenFound.selector,
-                "Should revert with ZeroLiquidity or NoTerminalTokenFound"
+                "Should revert with NoDeployableLiquidityAtSpot or NoTerminalTokenFound"
             );
         }
     }

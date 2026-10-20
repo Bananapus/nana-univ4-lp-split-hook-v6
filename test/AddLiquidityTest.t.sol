@@ -244,7 +244,9 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
         assertNotEq(
-            hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), firstId, "a permissionless caller consolidates the add"
+            hook.askTokenIdOf(PROJECT_ID, address(terminalToken)),
+            firstId,
+            "a permissionless caller consolidates the add"
         );
     }
 
@@ -259,15 +261,20 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
     }
 
-    function test_AddLiquidity_RevertsWhenNothingAccumulated() public {
+    function test_AddLiquidity_RecyclesWithNothingAccumulated() public {
         _accumulateAndDeploy(PROJECT_ID, 100e18); // deploy consumes the accumulation (no dust at 100% usage)
         oracle.setTwapTick(_spotTick());
+        uint256 oldAskId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
-        // With nothing (or only dust) accumulated, addLiquidity reverts on the dust-churn threshold guard rather than
-        // forcing a re-mint. Zero accumulation is below the threshold too.
-        vm.prank(owner);
-        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_AccumulationBelowThreshold.selector);
+        // With nothing new accumulated, anyone can still recycle: the live ask is burned and re-minted in full.
+        vm.prank(address(0xCAFE));
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
+
+        uint256 newAskId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        assertNotEq(newAskId, oldAskId, "the ask is re-minted");
+        assertEq(positionManager.getPositionLiquidity(oldAskId), 0, "the old ask is burned");
+        assertGt(positionManager.getPositionLiquidity(newAskId), 0, "the new ask holds the recovered principal");
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "nothing is left in the ledger");
     }
 
     // ─── Gas

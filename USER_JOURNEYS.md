@@ -2,21 +2,22 @@
 
 ## Repo purpose
 
-This repo takes reserved Juicebox token issuance and turns it into a managed UniV4 liquidity position. It owns the post-issuance lifecycle of accumulation, first-pool deployment, rebalancing, and fee tracking. It does not own project issuance logic or the lower-level UniV4 routing primitive it depends on.
+This repo takes reserved Juicebox token issuance and turns it into managed UniV4 liquidity, held as at most two single-sided positions per project: an ask of project tokens and a bid of terminal tokens. It owns the post-issuance lifecycle of accumulation, first-pool deployment, recycling both positions on every distribution, and fee tracking. It does not own project issuance logic or the lower-level UniV4 routing primitive it depends on.
 
 ## Primary actors
 
 - projects that want reserved-token issuance to become managed UniV4 liquidity
-- operators deploying and later rebalancing the position
+- operators deploying the pool and keeping reserved distributions flowing (each one recycles the positions)
 - auditors checking range math, fee tracking, and post-deployment lifecycle assumptions
 
 ## Key surfaces
 
-- `JBUniswapV4LPSplitHook`: accumulation, deployment, liquidity growth, rebalancing, and fee tracking
+- `JBUniswapV4LPSplitHook`: accumulation, deployment, ask/bid recycling, and fee tracking
 - `JBUniswapV4LPSplitHookDeployer`: clone and provenance packaging
 - `deployPool(...)`: first-pool deployment entrypoint
-- `addLiquidity(...)`: fold post-deploy accumulation into the single position (burn prior, re-mint one); permissionless like `deployPool`
-- `rebalanceLiquidity(...)`: permissionless re-centering of the position; `claimFeeTokensFor(...)`: owner/`SET_BUYBACK_POOL`-gated release of tracked fee value
+- `addLiquidity(...)`: permissionless recycle (collect fees, burn the ask and bid, re-mint both around the live spot); the same recycle runs inline on each reserved distribution
+- `askTokenIdOf(...)` / `bidTokenIdOf(...)`: the live ask and bid position ids
+- `collectAndRouteLPFees(...)`: permissionless fee collection from both positions; `claimFeeTokensFor(...)`: owner/`SET_BUYBACK_POOL`-gated release of tracked fee value
 
 ## Journey 1: Accumulate reserved tokens before a pool exists
 
@@ -58,10 +59,11 @@ This repo takes reserved Juicebox token issuance and turns it into a managed Uni
 
 **Main Flow**
 
-1. Call `deployPool(...)` directly or use the deployer clone path.
+1. Distribute reserved tokens (the hook attempts the deploy inline once `1e15` project tokens have accumulated), or call `deployPool(...)` directly.
 2. Note that deployment is permissionless; the seed reverts if the pool spot has already reached the issuance ceiling.
-3. Derive tick bounds from issuance and cash-out assumptions rather than arbitrary price intuition (the floor tick is placed at the project's cash-out/redemption price).
-4. Optionally register the deployed instance in the address registry.
+3. The first recycle mints the ask: project tokens from just past the live spot up to the issuance ceiling. There is no bid yet because the hook holds no terminal tokens.
+4. Derive tick bounds from issuance and cash-out assumptions rather than arbitrary price intuition (the floor tick is placed at the project's cash-out price).
+5. Optionally register the deployed instance in the address registry.
 
 **Failure Modes**
 
@@ -71,35 +73,36 @@ This repo takes reserved Juicebox token issuance and turns it into a managed Uni
 
 **Postconditions**
 
-- the first bounded UniV4 LP position exists or deployment is blocked before an invalid pool is created
+- the pool exists with the project's first ask (`askTokenIdOf`), or deployment is blocked before an invalid pool is created
 
-## Journey 3: Operate the position after deployment
+## Journey 3: Keep the positions recycling after deployment
 
-**Actor:** operator.
+**Actor:** anyone (reserved distribution and `addLiquidity` are permissionless).
 
-**Intent:** keep the LP position aligned with the intended economics.
+**Intent:** keep the ask and bid centered on the live spot and inside the project's economics.
 
 **Preconditions**
 
-- the position already exists
-- fee-project and token-ID assumptions are still valid
+- the pool is deployed
+- the pool oracle has 30 minutes of history and the spot is within 200 ticks of the TWAP
 
 **Main Flow**
 
-1. Collect accrued LP fees (from the single active position).
-2. Call `addLiquidity` to fold accumulated post-deploy reserved tokens into the project's single position — burning the prior position and re-minting one adaptive position, under an oracle-TWAP deviation guard.
-3. Rebalance when price or issuance conditions make the old range stale.
-4. Keep fee routing and fee-project assumptions aligned with the intended model.
+1. Distribute reserved tokens. The hook accepts them, then attempts a recycle inline if at least 1,000,000 gas (plus a 64,000 reserve) remains.
+2. The recycle collects and routes each position's fees, burns both, claims hook-held credits, recomputes the corridor, and re-mints the ask from every project token the hook holds for the project and the bid from every terminal token.
+3. Between recycles, buys convert the ask into terminal tokens and sells convert the bid into project tokens; the next recycle moves them back to the side they belong on.
+4. If the inline attempt was skipped or emitted `LiquidityAutomationFailed`, call `addLiquidity(projectId, terminalToken)` to run the same recycle.
+5. Call `collectAndRouteLPFees(...)` at any time to move fees into the ledgers without recycling.
 
 **Failure Modes**
 
-- stale token IDs or inverted tick bounds
-- reinitialization is attempted after ownership is no longer available
-- fee-project validation drift changes actual behavior
+- oracle not warmed up or spot off the TWAP (`TwapUnavailable`, `PriceDeviationTooHigh`): retry once the price settles
+- the spot is past both ends of what the ledgers can fill (`NoDeployableLiquidityAtSpot`): the live positions are kept and the tokens wait in their ledgers
+- a distribution with too little gas skips the inline attempt; nothing is lost
 
 **Postconditions**
 
-- the LP position remains aligned with the intended liquidity strategy
+- the project holds at most one ask and one bid, both single-sided around the live spot, with the ask never below the cash-out floor and the bid never above the issuance ceiling
 
 ## Journey 4: Track and claim fee value generated by LP operations
 
@@ -120,7 +123,7 @@ This repo takes reserved Juicebox token issuance and turns it into a managed Uni
 **Failure Modes**
 
 - operators ignore tracked fee balances and misstate treasury outcomes
-- integrations assume all fee value is immediately distributed on rebalance
+- integrations assume all fee value is immediately distributed on a recycle
 
 **Postconditions**
 

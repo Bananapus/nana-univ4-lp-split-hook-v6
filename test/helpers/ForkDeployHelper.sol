@@ -145,7 +145,7 @@ abstract contract ForkDeployHelper is Test {
 
     /// @notice Force the oracle's `observe` to report a TWAP equal to the pool's current spot tick, so the LP hook's
     /// spot-vs-TWAP guard passes deterministically without seeding 30 minutes of real observation history.
-    /// @dev Call immediately before a guarded `rebalanceLiquidity`/`addLiquidity`. The real oracle still runs its V4
+    /// @dev Call immediately before a guarded `addLiquidity`. The real oracle still runs its V4
     /// callbacks during pool init/swaps; only the TWAP read is mocked.
     function _mockOracleTwapEqualsSpot(IHooks oracle, IPoolManager pm, PoolKey memory key) internal {
         (uint160 sqrtPriceX96,,,) = pm.getSlot0(key.toId());

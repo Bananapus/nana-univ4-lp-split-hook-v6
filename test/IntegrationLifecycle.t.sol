@@ -7,7 +7,7 @@ import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingCo
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
 
 /// @notice End-to-end lifecycle integration tests for JBUniswapV4LPSplitHook.
-/// @dev Exercises the full protocol flow: accumulate -> deploy -> collect fees -> rebalance -> claim.
+/// @dev Exercises the full protocol flow: accumulate -> deploy -> collect fees -> recycle -> claim.
 contract IntegrationLifecycle is LPSplitHookV4TestBase {
     // --- Helpers -----------------------------------------------------------
 
@@ -102,38 +102,26 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
     }
 
     // -----------------------------------------------------------------------
-    // 3. Full lifecycle: deploy pool then rebalance liquidity
+    // 3. Full lifecycle: deploy pool then recycle via addLiquidity
     // -----------------------------------------------------------------------
 
-    /// @notice Deploy a pool, then rebalance liquidity.
-    ///         Verify old position is burned and a new position is minted with a different tokenId.
-    function test_FullLifecycle_DeployThenRebalance() public {
+    /// @notice Deploy a pool, accumulate more, then recycle. With no terminal tokens held, the recycle burns the old
+    ///         ask and mints exactly one fresh ask holding every project token, and no bid.
+    function test_FullLifecycle_DeployThenRecycle() public {
         // Deploy pool
         _accumulateAndDeploy(PROJECT_ID, 100e18);
         uint256 originalTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(originalTokenId, 0, "original tokenId should be nonzero");
 
-        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
-        controller.setWeight(PROJECT_ID, 900e18);
-
-        // Mint tokens to PositionManager so decreaseLiquidity -> collect has tokens to give back
-        projectToken.mint(address(positionManager), 50e18);
-        terminalToken.mint(address(positionManager), 50e18);
-
-        // Approve tokens from hook for new PositionManager mint
-        vm.startPrank(address(hook));
-        projectToken.approve(address(positionManager), type(uint256).max);
-        terminalToken.approve(address(positionManager), type(uint256).max);
-        vm.stopPrank();
-
         uint256 mintCountBefore = positionManager.mintCallCount();
         uint256 burnCountBefore = positionManager.burnCallCount();
 
-        // Rebalance (requires owner permission)
-        vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
+        // Recycle (permissionless) with a fresh accumulation.
+        _accumulateTokens(PROJECT_ID, 1e18);
+        vm.prank(user);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
-        // Verify old position was burned and new one minted
+        // Verify old position was burned and exactly one new one minted (no terminal, so no bid).
         assertEq(
             positionManager.burnCallCount(),
             burnCountBefore + 1,
@@ -142,13 +130,17 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         assertEq(
             positionManager.mintCallCount(),
             mintCountBefore + 1,
-            "PositionManager mint should be called once for new position"
+            "PositionManager mint should be called once for the ask"
         );
+        assertEq(hook.bidTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "no bid without terminal tokens");
 
-        // Verify new tokenId differs from original
+        // Verify new tokenId differs from original and holds every project token.
         uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(newTokenId, 0, "new tokenId should be nonzero");
-        assertNotEq(newTokenId, originalTokenId, "tokenIdOf should change after rebalance");
+        assertNotEq(newTokenId, originalTokenId, "askTokenIdOf should change after the recycle");
+        (,,,, uint256 amount0Locked, uint256 amount1Locked,) = positionManager._positions(newTokenId);
+        assertEq(amount0Locked + amount1Locked, 101e18, "the ask holds the recovered plus new project tokens");
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "the project ledger is fully minted");
     }
 
     // -----------------------------------------------------------------------

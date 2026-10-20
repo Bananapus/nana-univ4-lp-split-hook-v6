@@ -2,6 +2,13 @@
 pragma solidity 0.8.28;
 
 import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
+import {JBUniswapV4LPSplitHookMath} from "../src/libraries/JBUniswapV4LPSplitHookMath.sol";
+import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
+import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
+import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
+import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
 /// @notice Tests validating realistic PositionManager token flows.
 /// @dev The improved MockPositionManager tracks locked amounts, owed amounts, and
@@ -50,31 +57,43 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         assertEq(terminal.cashOutCallCount(), 0, "deployPool must never call cashOutTokensOf");
     }
 
-    // ─── Rebalance: burn returns tokens, then re-mints ───────────────
+    // ─── Recycle: burn returns tokens, then re-mints both sides ──────
 
-    /// @notice Rebalancing should burn the old position (returning locked tokens to the hook),
-    ///         then mint a new position (transferring tokens back to PM).
-    function test_Rebalance_TokensReturnedAndRedeposited() public {
+    /// @notice A recycle burns the old ask (returning its locked project AND filled terminal to the hook), then
+    /// re-mints a project-only ask and a terminal-only bid, leaving nothing on the hook or in the ledgers.
+    function test_Recycle_TokensReturnedAndRedeposited() public {
+        _preInitAtMid();
         _accumulateAndDeploy(PROJECT_ID, 100e18);
 
         uint256 oldTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(oldTokenId, 0, "should have a position");
 
-        // Seed PM with extra tokens so the burn can return them.
-        projectToken.mint(address(positionManager), 50e18);
-        terminalToken.mint(address(positionManager), 50e18);
+        // Buyers filled part of the ask: the position now also holds terminal tokens the burn recovers.
+        terminalToken.mint(address(positionManager), 5e18);
+        positionManager.injectPositionBalance(oldTokenId, address(terminalToken), 5e18);
 
-        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
-        controller.setWeight(PROJECT_ID, 900e18);
+        uint256 burnsBefore = positionManager.burnCallCount();
+        _accumulateTokens(PROJECT_ID, 1e18);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
-        vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
+        assertEq(positionManager.burnCallCount(), burnsBefore + 1, "the old ask is burned");
+        (,,,,,, bool oldExists) = positionManager._positions(oldTokenId);
+        assertFalse(oldExists, "the old ask no longer exists");
 
-        uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
-        assertNotEq(newTokenId, oldTokenId, "tokenId should change after rebalance");
+        uint256 askId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 bidId = hook.bidTokenIdOf(PROJECT_ID, address(terminalToken));
+        assertTrue(askId != oldTokenId && bidId != oldTokenId && askId != bidId, "fresh, distinct ask and bid ids");
+        (uint256 askProject, uint256 askTerminal) = _lockedSides(askId);
+        (uint256 bidProject, uint256 bidTerminal) = _lockedSides(bidId);
+        assertEq(askProject, 101e18, "the ask re-deposits recovered plus new project tokens");
+        assertEq(askTerminal, 0, "the ask holds no terminal");
+        assertEq(bidTerminal, 5e18, "the bid re-deposits the recovered terminal");
+        assertEq(bidProject, 0, "the bid holds no project token");
 
-        // After rebalance, the hook should have processed tokens through burn → take → settle → mint.
-        // The mock enforces real transfers, so if any step failed the tx would revert.
+        assertEq(projectToken.balanceOf(address(hook)), 0, "no project tokens left on the hook");
+        assertEq(terminalToken.balanceOf(address(hook)), 0, "no terminal tokens left on the hook");
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 0, "project ledger fully minted");
+        assertEq(hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)), 0, "terminal ledger fully minted");
     }
 
     // ─── Fee collection: fees transfer from PM to hook ───────────────
@@ -135,16 +154,17 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         assertGe(totalTermAfter, totalTermBefore, "Terminal tokens should not be destroyed");
     }
 
-    // ─── Rebalance with fees: full cycle burn → collect → route → mint ─
+    // ─── Recycle with fees: full cycle collect → route → burn → mint ─
 
-    /// @notice End-to-end rebalance with accumulated fees exercises the full token flow:
-    ///         burn (return locked + fees) → take → route fees → settle → mint.
-    function test_Rebalance_FullCycleWithFees() public {
+    /// @notice End-to-end recycle with accumulated fees exercises the full token flow: collect fees → route the
+    /// fee-project cut → burn → mint, with the terminal-fee remainder re-minted as the bid.
+    function test_Recycle_FullCycleWithFees() public {
+        _preInitAtMid();
         _accumulateAndDeploy(PROJECT_ID, 100e18);
 
         uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
-        // Configure fees on the old position.
+        // Configure terminal-side fees on the old position and fund the PM to pay them.
         (address token0,) = _sortTokens(address(projectToken), address(terminalToken));
         uint256 termFee = 3e18;
         if (token0 == address(terminalToken)) {
@@ -152,26 +172,31 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         } else {
             positionManager.setCollectableFees(tokenId, 0, termFee);
         }
-        // Seed PM so it can pay out the fees + locked amounts.
-        projectToken.mint(address(positionManager), 100e18);
-        terminalToken.mint(address(positionManager), 100e18);
+        terminalToken.mint(address(positionManager), termFee);
 
         uint256 payBefore = terminal.payCallCount();
         uint256 addBefore = terminal.addToBalanceCallCount();
+        uint256 terminalHeldBefore = terminalToken.balanceOf(address(terminal));
 
-        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
-        controller.setWeight(PROJECT_ID, 900e18);
+        _accumulateTokens(PROJECT_ID, 1e18);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
-        vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
+        // The fee-project cut was paid; nothing was deposited into the project's treasury.
+        assertEq(terminal.payCallCount(), payBefore + 1, "the fee-project cut is paid");
+        assertEq(terminal.addToBalanceCallCount(), addBefore, "fees are never deposited into the treasury");
+        uint256 feeCut = terminalToken.balanceOf(address(terminal)) - terminalHeldBefore;
+        assertGt(feeCut, 0, "a nonzero cut left the hook");
 
-        // Verify fees were routed.
-        bool feesRouted = (terminal.payCallCount() > payBefore) || (terminal.addToBalanceCallCount() > addBefore);
-        assertTrue(feesRouted, "Fees from old position should be routed during rebalance");
-
-        // Verify new position was created.
+        // The remainder is the new bid; the ask re-mints every project token.
         uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(newTokenId, tokenId, "New position should be minted");
+        (uint256 askProject, uint256 askTerminal) = _lockedSides(newTokenId);
+        (uint256 bidProject, uint256 bidTerminal) = _lockedSides(hook.bidTokenIdOf(PROJECT_ID, address(terminalToken)));
+        assertEq(askProject, 101e18, "the ask holds every project token");
+        assertEq(askTerminal, 0, "the ask holds no terminal");
+        assertEq(bidTerminal, termFee - feeCut, "the bid holds exactly the fee remainder");
+        assertEq(bidProject, 0, "the bid holds no project token");
+        assertEq(terminalToken.balanceOf(address(hook)), 0, "no terminal stranded on the hook");
     }
 
     // ─── Deploy: partial usage — sweep returns unused tokens ─────────
@@ -191,13 +216,48 @@ contract PositionManagerIntegrationTest is LPSplitHookV4TestBase {
         uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(tokenId, 0, "Position should be created even with partial usage");
 
-        // SWEEP should have returned unused tokens — verify hook still has some.
-        // (The exact amounts depend on cash-out math, but with 80% usage there
-        // should be some swept back.)
+        // SWEEP returned the unused 20% and the ledger carries it forward for the next recycle.
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 20e18, "the unused 20% returns to the ledger");
+        assertEq(projectToken.balanceOf(address(hook)), 20e18, "the swept leftover is held by the hook");
     }
 
     // ─── Helper
     // ──────────────────────────────────────────────────────
+
+    /// @notice Pre-initialize the pool mid-corridor so the recycle has room for both an ask and a bid around spot
+    /// (a hook-seeded pool sits one spacing inside the cash-out floor, leaving no bid range).
+    function _preInitAtMid() internal {
+        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
+        (JBRuleset memory ruleset,) = controller.currentRulesetOf(PROJECT_ID);
+        (int24 corridorLower, int24 corridorUpper) = JBUniswapV4LPSplitHookMath.calculateTickBounds({
+            directory: IJBDirectory(address(directory)),
+            suckerRegistry: IJBSuckerRegistry(address(0)),
+            projectId: PROJECT_ID,
+            terminalToken: address(terminalToken),
+            projectToken: address(projectToken),
+            controller: address(controller),
+            ruleset: ruleset
+        });
+        (address token0, address token1) = _sortTokens(address(projectToken), address(terminalToken));
+        positionManager.initializePool(
+            PoolKey({
+                currency0: Currency.wrap(token0),
+                currency1: Currency.wrap(token1),
+                fee: hook.POOL_FEE(),
+                tickSpacing: hook.TICK_SPACING(),
+                hooks: hook.oracleHook()
+            }),
+            TickMath.getSqrtPriceAtTick(corridorLower + (corridorUpper - corridorLower) / 2)
+        );
+    }
+
+    /// @notice A position's locked (project, terminal) amounts.
+    function _lockedSides(uint256 tokenId) internal view returns (uint256 projectSide, uint256 terminalSide) {
+        (,,,, uint256 amount0Locked, uint256 amount1Locked,) = positionManager._positions(tokenId);
+        (projectSide, terminalSide) = address(projectToken) < address(terminalToken)
+            ? (amount0Locked, amount1Locked)
+            : (amount1Locked, amount0Locked);
+    }
 
     function _sortTokens(address tokenA, address tokenB) internal pure returns (address token0, address token1) {
         return tokenA < tokenB ? (tokenA, tokenB) : (tokenB, tokenA);

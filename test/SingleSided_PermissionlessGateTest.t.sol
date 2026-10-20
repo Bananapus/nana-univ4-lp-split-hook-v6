@@ -73,7 +73,9 @@ contract SingleSided_PermissionlessGateTest is LPSplitHookV4TestBase {
         vm.prank(STRANGER);
         hook.deployPool(PROJECT_ID);
 
-        assertNotEq(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "a stranger must be able to seed the pool");
+        assertNotEq(
+            hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "a stranger must be able to seed the pool"
+        );
     }
 
     /// @notice A stranger can extend an existing pool permissionlessly while a live corridor remains.

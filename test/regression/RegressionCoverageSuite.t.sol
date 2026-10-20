@@ -293,13 +293,13 @@ contract UseTotalSurplusCashOutTest is LPSplitHookV4TestBase {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// Test 2: Fee token claims excluded from rebalance
+// Test 2: Fee token claims excluded from recycle
 // ═══════════════════════════════════════════════════════════════════════
 
-/// @title FeeTokensExcludedFromRebalanceTest
-/// @notice After LP fees generate claimable fee tokens, a rebalance must NOT
-///         consume those reserved fee tokens in the new LP position.
-contract FeeTokensExcludedFromRebalanceTest is LPSplitHookV4TestBase {
+/// @title FeeTokensExcludedFromRecycleTest
+/// @notice After LP fees generate claimable fee tokens, a recycle (`addLiquidity`) must NOT
+///         consume those reserved fee tokens in the re-minted LP positions.
+contract FeeTokensExcludedFromRecycleTest is LPSplitHookV4TestBase {
     // Custom controller that can actually burn tokens.
     TotalSurplusController internal burnController;
 
@@ -325,7 +325,7 @@ contract FeeTokensExcludedFromRebalanceTest is LPSplitHookV4TestBase {
             newBuybackHook: IJBBuybackHookRegistry(address(0))
         });
 
-        // We need a controller that can actually burn tokens so rebalance works.
+        // We need a controller that can actually burn tokens so the recycle works.
         burnController = new TotalSurplusController();
         burnController.setPrices(address(prices));
         burnController.setWeight(PROJECT_ID, DEFAULT_WEIGHT);
@@ -356,9 +356,9 @@ contract FeeTokensExcludedFromRebalanceTest is LPSplitHookV4TestBase {
         vm.stopPrank();
     }
 
-    /// @notice Deploy a pool, generate LP fee tokens, then rebalance. The reserved
-    ///         fee tokens must still be claimable after the rebalance.
-    function test_RebalanceDoesNotConsumeFeeTokens() public {
+    /// @notice Deploy a pool, generate LP fee tokens, then recycle. The reserved
+    ///         fee tokens must still be claimable after the recycle.
+    function test_RecycleDoesNotConsumeFeeTokens() public {
         // Step 1: accumulate and deploy a pool.
         _accumulateForProject(PROJECT_ID, 100e18);
         vm.prank(owner);
@@ -381,24 +381,21 @@ contract FeeTokensExcludedFromRebalanceTest is LPSplitHookV4TestBase {
         // Collect fees — this generates claimable fee tokens.
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
 
-        // Record the claimable amount before rebalance.
+        // Record the claimable amount before the recycle.
         uint256 claimableBefore = hook.claimableFeeTokens(PROJECT_ID);
         assertGt(claimableBefore, 0, "precondition: should have claimable fee tokens");
 
-        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
-        burnController.setWeight(PROJECT_ID, 900e18);
+        // Step 3: a new reserved distribution arrives and anyone recycles the LP positions.
+        _accumulateForProject(PROJECT_ID, 10e18);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
-        // Step 3: rebalance the LP position.
-        vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
-
-        // Step 4: verify fee tokens are intact after rebalance.
+        // Step 4: verify fee tokens are intact after the recycle.
         uint256 claimableAfter = hook.claimableFeeTokens(PROJECT_ID);
-        assertEq(claimableAfter, claimableBefore, "claimable fee tokens must be unchanged after rebalance");
+        assertEq(claimableAfter, claimableBefore, "claimable fee tokens must be unchanged after recycle");
 
         // The hook must still hold at least the claimable amount of fee tokens.
         uint256 feeBalanceAfter = feeProjectToken.balanceOf(address(hook));
-        assertGe(feeBalanceAfter, claimableAfter, "hook must still hold fee tokens after rebalance");
+        assertGe(feeBalanceAfter, claimableAfter, "hook must still hold fee tokens after recycle");
 
         // Step 5: verify claiming still works.
         vm.prank(owner);
@@ -406,7 +403,7 @@ contract FeeTokensExcludedFromRebalanceTest is LPSplitHookV4TestBase {
         assertEq(
             feeProjectToken.balanceOf(user),
             claimableBefore,
-            "user should receive all claimable fee tokens after rebalance"
+            "user should receive all claimable fee tokens after recycle"
         );
     }
 }

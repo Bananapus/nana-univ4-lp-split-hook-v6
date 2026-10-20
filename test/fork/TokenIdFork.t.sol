@@ -28,6 +28,7 @@ import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionMa
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
+import {PositionInfo, PositionInfoLibrary} from "@uniswap/v4-periphery/src/libraries/PositionInfoLibrary.sol";
 import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {SwapParams} from "@uniswap/v4-core/src/types/PoolOperation.sol";
@@ -123,6 +124,7 @@ contract TokenIdSwapHelper is IUnlockCallback {
 contract TokenIdFork is ForkDeployHelper {
     using StateLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;
+    using PositionInfoLibrary for PositionInfo;
     IPoolManager constant V4_POOL_MANAGER = IPoolManager(0x000000000004444c5dc75cB358380D2e3dE08A90);
     IPositionManager constant V4_POSITION_MANAGER = IPositionManager(0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e);
     JBUniswapV4LPSplitHook hook;
@@ -181,11 +183,10 @@ contract TokenIdFork is ForkDeployHelper {
         emit log_named_uint("  position liquidity", posLiq);
     }
 
-    /// @notice `rebalanceLiquidity`'s drift guard is gated on CORRIDOR movement (a genuine issuance-rate change),
-    /// not on raw trading activity — a swap alone leaves the corridor untouched. A real buy is still exercised first
-    /// (proving the tokenId bookkeeping this test targets survives organic trading), then a real ruleset weight
-    /// change genuinely shifts the corridor so the rebalance clears the guard.
-    function test_fork_h31_tokenId_updatesAfterRebalance() public {
+    /// @notice A real buy (leaving ETH in the ask) and a real ruleset weight change, then more reserved tokens and a
+    /// permissionless `addLiquidity` recycle: both stored ids must point at the freshly minted positions. ETH is
+    /// currency0, so the bid (token0) mints first and the ask (token1) second.
+    function test_fork_h31_tokenId_updatesAfterRecycle() public {
         _accumulateTokens(projectId, address(projectToken), 100_000e18);
         vm.prank(multisig);
         hook.deployPool(projectId);
@@ -202,8 +203,9 @@ contract TokenIdFork is ForkDeployHelper {
         // A real buy (give ETH, receive project token) pushes spot into the single-sided ask band, sized off the
         // seed position's own tick bounds so it lands inside the band instead of rocketing to the tick-space
         // extreme (there is no interposing liquidity beyond this single position).
-        int24 seedTickLower = hook.activeTickLowerOf(projectId, JBConstants.NATIVE_TOKEN);
-        int24 seedTickUpper = hook.activeTickUpperOf(projectId, JBConstants.NATIVE_TOKEN);
+        (, PositionInfo seedInfo) = V4_POSITION_MANAGER.getPoolAndPositionInfo(oldTokenId);
+        int24 seedTickLower = seedInfo.tickLower();
+        int24 seedTickUpper = seedInfo.tickUpper();
         uint256 costToFullyCrossAsk = SqrtPriceMath.getAmount0Delta({
             sqrtPriceAX96: TickMath.getSqrtPriceAtTick(seedTickLower),
             sqrtPriceBX96: TickMath.getSqrtPriceAtTick(seedTickUpper),
@@ -219,20 +221,24 @@ contract TokenIdFork is ForkDeployHelper {
         // trading).
         _queueHalvedWeightRuleset(projectId, 5000);
 
-        uint256 nextTokenIdBeforeRebalance = V4_POSITION_MANAGER.nextTokenId();
+        uint256 nextTokenIdBeforeRecycle = V4_POSITION_MANAGER.nextTokenId();
         _mockOracleTwapEqualsSpot(
             hook.oracleHook(), V4_POOL_MANAGER, hook.poolKeyOf(projectId, JBConstants.NATIVE_TOKEN)
         );
-        // Permissionless: any non-owner stranger may rebalance once the corridor has genuinely drifted.
+        // Permissionless: any non-owner stranger may recycle.
         vm.prank(address(0xB0BB1E));
-        hook.rebalanceLiquidity({projectId: projectId, terminalToken: JBConstants.NATIVE_TOKEN});
+        hook.addLiquidity({projectId: projectId, terminalToken: JBConstants.NATIVE_TOKEN});
         uint256 newTokenId = hook.askTokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
-        uint256 nextTokenIdAfterRebalance = V4_POSITION_MANAGER.nextTokenId();
-        assertTrue(newTokenId != oldTokenId, "Token ID should change after rebalance");
-        assertEq(newTokenId, nextTokenIdBeforeRebalance, "New tokenId should equal pre-rebalance nextTokenId");
-        assertEq(newTokenId, nextTokenIdAfterRebalance - 1, "New tokenId should equal post-rebalance nextTokenId - 1");
+        uint256 bidTokenId = hook.bidTokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+        uint256 nextTokenIdAfterRecycle = V4_POSITION_MANAGER.nextTokenId();
+        assertTrue(newTokenId != oldTokenId, "Ask token ID should change after recycle");
+        assertEq(bidTokenId, nextTokenIdBeforeRecycle, "Bid (token0) should be the first id minted by the recycle");
+        assertEq(newTokenId, nextTokenIdBeforeRecycle + 1, "Ask (token1) should be the second id minted");
+        assertEq(nextTokenIdAfterRecycle, nextTokenIdBeforeRecycle + 2, "Recycle should mint exactly two positions");
+        assertEq(V4_POSITION_MANAGER.getPositionLiquidity(oldTokenId), 0, "Old ask should be burned");
         uint128 newLiq = V4_POSITION_MANAGER.getPositionLiquidity(newTokenId);
-        assertTrue(newLiq > 0, "New position should have liquidity after rebalance");
+        assertTrue(newLiq > 0, "New ask should have liquidity after recycle");
+        assertTrue(V4_POSITION_MANAGER.getPositionLiquidity(bidTokenId) > 0, "Bid should have liquidity");
         emit log_named_uint("  old tokenId", oldTokenId);
         emit log_named_uint("  new tokenId", newTokenId);
         emit log_named_uint("  new position liquidity", newLiq);
@@ -240,7 +246,7 @@ contract TokenIdFork is ForkDeployHelper {
 
     /// @notice Queue a real ruleset with a halved weight, effective immediately (the base ruleset's `duration` is
     /// 0, so `JBRulesets.deriveStartFrom` starts the next cycle at `mustStartAtOrAfter` == `block.timestamp`). Used
-    /// to genuinely shift the project's issuance/cash-out corridor so `rebalanceLiquidity`'s drift guard clears.
+    /// to genuinely shift the project's issuance/cash-out corridor.
     function _queueHalvedWeightRuleset(uint256 pid, uint16 cashOutTaxRate) internal {
         JBRulesetMetadata memory metadata = JBRulesetMetadata({
             reservedPercent: 1000,

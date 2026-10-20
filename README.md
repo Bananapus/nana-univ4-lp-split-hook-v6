@@ -1,6 +1,6 @@
 # Juicebox UniV4 LP Split Hook
 
-`@bananapus/univ4-lp-split-hook-v6` is a split hook that accumulates reserved Juicebox project tokens and then deploys them into a Uniswap V4 concentrated liquidity position bounded by the project's issuance and cash-out economics.
+`@bananapus/univ4-lp-split-hook-v6` is a split hook that accumulates reserved Juicebox project tokens and turns them into protocol-owned Uniswap V4 liquidity, held as at most two single-sided positions per project (an ask and a bid) bounded by the project's issuance and cash-out economics.
 
 
 ## Documentation
@@ -19,9 +19,16 @@
 The hook has a two-stage lifecycle:
 
 - before pool deployment, it accumulates reserved project tokens
-- after deployment, further reserved-token inflows keep accumulating, and anyone can call `addLiquidity` to fold them into the project's single Uniswap V4 position (consolidated by burning the prior position and re-minting one adaptive position); the hook also manages permissionless fee collection and rebalancing
+- after deployment, every reserved-token distribution recycles the project's positions inline (best-effort, gas permitting), and anyone can run the same recycle through `addLiquidity` at any time; fee collection is also permissionless
 
-The LP range is derived from project economics — asks anchored to the project balance up to the issuance ceiling, with the floor placed at the project's cash-out (redemption) price — rather than from an arbitrary price target.
+Each project holds at most two positions on its pool:
+
+- the **ask** (`askTokenIdOf`) holds project tokens from just past the live spot up to the issuance ceiling, never below the cash-out floor
+- the **bid** (`bidTokenIdOf`) holds terminal tokens from just past the live spot down to the cash-out floor, never above the issuance ceiling
+
+The spot sits in a one-spacing (200-tick) gap between them, so both mints are single-sided and the hook never quotes at the exact spot. A recycle collects and routes each position's fees, burns both, claims any hook-held credits, recomputes the corridor, and re-mints the ask from every project token the hook holds for the project and the bid from every terminal token. Trading converts each position toward the other token; the next recycle moves those tokens back to the side they belong on.
+
+The corridor is derived from project economics (the floor at the project's cash-out price, the ceiling at its issuance price) rather than from an arbitrary price target.
 
 Use this repo when reserved-token issuance should become managed concentrated liquidity. Do not use it when a project only needs a buyback hook or normal reserved-token splits.
 
@@ -29,7 +36,7 @@ Use this repo when reserved-token issuance should become managed concentrated li
 
 | Contract | Role |
 | --- | --- |
-| `JBUniswapV4LPSplitHook` | Main split hook that accumulates tokens, deploys a V4 pool position, rebalances, and routes fees. |
+| `JBUniswapV4LPSplitHook` | Main split hook that accumulates tokens, deploys the V4 pool, recycles the project's ask and bid positions, and routes fees. |
 | `JBUniswapV4LPSplitHookDeployer` | Clone factory for deploying hook instances and registering them in the address registry. |
 
 ## Mental model
@@ -37,8 +44,8 @@ Use this repo when reserved-token issuance should become managed concentrated li
 This repo owns a post-issuance lifecycle:
 
 1. accumulate reserved tokens
-2. deploy them into a bounded V4 position
-3. keep accumulating later inflows and grow the position via `addLiquidity` (which consolidates into a single re-minted position), collecting fees and rebalancing over time
+2. deploy the pool and mint the first ask from the accumulation
+3. on every later distribution (or permissionless `addLiquidity`), recycle: collect fees, burn the ask and bid, and re-mint both single-sided around the live spot from everything the hook holds for the project
 
 It does not own the project's issuance logic itself.
 
@@ -54,10 +61,10 @@ It does not own the project's issuance logic itself.
 - this hook governs post-issuance liquidity, so it should not be used to infer how project tokens were originally priced or minted
 - first-pool deployment validates any pre-initialized pool price against the project's economic tick bounds and reverts if out of range
 - LP management depends on both live market state and live Juicebox economics
-- fee claiming (`claimFeeTokensFor`) is an operational power gated to the project owner or `SET_BUYBACK_POOL` delegate; deploy, add, rebalance, and fee collection are permissionless but bounded by economic and oracle-TWAP guards, so projects should understand who can trigger them and how new ranges are chosen before treating the hook as hands-off infrastructure
-- newly received reserved tokens keep accumulating after deployment and are converted into additional liquidity via `addLiquidity` (the hook never burns project tokens; supply-reducing burns are a protocol-layer split-routing decision)
+- fee claiming (`claimFeeTokensFor`) is an operational power gated to the project owner or `SET_BUYBACK_POOL` delegate; deploy, add, and fee collection are permissionless but bounded by economic and oracle-TWAP guards, so projects should understand who can trigger them and how new ranges are chosen before treating the hook as hands-off infrastructure
+- newly received reserved tokens keep accumulating after deployment and become liquidity at the next recycle (inline on the distribution, or via `addLiquidity`); the hook never burns project tokens (supply-reducing burns are a protocol-layer split-routing decision)
 - the normal reserved-token path requires a deployed project ERC-20; if the hook also holds internal project credits, deploy/add liquidity claims them into that ERC-20 before minting so accounting remains tied to transferable tokens
-- the hook never cashes out: any terminal-token (bid) side of a position is funded only from the terminal tokens the hook recovers by burning its own prior V4 position plus this project's own accumulated terminal-token fee ledger, never by redeeming project tokens against the terminal
+- the hook never cashes out: the bid is funded only from this project's terminal-token ledger, which holds the terminal tokens recovered by burning its own positions, its own LP-fee remainders, and its own mint leftovers, never by redeeming project tokens against the terminal
 - LP-fee collection takes a best-effort `feeProjectId` cut symmetrically on both the project-token and terminal-token sides (each paid to the fee project's primary terminal for that token when one exists, forgiven otherwise); every non-cut remainder becomes the project's own protocol-owned liquidity, never a deposit into the project's terminal
 - fee-project credits owed to claimants are reserved from that credit normalization, so a fee project cannot consume other projects' claimable fee credits as its own LP principal
 
@@ -88,7 +95,9 @@ Useful scripts:
 
 ## Deployment notes
 
-This repo composes with the UniV4 router package, the address registry, core protocol contracts, and Permit2. Teams should usually deploy one hook instance per project and terminal-token pair they want to manage.
+This repo composes with the UniV4 router package, the address registry, core protocol contracts, and Permit2. One hook clone can serve many projects, with one deployed pool per project.
+
+The two-position hook ships as a new library, hook implementation, and deployer at fresh addresses. Clones of the 1.4.0 deployment keep their single-position behavior; a project adopts the two-position model by deploying a clone from the new deployer and re-pointing its reserved-token split to it.
 
 ## Repository layout
 
@@ -98,7 +107,7 @@ src/
   JBUniswapV4LPSplitHookDeployer.sol
   interfaces/
 test/
-  stage, deployment, fee, rebalance, fork, invariant, review, and regression coverage
+  stage, deployment, fee, recycle, fork, invariant, review, and regression coverage
 script/
   Deploy.s.sol
 ```
@@ -107,12 +116,12 @@ script/
 
 - once a pool path is chosen for a deployed project-token pair, that choice becomes part of the hook's operational identity
 - first-pool deployment is publicly observable and can be front-run by outside initialization
-- LP deployment and rebalancing depend on current project economics and live market structure
+- LP deployment and every recycle depend on current project economics and live market structure
 - direct ETH or tokens sent to the hook are settlement dust unless a supported LP-management path accounts for them
-- after deployment, newly received reserved tokens keep accumulating and are added as more liquidity via `addLiquidity`; the hook never burns
+- after deployment, newly received reserved tokens keep accumulating and are recycled into the ask on the next distribution or `addLiquidity`; the hook never burns
 - TWAP and oracle assumptions come from the UniV4 router and should be evaluated together with this hook
 
 ## For AI agents
 
 - Treat this repo as reserved-token liquidity management, not as the swap router itself.
-- Read the deployment-stage, rebalance, frontrun-validation, and preinitialized-pool tests before summarizing failure modes.
+- Read the deployment-stage, recycle (`test/fork/Integration_SingleSidedRevnet.t.sol`), frontrun-validation, and preinitialized-pool tests before summarizing failure modes.

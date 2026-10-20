@@ -82,7 +82,7 @@ contract Integration_TerminalMigration is ForkDeployHelper {
         });
     }
 
-    function test_fork_integration_terminalMigration_rebalanceAfterMigration() public {
+    function test_fork_integration_terminalMigration_recycleAfterMigration() public {
         uint256 pid =
             _launchProjectWithMigration({reservedPercent: 0, cashOutTaxRate: 5000, weight: 1_000_000e18, duration: 0});
         vm.prank(multisig);
@@ -121,64 +121,21 @@ contract Integration_TerminalMigration is ForkDeployHelper {
             metadata: ""
         });
 
-        // `rebalanceLiquidity`'s drift guard is gated on CORRIDOR movement (a genuine issuance/cash-out rate
-        // change), not on the terminal migration itself — the migration alone leaves the corridor untouched. Queue
-        // a real ruleset weight change to genuinely shift the corridor.
-        _queueHalvedWeightRuleset(pid, 5000);
+        // More reserved tokens arrive after the migration; the recycle reads the corridor through the new terminal.
+        _accumulateTokens(pid, address(pToken), 10_000e18);
 
         _mockOracleTwapEqualsSpot(hook.oracleHook(), V4_POOL_MANAGER, hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN));
-        // Permissionless: any non-owner stranger may rebalance once the corridor has genuinely drifted.
+        // Permissionless: any non-owner stranger may recycle.
         vm.prank(address(0xB0BB1E));
-        hook.rebalanceLiquidity({projectId: pid, terminalToken: JBConstants.NATIVE_TOKEN});
+        hook.addLiquidity({projectId: pid, terminalToken: JBConstants.NATIVE_TOKEN});
         uint256 newTokenId = hook.askTokenIdOf(pid, JBConstants.NATIVE_TOKEN);
         assertTrue(newTokenId > 0, "New tokenId exists");
         uint128 newLiq = V4_POSITION_MANAGER.getPositionLiquidity(newTokenId);
-        assertTrue(newLiq > 0, "Rebalanced position has liquidity after terminal migration");
+        assertTrue(newLiq > 0, "Recycled ask has liquidity after terminal migration");
         emit log_named_uint("  Initial tokenId", initialTokenId);
         emit log_named_uint("  Initial liquidity", initialLiq);
         emit log_named_uint("  New tokenId", newTokenId);
         emit log_named_uint("  New liquidity", newLiq);
-    }
-
-    /// @notice Queue a real ruleset with a halved weight, effective immediately (the base ruleset's `duration` is
-    /// 0, so `JBRulesets.deriveStartFrom` starts the next cycle at `mustStartAtOrAfter` == `block.timestamp`). Used
-    /// to genuinely shift the project's issuance/cash-out corridor so `rebalanceLiquidity`'s drift guard clears.
-    /// Note: the project was launched via `_launchProjectWithMigration` with `allowTerminalMigration`/
-    /// `allowSetTerminals` true, but the migration this test exercises already ran before this is called, so those
-    /// flags don't need to persist into the new cycle.
-    function _queueHalvedWeightRuleset(uint256 pid, uint16 cashOutTaxRate) internal {
-        JBRulesetMetadata memory metadata = JBRulesetMetadata({
-            reservedPercent: 0,
-            cashOutTaxRate: cashOutTaxRate,
-            baseCurrency: uint32(uint160(JBConstants.NATIVE_TOKEN)),
-            pausePay: false,
-            pauseCreditTransfers: false,
-            allowOwnerMinting: true,
-            allowSetCustomToken: true,
-            allowTerminalMigration: false,
-            allowSetTerminals: false,
-            allowSetController: false,
-            allowAddAccountingContext: false,
-            allowAddPriceFeed: false,
-            ownerMustSendPayouts: false,
-            holdFees: false,
-            scopeCashOutsToLocalBalances: true,
-            useDataHookForPay: false,
-            useDataHookForCashOut: false,
-            dataHook: address(0),
-            metadata: 0
-        });
-        JBRulesetConfig[] memory configs = new JBRulesetConfig[](1);
-        configs[0].mustStartAtOrAfter = 0;
-        configs[0].duration = 0;
-        configs[0].weight = 500_000e18;
-        configs[0].weightCutPercent = 0;
-        configs[0].approvalHook = IJBRulesetApprovalHook(address(0));
-        configs[0].metadata = metadata;
-        configs[0].splitGroups = new JBSplitGroup[](0);
-        configs[0].fundAccessLimitGroups = new JBFundAccessLimitGroup[](0);
-        vm.prank(multisig);
-        jbController.queueRulesetsOf({projectId: pid, rulesetConfigurations: configs, memo: ""});
     }
 
     function _launchFeeProject() internal returns (uint256 id) {

@@ -6,9 +6,9 @@ import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingCo
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
 import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 
-/// @notice Regression gap tests: MEV/sandwich simulation on rebalance and extreme price scenarios.
-/// @dev These tests verify that the rebalance operation is resistant to sandwich-like
-///      value extraction and that the contract behaves correctly at extreme price ratios.
+/// @notice Regression gap tests: MEV/sandwich simulation on the `addLiquidity` recycle and extreme price scenarios.
+/// @dev These tests verify that the recycle (collect, burn both positions, re-mint both single-sided) is resistant to
+///      sandwich-like value extraction and that the contract behaves correctly at extreme price ratios.
 contract TestRegressionGaps is LPSplitHookV4TestBase {
     uint256 poolTokenId;
 
@@ -25,19 +25,21 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
     }
 
     // =========================================================================
-    // MEV / Sandwich Simulation on Rebalance
+    // MEV / Sandwich Simulation on the Recycle
     // =========================================================================
 
     // -----------------------------------------------------------------------
-    // 1. Rebalance conserves value: no tokens are created from thin air
+    // 1. Recycle conserves value: no tokens are created from thin air
     // -----------------------------------------------------------------------
 
-    /// @notice After a rebalance, the hook should not hold more tokens than it
+    /// @notice After a recycle, the hook should not hold more tokens than it
     ///         started with plus what the PositionManager returned. This ensures
-    ///         rebalance does not create value from nothing (sandwich attacker
+    ///         the recycle does not create value from nothing (sandwich attacker
     ///         could only extract value if there were surplus tokens).
-    function test_Rebalance_ConservesTokenBalances() public {
-        // Record balances before rebalance
+    function test_Recycle_ConservesTokenBalances() public {
+        _accumulateTokens(PROJECT_ID, 1e18);
+
+        // Record balances before the recycle
         uint256 hookProjectBefore = projectToken.balanceOf(address(hook));
         uint256 hookTerminalBefore = terminalToken.balanceOf(address(hook));
         uint256 pmProjectBefore = projectToken.balanceOf(address(positionManager));
@@ -46,13 +48,9 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         uint256 totalProjectBefore = hookProjectBefore + pmProjectBefore;
         uint256 totalTerminalBefore = hookTerminalBefore + pmTerminalBefore;
 
-        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
-        controller.setWeight(PROJECT_ID, 900e18);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
-        vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
-
-        // After rebalance: total system tokens (hook + PM) should not increase
+        // After the recycle: total system tokens (hook + PM) should not increase
         uint256 hookProjectAfter = projectToken.balanceOf(address(hook));
         uint256 hookTerminalAfter = terminalToken.balanceOf(address(hook));
         uint256 pmProjectAfter = projectToken.balanceOf(address(positionManager));
@@ -64,52 +62,53 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         assertLe(
             totalProjectAfter,
             totalProjectBefore,
-            "Total project tokens should not increase after rebalance (no value creation)"
+            "Total project tokens should not increase after a recycle (no value creation)"
         );
         assertLe(
             totalTerminalAfter,
             totalTerminalBefore,
-            "Total terminal tokens should not increase after rebalance (no value creation)"
+            "Total terminal tokens should not increase after a recycle (no value creation)"
         );
     }
 
     // -----------------------------------------------------------------------
-    // 2. Rebalance updates the position NFT atomically
+    // 2. Recycle updates the position NFTs atomically
     // -----------------------------------------------------------------------
 
-    /// @notice Rebalance must burn the old NFT and mint a new one in a single transaction.
+    /// @notice The recycle must burn the old NFT and mint its replacement in a single transaction.
     ///         A sandwich attacker cannot interfere between these steps since they happen
-    ///         within one tx. Verify the position ID changes and both operations occur.
-    function test_Rebalance_AtomicNFTSwap() public {
+    ///         within one tx. Verify the position ID changes, the old NFT is gone, and both operations occur.
+    function test_Recycle_AtomicNFTSwap() public {
         uint256 originalTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        assertEq(hook.bidTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "asks-only deploy holds no bid");
         uint256 burnCountBefore = positionManager.burnCallCount();
         uint256 mintCountBefore = positionManager.mintCallCount();
 
-        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
-        controller.setWeight(PROJECT_ID, 900e18);
-
-        vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
+        _accumulateTokens(PROJECT_ID, 1e18);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
         uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
 
-        // Both burn and mint must have occurred
+        // The single live position is burned and exactly one replacement is minted (no terminal to bid with).
         assertEq(positionManager.burnCallCount(), burnCountBefore + 1, "Burn must occur exactly once");
         assertEq(positionManager.mintCallCount(), mintCountBefore + 1, "Mint must occur exactly once");
+        (,,,,,, bool oldExists) = positionManager._positions(originalTokenId);
+        assertFalse(oldExists, "The old NFT must be burned, not orphaned");
 
         // The new token ID must differ from the old one
-        assertNotEq(newTokenId, originalTokenId, "Token ID must change after rebalance");
+        assertNotEq(newTokenId, originalTokenId, "Token ID must change after a recycle");
         assertNotEq(newTokenId, 0, "New token ID must be nonzero");
+        assertEq(hook.bidTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "no bid without terminal tokens");
     }
 
     // -----------------------------------------------------------------------
-    // 3. Rebalance with accrued fees: fees are routed before new position
+    // 3. Recycle with accrued fees: fees are routed before new positions
     // -----------------------------------------------------------------------
 
-    /// @notice When fees are accrued, rebalance should collect and route them
-    ///         before creating the new position. A sandwich attacker cannot
+    /// @notice When fees are accrued, the recycle should collect and route them
+    ///         before creating the new positions. A sandwich attacker cannot
     ///         front-run fee collection because it happens within the same tx.
-    function test_Rebalance_FeesRoutedBeforeNewPosition() public {
+    function test_Recycle_FeesRoutedBeforeNewPosition() public {
         // Configure collectable fees
         (address token0,) = _sortTokens(address(projectToken), address(terminalToken));
 
@@ -127,18 +126,12 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         );
 
         uint256 payCountBefore = terminal.payCallCount();
-        uint256 addToBalanceBefore = terminal.addToBalanceCallCount();
 
-        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
-        controller.setWeight(PROJECT_ID, 900e18);
+        _accumulateTokens(PROJECT_ID, 1e18);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
-        vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
-
-        // Verify fees were routed (either pay or addToBalance was called)
-        bool feesRouted =
-            (terminal.payCallCount() > payCountBefore) || (terminal.addToBalanceCallCount() > addToBalanceBefore);
-        assertTrue(feesRouted, "Fees should be collected and routed during rebalance");
+        // Verify the fee-project cut was paid out of the collected fees.
+        assertEq(terminal.payCallCount(), payCountBefore + 1, "Fees should be collected and routed during a recycle");
 
         // Verify a new position was still minted after fee routing
         uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
@@ -147,109 +140,91 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
     }
 
     // -----------------------------------------------------------------------
-    // 4. Rebalance requires authorization (sandwich attacker cannot trigger)
+    // 4. Consecutive recycles produce consistent state
     // -----------------------------------------------------------------------
 
-    /// @notice An unauthorized caller cannot trigger rebalance. This prevents
-    ///         a sandwich attacker from forcing a rebalance at a manipulated price.
-    function test_Rebalance_UnauthorizedCannotTrigger() public {
-        address attacker = makeAddr("sandwichAttacker");
-
-        vm.prank(attacker);
-        vm.expectRevert();
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
-    }
-
-    // -----------------------------------------------------------------------
-    // 5. Consecutive rebalances produce consistent state
-    // -----------------------------------------------------------------------
-
-    /// @notice Two consecutive rebalances should both succeed and produce valid
+    /// @notice Two consecutive recycles should both succeed and produce valid
     ///         state, ensuring no residual state corruption from the first.
-    function test_Rebalance_ConsecutiveRebalancesSucceed() public {
-        // Move the economic corridor (drop issuance ~10%) so the first rebalance clears its corridor-drift guard.
-        controller.setWeight(PROJECT_ID, 900e18);
-
-        // First rebalance
-        vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
+    function test_Recycle_ConsecutiveRecyclesSucceed() public {
+        // First recycle
+        _accumulateTokens(PROJECT_ID, 1e18);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
         uint256 tokenIdAfterFirst = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
-        assertNotEq(tokenIdAfterFirst, 0, "Token ID should be nonzero after first rebalance");
+        assertNotEq(tokenIdAfterFirst, 0, "Token ID should be nonzero after first recycle");
 
-        // Ensure PM has tokens for the second rebalance
+        // Ensure PM has tokens for the second recycle
         projectToken.mint(address(positionManager), 100e18);
         terminalToken.mint(address(positionManager), 100e18);
 
-        // Move the corridor again so the second rebalance also clears the drift guard.
-        controller.setWeight(PROJECT_ID, 800e18);
-
-        // Second rebalance
-        vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
+        // Second recycle
+        _accumulateTokens(PROJECT_ID, 1e18);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
         uint256 tokenIdAfterSecond = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
-        assertNotEq(tokenIdAfterSecond, 0, "Token ID should be nonzero after second rebalance");
-        assertNotEq(tokenIdAfterSecond, tokenIdAfterFirst, "Token ID should differ between consecutive rebalances");
+        assertNotEq(tokenIdAfterSecond, 0, "Token ID should be nonzero after second recycle");
+        assertNotEq(tokenIdAfterSecond, tokenIdAfterFirst, "Token ID should differ between consecutive recycles");
+        (,,,,,, bool firstExists) = positionManager._positions(tokenIdAfterFirst);
+        assertFalse(firstExists, "The first recycle's ask must be burned by the second");
     }
 
     // -----------------------------------------------------------------------
-    // 6. Rebalance with zero fees: no spurious fee routing
+    // 5. Recycle with zero fees: no spurious fee routing
     // -----------------------------------------------------------------------
 
-    /// @notice When no fees have accrued, rebalance should still succeed. The fee
-    ///         routing path (pay to fee project) should NOT be triggered, though
-    ///         addToBalance may still be called for leftover terminal tokens from
-    ///         the position mint/SWEEP cycle.
-    function test_Rebalance_ZeroFees_NoFeePayRouting() public {
+    /// @notice When no fees have accrued, the recycle should still succeed and the fee
+    ///         routing path (pay to fee project) should NOT be triggered: the recovered
+    ///         principal is never cut.
+    function test_Recycle_ZeroFees_NoFeePayRouting() public {
         // Ensure no fees are set (default is 0)
         positionManager.setCollectableFees(poolTokenId, 0, 0);
 
         uint256 payCountBefore = terminal.payCallCount();
 
-        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
-        controller.setWeight(PROJECT_ID, 900e18);
-
-        vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
+        _accumulateTokens(PROJECT_ID, 1e18);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
         // No fee routing via pay should have occurred (pay is only for fee project)
         assertEq(terminal.payCallCount(), payCountBefore, "No pay calls when zero fees");
 
         // Position should still be updated
         uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
-        assertNotEq(newTokenId, poolTokenId, "Position should still be rebalanced with zero fees");
+        assertNotEq(newTokenId, poolTokenId, "Position should still be recycled with zero fees");
     }
 
     // -----------------------------------------------------------------------
-    // 7. Rebalance with partial usage: leftover tokens handled correctly
+    // 6. Recycle with partial usage: leftover tokens handled correctly
     // -----------------------------------------------------------------------
 
     /// @notice When the PositionManager uses less than 100% of provided tokens
-    ///         (simulating a price-shifted rebalance), leftover tokens should be
-    ///         properly handled: terminal-token leftovers are returned to the project balance and project-token
-    ///         leftovers are carried into the accumulation ledger (the hook never burns).
-    function test_Rebalance_PartialUsage_LeftoversHandled() public {
+    ///         (simulating a price-shifted mint), project-token leftovers are carried back into the
+    ///         accumulation ledger (the hook never burns and never routes them to the treasury).
+    function test_Recycle_PartialUsage_LeftoversHandled() public {
         // Set PM to only use 50% of provided amounts
         positionManager.setUsagePercent(5000);
 
+        // Remove setUp's spare PositionManager funding: the mock's SWEEP would hand it to the hook as surplus,
+        // masking how much the mint consumed.
+        vm.startPrank(address(positionManager));
+        // forge-lint: disable-next-line(erc20-unchecked-transfer)
+        projectToken.transfer(address(0xdead), 100e18);
+        // forge-lint: disable-next-line(erc20-unchecked-transfer)
+        terminalToken.transfer(address(0xdead), 100e18);
+        vm.stopPrank();
+
         uint256 addToBalanceBefore = terminal.addToBalanceCallCount();
-        uint256 accumulatedBefore = hook.accumulatedProjectTokens(PROJECT_ID);
 
-        // Move the economic corridor (drop issuance ~10%) so the rebalance clears its corridor-drift guard.
-        controller.setWeight(PROJECT_ID, 900e18);
+        // The recycle re-mints the recovered 100e18 ask principal plus the 1e18 newly accumulated.
+        _accumulateTokens(PROJECT_ID, 1e18);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
-        vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
-
-        // Either terminal-token leftovers were returned to balance or project-token leftovers were accumulated.
-        bool leftoversHandled = (terminal.addToBalanceCallCount() > addToBalanceBefore)
-            || (hook.accumulatedProjectTokens(PROJECT_ID) > accumulatedBefore);
-        assertTrue(leftoversHandled, "Leftover tokens should be handled after partial usage rebalance");
+        // Exactly the unconsumed half is carried back to the ledger; nothing is routed to the project balance.
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 50.5e18, "Unconsumed project tokens return to the ledger");
+        assertEq(terminal.addToBalanceCallCount(), addToBalanceBefore, "Leftovers are never added to balance");
 
         // Position should still be valid
         uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
-        assertNotEq(newTokenId, 0, "Position should exist after partial-usage rebalance");
+        assertNotEq(newTokenId, 0, "Position should exist after partial-usage recycle");
     }
 
     // =========================================================================
@@ -368,7 +343,9 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(fullRangeProject);
 
-        assertNotEq(hook.askTokenIdOf(fullRangeProject, address(terminalToken)), 0, "a single-sided position should mint");
+        assertNotEq(
+            hook.askTokenIdOf(fullRangeProject, address(terminalToken)), 0, "a single-sided position should mint"
+        );
         assertEq(terminal.cashOutCallCount(), 0, "deployPool must never call cashOutTokensOf");
     }
 
@@ -456,27 +433,27 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
     }
 
     // -----------------------------------------------------------------------
-    // 14. Rebalance after extreme weight change (price shift)
+    // 14. Recycle after extreme weight change (price shift)
     // -----------------------------------------------------------------------
 
     /// @notice After deployment at one weight, changing the weight drastically
-    ///         and rebalancing should succeed. This simulates a project that
+    ///         and recycling should succeed. This simulates a project that
     ///         has gone through many ruleset cycles with weight decay.
-    function test_ExtremePrice_RebalanceAfterWeightChange() public {
+    function test_ExtremePrice_RecycleAfterWeightChange() public {
         // The pool was deployed at DEFAULT_WEIGHT (1000e18) in setUp.
         // Change weight to something very different.
         controller.setWeight(PROJECT_ID, 1e18);
 
-        // Ensure PM has tokens for the rebalance
+        // Ensure PM has tokens for the recycle
         projectToken.mint(address(positionManager), 100e18);
         terminalToken.mint(address(positionManager), 100e18);
 
-        vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
+        _accumulateTokens(PROJECT_ID, 1e18);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
         uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
-        assertNotEq(newTokenId, 0, "Rebalance should succeed after weight change");
-        assertNotEq(newTokenId, poolTokenId, "Token ID should change after rebalance");
+        assertNotEq(newTokenId, 0, "Recycle should succeed after weight change");
+        assertNotEq(newTokenId, poolTokenId, "Token ID should change after a recycle");
     }
 
     // -----------------------------------------------------------------------
@@ -525,12 +502,12 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
     }
 
     // -----------------------------------------------------------------------
-    // 17. Rebalance with very high surplus (tick bounds close together)
+    // 17. Recycle with very high surplus (tick bounds close together)
     // -----------------------------------------------------------------------
 
     /// @notice With issuance rate close to cash-out rate, tick bounds are very
-    ///         narrow. Rebalance should handle narrow ranges correctly.
-    function test_ExtremePrice_NarrowTickRange_Rebalance() public {
+    ///         narrow. The recycle should handle narrow ranges correctly.
+    function test_ExtremePrice_NarrowTickRange_Recycle() public {
         // Set surplus very close to the issuance price (high surplus = narrow spread)
         // The issuance rate at weight=1000e18 is 1000 tokens per terminal token.
         // If surplus gives 999 tokens per terminal token, the spread is tiny.
@@ -541,11 +518,11 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         projectToken.mint(address(positionManager), 100e18);
         terminalToken.mint(address(positionManager), 100e18);
 
-        vm.prank(owner);
-        hook.rebalanceLiquidity(PROJECT_ID, address(terminalToken));
+        _accumulateTokens(PROJECT_ID, 1e18);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
         uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
-        assertNotEq(newTokenId, 0, "Rebalance should succeed with narrow tick range");
+        assertNotEq(newTokenId, 0, "Recycle should succeed with narrow tick range");
     }
 
     // =========================================================================
