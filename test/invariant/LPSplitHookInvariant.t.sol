@@ -77,9 +77,19 @@ contract LPSplitHookHandler is Test {
     /// @dev Ghost variable: number of successful collectAndRouteLPFees calls.
     uint256 public collectFeeCallCount;
 
-    /// @dev Ghost variable: cumulative fee tokens credited to each project via _routeFeesToProject.
-    ///      Tracked by observing claimableFeeTokens delta after each collectAndRouteLPFees call.
-    mapping(uint256 projectId => uint256 totalFeeTokensCredited) public totalFeeTokensCredited;
+    /// @dev The fee percent the hook is initialized with, and its basis.
+    uint256 public constant FEE_PERCENT = 3800;
+    uint256 public constant BPS = 10_000;
+
+    /// @dev Ghost variable: fee-project claims each project must hold, derived ONLY from the fees the handler injected:
+    ///      every collected terminal-side fee pays a cut of `fee * FEE_PERCENT / BPS` to the fee project's terminal,
+    ///      whose mock `pay` mints the beneficiary 1:1. The project-side cut is always forgiven (the fee project has no
+    ///      terminal for the project token here). Never read back from the hook's own claim ledger.
+    mapping(uint256 projectId => uint256 amount) public expectedClaims;
+
+    /// @dev Ghost variable: expected claims from injected fees not yet collected (moved into `expectedClaims` by the
+    ///      next successful collection or recycle of the project, which collects every live position).
+    mapping(uint256 projectId => uint256 amount) public pendingExpectedClaims;
 
     /// @dev Ghost variable: gross project-token / terminal-token LP fees injected into each project's positions.
     mapping(uint256 projectId => uint256 amount) public projectFeesInjected;
@@ -187,74 +197,78 @@ contract LPSplitHookHandler is Test {
         }
     }
 
-    /// @notice Collect LP fees from a project's live position and route them.
-    /// @dev Only runs if a position is live. Fees are injected on the ask (or the bid when no ask is live).
-    /// @param projectIdSeed Fuzzed seed, reduced to valid project ID range.
-    /// @param feeAmount0Seed Fuzzed seed for configuring collectable fee amount0.
-    /// @param feeAmount1Seed Fuzzed seed for configuring collectable fee amount1.
-    // forge-lint: disable-next-line(mixed-case-function)
-    function collectAndRouteLPFees(uint256 projectIdSeed, uint256 feeAmount0Seed, uint256 feeAmount1Seed) external {
+    /// @notice Inject distinct collectable LP fees into a project's live ask AND bid (each position skipped while it
+    /// still holds uncollected fees, so the ghosts stay exact per position).
+    function injectFees(
+        uint256 projectIdSeed,
+        uint256 askFee0Seed,
+        uint256 askFee1Seed,
+        uint256 bidFee0Seed,
+        uint256 bidFee1Seed
+    )
+        external
+    {
         uint256 projectId = bound(projectIdSeed, 1, MAX_PROJECT_ID);
+        _injectFee(projectId, hook.askTokenIdOf(projectId, address(terminalToken)), askFee0Seed, askFee1Seed);
+        _injectFee(projectId, hook.bidTokenIdOf(projectId, address(terminalToken)), bidFee0Seed, bidFee1Seed);
+    }
 
-        uint256 tokenId = hook.askTokenIdOf(projectId, address(terminalToken));
-        if (tokenId == 0) tokenId = hook.bidTokenIdOf(projectId, address(terminalToken));
+    function _injectFee(uint256 projectId, uint256 tokenId, uint256 fee0Seed, uint256 fee1Seed) internal {
         if (tokenId == 0) return;
-
-        // Bound fee amounts to realistic range [0, 1e24] to avoid overflow. Skip positions that already hold
-        // uncollected fees so the injection ghosts stay exact.
         if (positionManager.collectableAmount0(tokenId) != 0 || positionManager.collectableAmount1(tokenId) != 0) {
             return;
         }
-        uint256 feeAmount0 = bound(feeAmount0Seed, 0, 1e24);
-        uint256 feeAmount1 = bound(feeAmount1Seed, 0, 1e24);
+        // Bound fee amounts to realistic range [0, 1e24] to avoid overflow.
+        uint256 fee0 = bound(fee0Seed, 0, 1e24);
+        uint256 fee1 = bound(fee1Seed, 0, 1e24);
+        positionManager.setCollectableFees(tokenId, fee0, fee1);
 
-        // Configure collectable fees on the mock position manager.
-        positionManager.setCollectableFees(tokenId, feeAmount0, feeAmount1);
-
-        // Mint each fee to the position manager in its pool currency so it can transfer them on TAKE_PAIR.
+        // Fund the position manager in each pool currency so it can pay the fees on TAKE_PAIR.
         bool projectIsToken0 = address(projectToken) < address(terminalToken);
-        (uint256 projectFee, uint256 terminalFee) =
-            projectIsToken0 ? (feeAmount0, feeAmount1) : (feeAmount1, feeAmount0);
+        (uint256 projectFee, uint256 terminalFee) = projectIsToken0 ? (fee0, fee1) : (fee1, fee0);
         projectToken.mint(address(positionManager), projectFee);
         terminalToken.mint(address(positionManager), terminalFee);
         projectFeesInjected[projectId] += projectFee;
         terminalFeesInjected[projectId] += terminalFee;
+        pendingExpectedClaims[projectId] += (terminalFee * FEE_PERCENT) / BPS;
+    }
 
-        // Snapshot claimableFeeTokens before to track the delta.
-        uint256 claimableBefore = hook.claimableFeeTokens(projectId);
+    /// @notice A successful collection or recycle collected every live position's injected fees.
+    function _settleCollectedFees(uint256 projectId) internal {
+        expectedClaims[projectId] += pendingExpectedClaims[projectId];
+        pendingExpectedClaims[projectId] = 0;
+    }
 
-        // Call collectAndRouteLPFees — permissionless, anyone can call.
+    /// @notice Collect LP fees from a project's live ask and bid and route them. Permissionless.
+    /// @param projectIdSeed Fuzzed seed, reduced to valid project ID range.
+    // forge-lint: disable-next-line(mixed-case-function)
+    function collectAndRouteLPFees(uint256 projectIdSeed) external {
+        uint256 projectId = bound(projectIdSeed, 1, MAX_PROJECT_ID);
+        if (hook.askTokenIdOf(projectId, address(terminalToken)) == 0) {
+            if (hook.bidTokenIdOf(projectId, address(terminalToken)) == 0) return;
+        }
+
         try hook.collectAndRouteLPFees(projectId, address(terminalToken)) {
-            // Track fee token credit delta.
-            uint256 claimableAfter = hook.claimableFeeTokens(projectId);
-            if (claimableAfter > claimableBefore) {
-                totalFeeTokensCredited[projectId] += claimableAfter - claimableBefore;
-            }
+            _settleCollectedFees(projectId);
             collectFeeCallCount++;
         } catch {
-            // Revert is acceptable — e.g., if token ordering causes issues in the mock.
+            // Revert is acceptable here; the injected fees stay collectable for a later call.
         }
     }
 
     /// @notice Recycle a project's positions (collect fees, burn ask and bid, re-mint both single-sided).
-    /// @dev Permissionless. Uses try/catch since the recycle can revert (e.g. accumulation below threshold).
+    /// @dev Permissionless. Uses try/catch since the recycle can revert (e.g. NoDeployableLiquidityAtSpot).
     /// @param projectIdSeed Fuzzed seed, reduced to valid project ID range.
     function addLiquidity(uint256 projectIdSeed) external {
         uint256 projectId = bound(projectIdSeed, 1, MAX_PROJECT_ID);
         if (!hook.hasDeployedPool(projectId)) return;
 
-        // Snapshot claimableFeeTokens before to track fee collection during the recycle.
-        uint256 claimableBefore = hook.claimableFeeTokens(projectId);
-
         try hook.addLiquidity(projectId, address(terminalToken)) {
-            // Track fee token credit delta (the recycle collects fees from both positions first).
-            uint256 claimableAfter = hook.claimableFeeTokens(projectId);
-            if (claimableAfter > claimableBefore) {
-                totalFeeTokensCredited[projectId] += claimableAfter - claimableBefore;
-            }
+            // The recycle collected both positions' fees before burning them.
+            _settleCollectedFees(projectId);
             recycleCallCount++;
         } catch {
-            // Revert is expected in many cases, e.g. NoDeployableLiquidityAtSpot or a TWAP deviation.
+            // Revert is expected in some cases, e.g. NoDeployableLiquidityAtSpot or a TWAP deviation.
         }
     }
 }
@@ -266,8 +280,9 @@ contract LPSplitHookHandler is Test {
 ///   3. accumulatedProjectTokens[projectId] == sum of all amounts passed to processSplitWith before deployment
 ///      (cross-checked against ghost variable)
 ///   4. each project's ledgers plus its positions' principal never exceed what entered its books
-///   5. claimableFeeTokens is bounded by fee collection
+///   5. claimableFeeTokens equals the claims derived independently from the injected fees (cut and payout)
 ///   6. at most two positions per project are alive, and every live position is a tracked ask or bid
+///   7. every campaign includes a successful deploy, fee collection and recycle (seeded in setUp)
 contract LPSplitHookInvariantTest is StdInvariant, Test {
     JBUniswapV4LPSplitHook public hook;
     LPSplitHookHandler public handler;
@@ -368,8 +383,27 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
         // Deploy the handler
         handler = new LPSplitHookHandler(hook, projectToken, terminalToken, controller, positionManager, owner);
 
+        // Seed one successful deploy, fee collection and recycle so every campaign starts from real activity (and a
+        // live ask plus bid), and so the activity invariant can require it.
+        _seedActivity();
+
         // Target only the handler for invariant fuzzing
         targetContract(address(handler));
+    }
+
+    /// @notice Project 1: accumulate, deploy, inject fees on the ask, collect them (the terminal remainder funds the
+    /// bid ledger), and recycle into a live ask and bid.
+    function _seedActivity() internal {
+        handler.accumulate(1, 10e18);
+        handler.deployPool(1);
+        assertEq(handler.deployCallCount(), 1, "seed: deploy must succeed");
+        handler.injectFees(1, 3e18, 5e18, 0, 0);
+        handler.collectAndRouteLPFees(1);
+        assertEq(handler.collectFeeCallCount(), 1, "seed: fee collection must succeed");
+        handler.addLiquidity(1);
+        assertEq(handler.recycleCallCount(), 1, "seed: recycle must succeed");
+        assertNotEq(hook.askTokenIdOf(1, address(terminalToken)), 0, "seed: ask live");
+        assertNotEq(hook.bidTokenIdOf(1, address(terminalToken)), 0, "seed: bid live");
     }
 
     // ─── Setup Helpers
@@ -415,6 +449,112 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
                 token: address(terminalToken), decimals: 18, currency: uint32(uint160(address(terminalToken)))
             })
         );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Deterministic: fees on BOTH live positions, collected standalone and by a recycle
+    // ═══════════════════════════════════════════════════════════════════════
+
+    function _sides(uint256 tokenId) internal view returns (uint256 projectSide, uint256 terminalSide) {
+        (,,,, uint256 locked0, uint256 locked1,) = positionManager._positions(tokenId);
+        (projectSide, terminalSide) =
+            address(projectToken) < address(terminalToken) ? (locked0, locked1) : (locked1, locked0);
+    }
+
+    function _cut(uint256 amount) internal pure returns (uint256) {
+        return (amount * FEE_PERCENT) / 10_000;
+    }
+
+    /// @notice Distinct fees on the live ask and bid are each cut exactly (terminal side paid, project side forgiven)
+    ///         by a standalone collection that leaves both positions' principal untouched; a second round of distinct
+    ///         fees is then collected by a recycle with zero new accumulation, which folds every remainder and both
+    ///         positions' principal into the fresh ask and bid. Claims stay exactly backed throughout.
+    function test_bothPositionsFees_collectThenRecycleWithoutNewTokens() public {
+        uint256 askId = hook.askTokenIdOf(1, address(terminalToken));
+        uint256 bidId = hook.bidTokenIdOf(1, address(terminalToken));
+        (uint256 askProject, uint256 askTerminal) = _sides(askId);
+        (uint256 bidProject, uint256 bidTerminal) = _sides(bidId);
+        assertGt(askProject, 0, "precondition: the ask holds project principal");
+        assertGt(bidTerminal, 0, "precondition: the bid holds terminal principal");
+        uint256 projectLedger = hook.accumulatedProjectTokens(1);
+        uint256 terminalLedger = hook.accumulatedTerminalTokens(1, address(terminalToken));
+        uint256 claims = hook.claimableFeeTokens(1);
+
+        // Round 1: distinct fees on both ids, collected standalone.
+        bool projectIsToken0 = address(projectToken) < address(terminalToken);
+        uint256[4] memory fees = [uint256(1.1e18), 2.3e18, 0.7e18, 4.9e18]; // ask project, ask terminal, bid ...
+        handler.injectFees(
+            1,
+            projectIsToken0 ? fees[0] : fees[1],
+            projectIsToken0 ? fees[1] : fees[0],
+            projectIsToken0 ? fees[2] : fees[3],
+            projectIsToken0 ? fees[3] : fees[2]
+        );
+        uint256 payCalls = terminal.payCallCount();
+        handler.collectAndRouteLPFees(1);
+        assertEq(handler.collectFeeCallCount(), 2, "standalone collection succeeded");
+
+        assertEq(terminal.payCallCount(), payCalls + 2, "one terminal-side cut paid per position");
+        uint256 cuts = _cut(fees[1]) + _cut(fees[3]);
+        assertEq(hook.claimableFeeTokens(1), claims + cuts, "claims equal the two terminal-side cuts");
+        assertEq(hook.accumulatedProjectTokens(1), projectLedger + fees[0] + fees[2], "project fees forgiven in full");
+        assertEq(
+            hook.accumulatedTerminalTokens(1, address(terminalToken)),
+            terminalLedger + fees[1] + fees[3] - cuts,
+            "terminal remainders ledgered"
+        );
+        assertEq(hook.askTokenIdOf(1, address(terminalToken)), askId, "collection keeps the ask");
+        assertEq(hook.bidTokenIdOf(1, address(terminalToken)), bidId, "collection keeps the bid");
+        (uint256 p, uint256 t) = _sides(askId);
+        assertEq(p + t, askProject + askTerminal, "ask principal untouched");
+        (p, t) = _sides(bidId);
+        assertEq(p + t, bidProject + bidTerminal, "bid principal untouched");
+
+        // Round 2: new distinct fees, collected by a recycle with no new reserved tokens.
+        uint256[4] memory fees2 = [uint256(0.3e18), 1.9e18, 2.2e18, 0.6e18];
+        handler.injectFees(
+            1,
+            projectIsToken0 ? fees2[0] : fees2[1],
+            projectIsToken0 ? fees2[1] : fees2[0],
+            projectIsToken0 ? fees2[2] : fees2[3],
+            projectIsToken0 ? fees2[3] : fees2[2]
+        );
+        uint256 accumulatedBefore = hook.accumulatedProjectTokens(1);
+        uint256 terminalBefore = hook.accumulatedTerminalTokens(1, address(terminalToken));
+        uint256 cuts2 = _cut(fees2[1]) + _cut(fees2[3]);
+        handler.addLiquidity(1);
+        assertEq(handler.recycleCallCount(), 2, "the zero-accumulation recycle succeeded");
+
+        assertEq(hook.claimableFeeTokens(1), claims + cuts + cuts2, "the recycle cut both positions' fees exactly");
+        uint256 newAsk = hook.askTokenIdOf(1, address(terminalToken));
+        uint256 newBid = hook.bidTokenIdOf(1, address(terminalToken));
+        assertTrue(newAsk != askId && newAsk != bidId && newAsk != 0, "fresh ask");
+        assertTrue(newBid != askId && newBid != bidId && newBid != 0 && newBid != newAsk, "fresh bid");
+        (uint256 newAskProject, uint256 newAskTerminal) = _sides(newAsk);
+        (uint256 newBidProject, uint256 newBidTerminal) = _sides(newBid);
+        assertEq(newAskTerminal, 0, "the ask holds no terminal");
+        assertEq(newBidProject, 0, "the bid holds no project token");
+        assertEq(
+            newAskProject + hook.accumulatedProjectTokens(1),
+            askProject + bidProject + accumulatedBefore + fees2[0] + fees2[2],
+            "every project token (principal + ledger + forgiven fees) is in the ask or its ledger"
+        );
+        assertEq(
+            newBidTerminal + hook.accumulatedTerminalTokens(1, address(terminalToken)),
+            askTerminal + bidTerminal + terminalBefore + fees2[1] + fees2[3] - cuts2,
+            "every terminal token (principal + ledger + fee remainders) is in the bid or its ledger"
+        );
+
+        // Claim backing and segregation: the hook holds exactly its ledgers plus the fee-token claims.
+        uint256 projectBooks;
+        uint256 terminalBooks;
+        for (uint256 i = 1; i <= handler.MAX_PROJECT_ID(); i++) {
+            projectBooks += hook.accumulatedProjectTokens(i) + hook.claimableFeeTokens(i);
+            terminalBooks += hook.accumulatedTerminalTokens(i, address(terminalToken));
+        }
+        assertEq(projectToken.balanceOf(address(hook)), projectBooks, "project ledgers plus claims exactly backed");
+        assertEq(terminalToken.balanceOf(address(hook)), terminalBooks, "terminal ledgers exactly backed");
+        assertEq(handler.expectedClaims(1), hook.claimableFeeTokens(1), "handler ghost agrees");
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -516,28 +656,29 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
                 handler.totalMintedToHook(i) + handler.projectFeesInjected(i),
                 "INVARIANT VIOLATED: per-project project-token books exceed what entered them"
             );
+            // Every expected claim was minted 1:1 for a terminal-side cut that left the project's books.
             assertLe(
                 terminalBooks,
-                handler.terminalFeesInjected(i),
-                "INVARIANT VIOLATED: per-project terminal-token books exceed fees injected"
+                handler.terminalFeesInjected(i) - handler.expectedClaims(i),
+                "INVARIANT VIOLATED: per-project terminal-token books exceed fees injected net of paid cuts"
             );
         }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Invariant 5: Fee accounting — claimableFeeTokens bounded by collections
+    // Invariant 5: Fee accounting — claimableFeeTokens equals the derived claims
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice For each project, claimableFeeTokens must be bounded by what has been
-    ///         credited through fee collection (ghost variable cross-check).
-    /// @dev This catches any scenario where claimableFeeTokens is incremented without
-    ///      a corresponding fee collection from the LP position.
-    function invariant_feeAccountingBounded() public view {
+    /// @notice For each project, claimableFeeTokens must equal the claims derived independently from the injected
+    ///         fees: `terminalFee * FEE_PERCENT / BPS` per collected terminal-side fee, minted 1:1 by the mock fee
+    ///         terminal, and nothing for the (forgiven) project side.
+    /// @dev Catches over- and under-crediting during collection, and any claim credited without a collected fee.
+    function invariant_feeClaimsMatchInjectedFees() public view {
         for (uint256 i = 1; i <= handler.MAX_PROJECT_ID(); i++) {
-            assertLe(
+            assertEq(
                 hook.claimableFeeTokens(i),
-                handler.totalFeeTokensCredited(i),
-                "INVARIANT VIOLATED: claimableFeeTokens exceeds total credited via fee collection"
+                handler.expectedClaims(i),
+                "INVARIANT VIOLATED: claimableFeeTokens differs from the claims the collected fees justify"
             );
         }
     }
@@ -584,15 +725,15 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Post-run stats for debugging
+    // Invariant 7: Real successful activity
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice Log how many calls the handler executed (useful for tuning depth/runs).
-    function invariant_callSummary() public view {
-        // This invariant always passes — it exists to surface coverage stats in traces.
-        assertGe(handler.callCount(), 0, "callCount should be non-negative");
-        assertGe(handler.collectFeeCallCount(), 0, "collectFeeCallCount should be non-negative");
-        assertGe(handler.deployCallCount(), 0, "deployCallCount should be non-negative");
-        assertGe(handler.recycleCallCount(), 0, "recycleCallCount should be non-negative");
+    /// @notice Every campaign has real successful activity: the seeded deploy, collection and recycle (handler
+    ///         counters only count calls that did not revert), so the other invariants never pass vacuously.
+    function invariant_successfulActivity() public view {
+        assertGt(handler.callCount(), 0, "no successful accumulation");
+        assertGt(handler.collectFeeCallCount(), 0, "no successful fee collection");
+        assertGt(handler.deployCallCount(), 0, "no successful deploy");
+        assertGt(handler.recycleCallCount(), 0, "no successful recycle");
     }
 }

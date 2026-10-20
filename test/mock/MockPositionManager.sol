@@ -8,6 +8,7 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {Currency, CurrencyLibrary} from "@uniswap/v4-core/src/types/Currency.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {Actions} from "@uniswap/v4-periphery/src/libraries/Actions.sol";
+import {SlippageCheck} from "@uniswap/v4-periphery/src/libraries/SlippageCheck.sol";
 import {PositionInfo, PositionInfoLibrary} from "@uniswap/v4-periphery/src/libraries/PositionInfoLibrary.sol";
 import {MockPoolManager} from "./MockPoolManager.sol";
 
@@ -15,9 +16,10 @@ import {MockPoolManager} from "./MockPoolManager.sol";
 /// @dev Simulates modifyLiquidities with realistic token flows:
 ///      - MINT_POSITION records how many tokens the position requires
 ///      - SETTLE pulls tokens from the caller (enforcing approval + balance)
-///      - BURN_POSITION / DECREASE_LIQUIDITY track owed amounts for TAKE_PAIR
-///      - TAKE_PAIR transfers owed + fee amounts to the recipient
-///      - SWEEP returns any leftover tokens held by this contract
+///      - BURN_POSITION / DECREASE_LIQUIDITY record their minimums, enforce them against the principal removed (fees
+///        excluded, like V4's `validateMinOut`) and track owed amounts for TAKE_PAIR
+///      - TAKE_PAIR transfers owed + fee amounts to the recipient, reverting when the unlocked balance cannot pay
+///      - SWEEP returns only the native value this call sent but did not use (ERC-20s are pulled exactly)
 contract MockPositionManager {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
@@ -57,8 +59,12 @@ contract MockPositionManager {
     uint256 public decreaseLiquidityCallCount;
     uint256 public lastMintTokenId;
 
-    // Tokens locked in the "pool" (simulates PoolManager holding them).
-    // SWEEP should not return these — only excess above poolLocked is sweepable.
+    // Minimums the last BURN_POSITION / DECREASE_LIQUIDITY of each tokenId was called with.
+    mapping(uint256 tokenId => uint128) public lastMin0Of;
+    mapping(uint256 tokenId => uint128) public lastMin1Of;
+
+    // Tokens locked in positions (simulates PoolManager holding them). TAKE_PAIR only pays out of the balance above
+    // this, so an unfunded fee or principal reverts instead of being paid from another position's stock.
     mapping(address token => uint256) public poolLocked;
 
     // --- Per-modifyLiquidities transient state ---
@@ -73,6 +79,8 @@ contract MockPositionManager {
     uint256 private _pendingSettle1;
     Currency private _settleCurrency0;
     Currency private _settleCurrency1;
+    // Native value sent with this call and not yet consumed by a mint/increase (what SWEEP may return).
+    uint256 private _nativeCredit;
 
     function setPoolManager(MockPoolManager pm) external {
         poolManager = pm;
@@ -94,6 +102,25 @@ contract MockPositionManager {
             revert("token not in pool");
         }
         poolLocked[token] += amount;
+    }
+
+    /// @notice Test helper: overwrite a live position's recorded principal (e.g. to mark it to a moved price or to
+    /// return slightly less than a burn floor). The caller keeps this contract's balances backing the new amounts.
+    function setPositionPrincipal(uint256 tokenId, uint256 amount0, uint256 amount1) external {
+        Position storage pos = _positions[tokenId];
+        require(pos.exists, "Position does not exist");
+        address token0 = Currency.unwrap(pos.poolKey.currency0);
+        address token1 = Currency.unwrap(pos.poolKey.currency1);
+        poolLocked[token0] = poolLocked[token0] - pos.amount0Locked + amount0;
+        poolLocked[token1] = poolLocked[token1] - pos.amount1Locked + amount1;
+        pos.amount0Locked = amount0;
+        pos.amount1Locked = amount1;
+    }
+
+    /// @notice Test helper: overwrite a live position's liquidity.
+    function setPositionLiquidity(uint256 tokenId, uint128 liquidity) external {
+        require(_positions[tokenId].exists, "Position does not exist");
+        _positions[tokenId].liquidity = liquidity;
     }
 
     function setUsagePercent(uint256 percent) external {
@@ -160,6 +187,7 @@ contract MockPositionManager {
         _pendingOwed1 = 0;
         _pendingSettle0 = 0;
         _pendingSettle1 = 0;
+        _nativeCredit = msg.value;
 
         (bytes memory actions, bytes[] memory params) = abi.decode(unlockData, (bytes, bytes[]));
 
@@ -211,9 +239,10 @@ contract MockPositionManager {
             poolKey: key,
             tickLower: tickLower,
             tickUpper: tickUpper,
+            // The position holds liquidity in proportion to what it used, so its principal and burn floor agree.
             // Safe: test mock; values in tests always fit in target type.
             // forge-lint: disable-next-line(unsafe-typecast)
-            liquidity: uint128(liquidity),
+            liquidity: uint128((liquidity * usagePercent) / 10_000),
             amount0Locked: amount0Used,
             amount1Locked: amount1Used,
             exists: true
@@ -225,11 +254,12 @@ contract MockPositionManager {
         _settleCurrency0 = key.currency0;
         _settleCurrency1 = key.currency1;
 
-        // Lock the used amounts in the "pool" so SWEEP doesn't return them.
+        // Lock the used amounts in the "pool".
         address token0 = Currency.unwrap(key.currency0);
         address token1 = Currency.unwrap(key.currency1);
         poolLocked[token0] += amount0Used;
         poolLocked[token1] += amount1Used;
+        _consumeNative(key, amount0Used, amount1Used);
     }
 
     function _handleIncreaseLiquidity(bytes memory data) internal {
@@ -250,7 +280,7 @@ contract MockPositionManager {
         Position storage position = _positions[tokenId];
         // Safe: test mock; values in tests always fit in target type.
         // forge-lint: disable-next-line(unsafe-typecast)
-        position.liquidity += uint128(liquidity);
+        position.liquidity += uint128((liquidity * usagePercent) / 10_000);
         position.amount0Locked += amount0Used;
         position.amount1Locked += amount1Used;
 
@@ -260,9 +290,36 @@ contract MockPositionManager {
         _settleCurrency0 = position.poolKey.currency0;
         _settleCurrency1 = position.poolKey.currency1;
 
-        // Lock the used amounts in the "pool" so SWEEP doesn't return them.
+        // Lock the used amounts in the "pool".
         poolLocked[Currency.unwrap(position.poolKey.currency0)] += amount0Used;
         poolLocked[Currency.unwrap(position.poolKey.currency1)] += amount1Used;
+        _consumeNative(position.poolKey, amount0Used, amount1Used);
+    }
+
+    /// @dev Native liquidity is paid with the call's value; using more than was sent fails like V4's settle would.
+    function _consumeNative(PoolKey memory key, uint256 amount0Used, uint256 amount1Used) internal {
+        uint256 nativeUsed;
+        if (key.currency0.isAddressZero()) nativeUsed += amount0Used;
+        if (key.currency1.isAddressZero()) nativeUsed += amount1Used;
+        require(nativeUsed <= _nativeCredit, "native underpaid");
+        _nativeCredit -= nativeUsed;
+    }
+
+    /// @dev Mirrors V4's `SlippageCheck.validateMinOut` on the principal removed (fees excluded).
+    function _validateMinOut(
+        uint256 principal0,
+        uint256 principal1,
+        uint128 amount0Min,
+        uint128 amount1Min
+    )
+        internal
+        pure
+    {
+        // Safe: test mock; principal fits uint128 in every fixture.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        if (principal0 < amount0Min) revert SlippageCheck.MinimumAmountInsufficient(amount0Min, uint128(principal0));
+        // forge-lint: disable-next-line(unsafe-typecast)
+        if (principal1 < amount1Min) revert SlippageCheck.MinimumAmountInsufficient(amount1Min, uint128(principal1));
     }
 
     function _handleBurn(bytes memory data) internal {
@@ -271,14 +328,15 @@ contract MockPositionManager {
             uint128 amount0Min,
             uint128 amount1Min, /* hookData */
         ) = abi.decode(data, (uint256, uint128, uint128, bytes));
-        amount0Min; // Silence unused variable warning.
-        amount1Min; // Silence unused variable warning.
 
         burnCallCount++;
         Position storage pos = _positions[tokenId];
         require(pos.exists, "Position does not exist");
+        lastMin0Of[tokenId] = amount0Min;
+        lastMin1Of[tokenId] = amount1Min;
+        _validateMinOut(pos.amount0Locked, pos.amount1Locked, amount0Min, amount1Min);
 
-        // Unlock the locked amounts from the "pool" back to PM's sweepable balance.
+        // Unlock the locked amounts from the "pool" so TAKE_PAIR can pay them out.
         address token0 = Currency.unwrap(pos.poolKey.currency0);
         address token1 = Currency.unwrap(pos.poolKey.currency1);
         poolLocked[token0] -= pos.amount0Locked;
@@ -306,13 +364,13 @@ contract MockPositionManager {
             uint128 amount0Min,
             uint128 amount1Min, /* hookData */
         ) = abi.decode(data, (uint256, uint256, uint128, uint128, bytes));
-        amount0Min; // Silence unused variable warning.
-        amount1Min; // Silence unused variable warning.
 
         decreaseLiquidityCallCount++;
 
         Position storage pos = _positions[tokenId];
         require(pos.exists, "Position does not exist");
+        lastMin0Of[tokenId] = amount0Min;
+        lastMin1Of[tokenId] = amount1Min;
 
         _pendingCurrency0 = pos.poolKey.currency0;
         _pendingCurrency1 = pos.poolKey.currency1;
@@ -332,6 +390,7 @@ contract MockPositionManager {
                 // forge-lint: disable-next-line(unsafe-typecast)
                 fraction1 = (pos.amount1Locked * uint128(liquidity)) / pos.liquidity;
             }
+            _validateMinOut(fraction0, fraction1, amount0Min, amount1Min);
             _pendingOwed0 += fraction0;
             _pendingOwed1 += fraction1;
             pos.amount0Locked -= fraction0;
@@ -350,6 +409,9 @@ contract MockPositionManager {
                 // forge-lint: disable-next-line(unsafe-typecast)
                 pos.liquidity -= uint128(liquidity);
             }
+        } else {
+            // Collect-only: no principal is removed, so any nonzero minimum fails.
+            _validateMinOut(0, 0, amount0Min, amount1Min);
         }
 
         // Fees are always owed regardless of liquidity amount (0 = collect-only).
@@ -367,37 +429,24 @@ contract MockPositionManager {
         _pendingOwed0 = 0;
         _pendingOwed1 = 0;
 
-        // Transfer owed amounts to the recipient.
-        if (owed0 > 0) {
-            if (currency0.isAddressZero()) {
-                (bool success,) = recipient.call{value: owed0}("");
-                require(success, "ETH transfer failed");
-            } else {
-                address token0 = Currency.unwrap(currency0);
-                uint256 bal = IERC20(token0).balanceOf(address(this));
-                uint256 toSend = owed0 > bal ? bal : owed0;
-                if (toSend > 0) {
-                    // Test mock: return value not checked intentionally.
-                    // forge-lint: disable-next-line(erc20-unchecked-transfer)
-                    IERC20(token0).transfer(recipient, toSend);
-                }
-            }
-        }
+        _pay(currency0, recipient, owed0);
+        _pay(currency1, recipient, owed1);
+    }
 
-        if (owed1 > 0) {
-            if (currency1.isAddressZero()) {
-                (bool success,) = recipient.call{value: owed1}("");
-                require(success, "ETH transfer failed");
-            } else {
-                address token1 = Currency.unwrap(currency1);
-                uint256 bal = IERC20(token1).balanceOf(address(this));
-                uint256 toSend = owed1 > bal ? bal : owed1;
-                if (toSend > 0) {
-                    // Test mock: return value not checked intentionally.
-                    // forge-lint: disable-next-line(erc20-unchecked-transfer)
-                    IERC20(token1).transfer(recipient, toSend);
-                }
-            }
+    /// @dev Pay `amount` out of the balance no position has locked; never silently pays less.
+    function _pay(Currency currency, address recipient, uint256 amount) internal {
+        if (amount == 0) return;
+        address token = Currency.unwrap(currency);
+        uint256 balance =
+            currency.isAddressZero() ? address(this).balance - _nativeCredit : IERC20(token).balanceOf(address(this));
+        require(balance >= poolLocked[token] + amount, "TAKE_PAIR: unbacked payout");
+        if (currency.isAddressZero()) {
+            (bool success,) = recipient.call{value: amount}("");
+            require(success, "ETH transfer failed");
+        } else {
+            // Test mock: return value not checked intentionally.
+            // forge-lint: disable-next-line(erc20-unchecked-transfer)
+            IERC20(token).transfer(recipient, amount);
         }
     }
 
@@ -433,25 +482,13 @@ contract MockPositionManager {
     function _handleSweep(bytes memory data) internal {
         (Currency currency, address to) = abi.decode(data, (Currency, address));
 
-        if (currency.isAddressZero()) {
-            // For native ETH, pool-locked ETH is tracked at address(0).
-            uint256 balance = address(this).balance;
-            uint256 locked = poolLocked[address(0)];
-            uint256 sweepable = balance > locked ? balance - locked : 0;
-            if (sweepable > 0) {
-                (bool success,) = to.call{value: sweepable}("");
-                require(success, "ETH sweep failed");
-            }
-        } else {
-            address token = Currency.unwrap(currency);
-            uint256 balance = IERC20(token).balanceOf(address(this));
-            uint256 locked = poolLocked[token];
-            uint256 sweepable = balance > locked ? balance - locked : 0;
-            if (sweepable > 0) {
-                // Test mock: return value not checked intentionally.
-                // forge-lint: disable-next-line(erc20-unchecked-transfer)
-                IERC20(token).transfer(to, sweepable);
-            }
+        // SETTLE pulls ERC-20s exactly, so only unused native value is ever left over for the caller. Donations and
+        // fee/principal stock held for other positions are never swept out.
+        if (currency.isAddressZero() && _nativeCredit > 0) {
+            uint256 refund = _nativeCredit;
+            _nativeCredit = 0;
+            (bool success,) = to.call{value: refund}("");
+            require(success, "ETH sweep failed");
         }
     }
 

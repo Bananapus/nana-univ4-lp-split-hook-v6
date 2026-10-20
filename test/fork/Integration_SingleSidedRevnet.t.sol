@@ -343,6 +343,17 @@ contract Integration_SingleSidedRevnet is ForkDeployHelper {
     /// and sell them into the bid on the other. Both quotes are anchored to the TWAP, so the attacker buys at or above
     /// the TWAP price and sells at or below it, and the round trips can only lose swap fees.
     function test_fork_twoPositionRecycle_bandEdgeCycling_notProfitable() public {
+        _runBandEdgeCycle({anchorOffset: 0});
+    }
+
+    /// @notice The same cycle with the TWAP off the tick-spacing grid, so each quote's anchor bound rounds away from
+    /// the TWAP rather than landing on it.
+    function test_fork_twoPositionRecycle_bandEdgeCycling_unalignedTwap_notProfitable() public {
+        _runBandEdgeCycle({anchorOffset: 77});
+    }
+
+    /// @notice Runs the gap-walk cycle with the TWAP pinned `anchorOffset` ticks above an aligned tick.
+    function _runBandEdgeCycle(int24 anchorOffset) internal {
         uint256 pid =
             _launchProject({reservedPercent: 3000, cashOutTaxRate: 4000, weight: 1_000_000e18, duration: 1 days});
         vm.prank(multisig);
@@ -388,10 +399,10 @@ contract Integration_SingleSidedRevnet is ForkDeployHelper {
         vm.prank(attacker);
         IERC20(address(pToken)).approve(address(swapHelper), type(uint256).max);
 
-        // Give the hook both sides: a buyer partly fills the ask, then a recycle on an aligned tick opens the bid.
+        // Give the hook both sides: a buyer partly fills the ask, then a recycle at the pinned TWAP opens the bid.
         int24 twapTick = _spotTick(key);
         _swapTo(swapHelper, key, attacker, twapTick - 100);
-        twapTick = JBLPSplitHookHelpers.alignTickToSpacing({tick: twapTick, spacing: tickSpacing});
+        twapTick = JBLPSplitHookHelpers.alignTickToSpacing({tick: twapTick, spacing: tickSpacing}) + anchorOffset;
         _swapTo(swapHelper, key, attacker, twapTick);
         _mockOracleTwapEqualsSpot(hook.oracleHook(), V4_POOL_MANAGER, key);
         vm.prank(attacker);
@@ -502,20 +513,23 @@ contract Integration_SingleSidedRevnet is ForkDeployHelper {
         });
     }
 
-    /// @notice The ask (project = currency1) rests at or below the spot and never past the cash-out floor.
+    /// @notice The ask (project = currency1) rests at or below the spot and never past the cash-out floor. Its upper
+    /// bound may equal the spot price exactly (a spot exactly on an aligned tick), where it still holds only currency1.
     function _assertAskBelowSpot(uint256 tokenId, PoolKey memory key, int24 ascLower, int24 ascUpper) internal view {
         (int24 tickLower, int24 tickUpper) = _ticksOf(tokenId);
-        (, int24 spotTick,,) = V4_POOL_MANAGER.getSlot0(key.toId());
-        assertLe(tickUpper, spotTick, "ask must rest at or below the spot");
+        (uint160 spot,,,) = V4_POOL_MANAGER.getSlot0(key.toId());
+        assertLe(TickMath.getSqrtPriceAtTick(tickUpper), spot, "ask must rest at or below the spot");
         assertGe(tickLower, ascLower, "ask must not reach past the issuance ceiling");
         assertLe(tickUpper, ascUpper, "ask must not sell below the cash-out floor");
     }
 
-    /// @notice The bid (terminal = currency0) rests above the spot and never past the issuance ceiling.
+    /// @notice The bid (terminal = currency0) rests at or above the spot and never past the issuance ceiling. Its lower
+    /// bound may equal the spot price exactly (a spot exactly on an aligned tick, where the ask touches the same tick),
+    /// where it still holds only currency0.
     function _assertBidAboveSpot(uint256 tokenId, PoolKey memory key, int24 ascLower, int24 ascUpper) internal view {
         (int24 tickLower, int24 tickUpper) = _ticksOf(tokenId);
-        (, int24 spotTick,,) = V4_POOL_MANAGER.getSlot0(key.toId());
-        assertGt(tickLower, spotTick, "bid must rest above the spot");
+        (uint160 spot,,,) = V4_POOL_MANAGER.getSlot0(key.toId());
+        assertGe(TickMath.getSqrtPriceAtTick(tickLower), spot, "bid must rest at or above the spot");
         assertGe(tickLower, ascLower, "bid must not buy above the issuance ceiling");
         assertLe(tickUpper, ascUpper, "bid must not reach past the cash-out floor");
     }

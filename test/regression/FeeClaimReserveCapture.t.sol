@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
+import {TwoPositionFixture} from "./TwoPositionFixture.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -103,7 +103,7 @@ contract PullingFeeTerminal {
 /// token a project's bid is denominated in, a deploy or recycle cannot spend any of the reserve. This test exercises
 /// that boundary with a reserved fee claim, a per-project terminal ledger, and a non-trivial "free" balance all
 /// sitting on the shared clone, across another project's deploy and the claiming project's own two-sided recycle.
-contract FeeClaimReserveCaptureRegression is LPSplitHookV4TestBase {
+contract FeeClaimReserveCaptureRegression is TwoPositionFixture {
     using PoolIdLibrary for PoolKey;
 
     uint256 internal constant PROJECT_B = 3;
@@ -236,6 +236,8 @@ contract FeeClaimReserveCaptureRegression is LPSplitHookV4TestBase {
                 | uint256(TickMath.getSqrtPriceAtTick(spotTick))
         );
         poolManager.writeSlot(keccak256(abi.encodePacked(PoolId.unwrap(key.toId()), bytes32(uint256(6)))), packed);
+        // The fill left the ask holding exactly what its liquidity holds at the new spot.
+        _markToSpot(tokenId);
         if (feeTokenIsToken0) {
             positionManager.setCollectableFees(tokenId, 20e18, 0);
         } else {

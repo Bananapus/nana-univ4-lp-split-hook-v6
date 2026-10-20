@@ -325,6 +325,9 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
             _lockedSides(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)));
         assertEq(terminalSide, 0, "donated terminal must not be paired into the position (asks-only)");
         assertEq(projectSide, 0.5e18, "the full project balance deploys as asks");
+        // The mid-corridor spot leaves room for a bid (see `test_Finding1_RecycleFoldsRecoveredTerminalIntoBid`), so a
+        // captured donation would surface as a bid position.
+        assertEq(hook.bidTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "the donation must not mint a bid");
         assertEq(terminalToken.balanceOf(address(hook)), donation, "donation stays on the hook, never swept or routed");
         assertEq(
             terminal.addToBalanceCallCount(), addToBalanceBefore, "no terminal is routed out on an asks-only deploy"
@@ -345,6 +348,9 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
 
         (, uint256 terminalSide) = _lockedSides(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)));
         assertEq(terminalSide, 0, "project A must not pair another project's terminal as its bid");
+        assertEq(
+            hook.bidTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "another project's terminal must not mint A a bid"
+        );
         assertEq(terminalToken.balanceOf(address(hook)), bBalance, "the other project's terminal is fully preserved");
     }
 

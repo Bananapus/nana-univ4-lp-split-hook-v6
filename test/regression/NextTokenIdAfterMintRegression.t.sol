@@ -6,11 +6,11 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
-import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
+import {TwoPositionFixture} from "./TwoPositionFixture.sol";
 
 /// @notice Tests proving the TOCTOU fix: reading nextTokenId() AFTER minting
 ///         instead of BEFORE, so the stored askTokenIdOf/bidTokenIdOf always match the actual minted positions.
-contract NextTokenIdAfterMintRegression is LPSplitHookV4TestBase {
+contract NextTokenIdAfterMintRegression is TwoPositionFixture {
     using PoolIdLibrary for PoolKey;
 
     // ─── Test: Basic correctness — tokenIdOf matches the actual minted position ───
@@ -145,8 +145,8 @@ contract NextTokenIdAfterMintRegression is LPSplitHookV4TestBase {
         );
         poolManager.writeSlot(stateSlot, packed);
 
-        terminalToken.mint(address(positionManager), 5e18);
-        positionManager.injectPositionBalance(askId, address(terminalToken), 5e18);
+        // The ask now holds exactly what its liquidity holds at the new spot (terminal tokens below it).
+        _markToSpot(askId);
         _accumulateTokens(PROJECT_ID, 10e18);
     }
 

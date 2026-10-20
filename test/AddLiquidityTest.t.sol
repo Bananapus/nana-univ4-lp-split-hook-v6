@@ -210,25 +210,54 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         );
     }
 
+    /// @notice Across the ordinary bounded range the recycle must succeed, and every project token is reconciled:
+    /// the old ask's principal plus the new accumulation equals the new positions plus the ledger, the PositionManager
+    /// holds exactly what it records, and nothing reaches the caller or anyone else.
     function testFuzz_AddLiquidity_NoValueLeak(uint256 extra) public {
         extra = bound(extra, 1e15, 1_000_000e18);
         _accumulateAndDeploy(PROJECT_ID, 100e18);
         oracle.setTwapTick(_spotTick());
         _accumulateTokens(PROJECT_ID, extra);
 
+        uint256 oldAsk = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 expectedProject = _projectSide(oldAsk) + hook.accumulatedProjectTokens(PROJECT_ID);
+        assertEq(expectedProject, 100e18 + extra, "fixture: old principal plus new inventory");
+        uint256 supply = projectToken.totalSupply();
+
         vm.prank(owner);
-        try hook.addLiquidity(PROJECT_ID, address(terminalToken)) {
-            // Invariant: the hook never leaves project tokens unaccounted (everything is either in the LP or in the
-            // accumulation ledger). An interacting EOA cannot extract value beyond the carried ledger.
-            assertEq(
-                projectToken.balanceOf(address(hook)),
-                hook.accumulatedProjectTokens(PROJECT_ID),
-                "no project-token value leaked or stranded"
-            );
-            assertEq(controller.burnCallCount(), 0, "no burns across the lifecycle");
-        } catch {
-            // A revert (e.g. zero-liquidity at extreme ratios) leaves all tokens in the ledger — also no leak.
-        }
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
+
+        uint256 newAsk = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 newBid = hook.bidTokenIdOf(PROJECT_ID, address(terminalToken));
+        assertTrue(newAsk != 0 && newAsk != oldAsk, "the ask is recycled");
+        assertEq(positionManager.getPositionLiquidity(oldAsk), 0, "the old ask is burned");
+        assertEq(
+            _projectSide(newAsk) + _projectSide(newBid) + hook.accumulatedProjectTokens(PROJECT_ID),
+            expectedProject,
+            "old principal plus new inventory equals new positions plus ledger"
+        );
+        assertEq(
+            projectToken.balanceOf(address(hook)),
+            hook.accumulatedProjectTokens(PROJECT_ID),
+            "hook holds exactly its ledger"
+        );
+        assertEq(
+            projectToken.balanceOf(address(positionManager)),
+            positionManager.poolLocked(address(projectToken)),
+            "PositionManager holds exactly the recorded principal"
+        );
+        assertEq(
+            projectToken.balanceOf(address(hook)) + projectToken.balanceOf(address(positionManager)),
+            supply,
+            "no project token reaches the caller or anyone else"
+        );
+        assertEq(terminalToken.balanceOf(owner), 0, "caller gains no terminal tokens");
+        assertEq(controller.burnCallCount(), 0, "no burns across the lifecycle");
+    }
+
+    function _projectSide(uint256 tokenId) internal view returns (uint256) {
+        (,,,, uint256 amount0, uint256 amount1,) = positionManager._positions(tokenId);
+        return address(projectToken) < address(terminalToken) ? amount0 : amount1;
     }
 
     // ─── Access control

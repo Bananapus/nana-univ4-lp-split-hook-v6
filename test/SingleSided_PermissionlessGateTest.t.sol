@@ -99,25 +99,32 @@ contract SingleSided_PermissionlessGateTest is LPSplitHookV4TestBase {
         assertNotEq(secondId, firstId, "the extend consolidates into a fresh position");
     }
 
-    /// @notice `addLiquidity` reverts `NoDeployableLiquidityAtSpot` once the spot has reached the issuance ceiling and
+    /// @notice `addLiquidity` reverts `NoDeployableLiquidityAtSpot` once the issuance ceiling has reached the spot and
     /// the project holds no terminal to offer as bids: there is no corridor left for asks to fill, and nothing to bid
     /// with. The accumulated project tokens wait until the issuance price rises or the spot falls.
+    /// @dev The ceiling moves (the ruleset weight rises) rather than the spot, so the live ask keeps exactly the
+    /// project-token principal it was minted with: had buyers pushed the spot to the ceiling instead, the ask would
+    /// have filled into terminal tokens, which the recycle then deploys as a bid.
     function test_AddLiquidity_RevertsWhenSpotAtCeilingWithNothingToBidWith() public {
-        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 100e18, supply: 2e18, taxRate: 4000});
+        // A non-inverted corridor: the cash-out floor sits genuinely below the issuance ceiling.
+        store.setTaxedCashOutCurve({projectId: PROJECT_ID, surplus: 1e18, supply: 1_000_000e18, taxRate: 4000});
+        (int24 lower, int24 upper) = _corridor();
+        int24 midTick = ((lower + (upper - lower) / 2) / hook.TICK_SPACING()) * hook.TICK_SPACING();
+        positionManager.initializePool(_key(), TickMath.getSqrtPriceAtTick(midTick));
         _accumulateTokens(PROJECT_ID, 1e18);
         vm.prank(STRANGER);
         hook.deployPool(PROJECT_ID);
-
-        projectToken.mint(address(positionManager), 100e18);
-        terminalToken.mint(address(positionManager), 100e18);
+        assertEq(hook.bidTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "precondition: nothing to bid with");
         _accumulateTokens(PROJECT_ID, 0.3e18);
 
-        // Push spot onto the issuance ceiling. Ordering-aware: project = token1 here, so the issuance ceiling is the
-        // corridor's LOWER tick; drive spot down onto it.
-        (int24 lower, int24 upper) = _corridor();
+        // Issuance cheapens 200x: the issuance ceiling crosses the unchanged spot. Ordering-aware: the ceiling is the
+        // corridor's UPPER tick when the project is token0 and its LOWER tick when it is token1.
+        controller.setWeight(PROJECT_ID, DEFAULT_WEIGHT * 200);
+        (lower, upper) = _corridor();
         bool projectIsToken0 = address(projectToken) < address(terminalToken);
-        int24 ceilingTick = projectIsToken0 ? upper : lower;
-        _setSpotTick(ceilingTick);
+        if (projectIsToken0) assertLe(upper, midTick, "precondition: the ceiling is at or below the spot");
+        else assertGe(lower, midTick, "precondition: the ceiling is at or above the spot");
+        assertLt(lower, upper, "precondition: the corridor is still well formed");
 
         vm.prank(STRANGER);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot.selector);

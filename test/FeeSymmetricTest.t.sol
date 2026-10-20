@@ -5,6 +5,7 @@ import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
 import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 import {IJBUniswapV4LPSplitHook} from "../src/interfaces/IJBUniswapV4LPSplitHook.sol";
 import {JBUniswapV4LPSplitHookMath} from "../src/libraries/JBUniswapV4LPSplitHookMath.sol";
+import {JBLPSplitHookHelpers} from "../src/libraries/JBLPSplitHookHelpers.sol";
 import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
@@ -114,6 +115,22 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
 
     /// @dev Sets the terminal-token side of a pool's collectable fees, ordering-aware against `projectTok` (which pool
     /// the position belongs to determines token0/token1).
+    /// @dev Asserts A's live spot leaves a non-empty terminal-token (bid) range inside A's corridor, so a zero bid id
+    /// proves A had no terminal inventory rather than that the geometry forbade a bid.
+    function _assertBidRangeNonEmptyA() internal view {
+        (int24 lower, int24 upper) = _corridorA();
+        (uint160 sqrtPriceX96,,,) = IPoolManager(address(poolManager)).getSlot0(_poolKeyA().toId());
+        int24 spacing = hook.TICK_SPACING();
+        int24 spotFloor = JBLPSplitHookHelpers.alignTickToSpacing({
+            tick: TickMath.getTickAtSqrtPrice(sqrtPriceX96), spacing: spacing
+        });
+        if (terminalTokenIsToken0) {
+            assertLt(spotFloor + spacing, upper, "precondition: a terminal-token0 bid range exists above the spot");
+        } else {
+            assertGt(spotFloor, lower, "precondition: a terminal-token1 bid range exists below the spot");
+        }
+    }
+
     function _setTerminalFeesFor(uint256 tokenId, address projectTok, uint256 amount) internal {
         if (address(terminalToken) < projectTok) {
             positionManager.setCollectableFees(tokenId, amount, 0);
@@ -398,7 +415,10 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
     /// never
     /// from another project's ledger or an outside donation sitting in the shared clone's raw balance.
     function test_Isolation_MintNeverConsumesOtherLedgerOrDonation() public {
-        _deployA(); // asks-only: A has zero recovered terminal and an empty terminal ledger.
+        // Asks-only at a mid-corridor spot: A has zero recovered terminal and an empty terminal ledger, yet the spot
+        // leaves a non-empty bid range, so a bid WOULD mint if A's terminal amount captured any foreign inventory.
+        _deployAAtMid(0.5e18);
+        _assertBidRangeNonEmptyA();
         _setupProjectB();
         uint256 bTokenId = _accumulateAndDeployB(100e18);
 
@@ -419,13 +439,18 @@ contract FeeSymmetricTest is LPSplitHookV4TestBase {
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
         (, uint256 aTerminalSide) = _lockedSides(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)));
-        assertEq(aTerminalSide, 0, "A consumed zero terminal: neither B's ledger nor the donation was swept");
+        assertEq(aTerminalSide, 0, "A's ask holds zero terminal");
+        assertEq(
+            hook.bidTokenIdOf(PROJECT_ID, address(terminalToken)),
+            0,
+            "A minted no bid: neither B's ledger nor the donation was captured as A's terminal inventory"
+        );
         assertEq(
             hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)),
             0,
             "A never absorbed B's ledger or the donation into its own ledger"
         );
         assertEq(hook.accumulatedTerminalTokens(PROJECT_B, address(terminalToken)), ledgerB, "B's ledger is untouched");
-        assertGe(terminalToken.balanceOf(address(hook)), ledgerB + donation, "B's ledger and the donation remain");
+        assertEq(terminalToken.balanceOf(address(hook)), ledgerB + donation, "B's ledger and the donation remain");
     }
 }

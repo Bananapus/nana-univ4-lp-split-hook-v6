@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {LPSplitHookV4TestBase} from "./TestBaseV4.sol";
+import {TwoPositionFixture} from "./regression/TwoPositionFixture.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
 import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
@@ -9,7 +9,7 @@ import {JBUniswapV4LPSplitHook} from "../src/JBUniswapV4LPSplitHook.sol";
 /// @notice Regression gap tests: MEV/sandwich simulation on the `addLiquidity` recycle and extreme price scenarios.
 /// @dev These tests verify that the recycle (collect, burn both positions, re-mint both single-sided) is resistant to
 ///      sandwich-like value extraction and that the contract behaves correctly at extreme price ratios.
-contract TestRegressionGaps is LPSplitHookV4TestBase {
+contract TestRegressionGaps is TwoPositionFixture {
     uint256 poolTokenId;
 
     function setUp() public override {
@@ -18,10 +18,8 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         // Deploy a pool so we have a position to work with
         _accumulateAndDeploy(PROJECT_ID, 100e18);
         poolTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
-
-        // Ensure PositionManager has tokens for collect/burn operations
-        projectToken.mint(address(positionManager), 100e18);
-        terminalToken.mint(address(positionManager), 100e18);
+        // No spare PositionManager funding: it holds exactly the principal it records, and each test funds only the
+        // fees or principal it configures, so a missing or misrouted token cannot be papered over.
     }
 
     // =========================================================================
@@ -32,42 +30,89 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
     // 1. Recycle conserves value: no tokens are created from thin air
     // -----------------------------------------------------------------------
 
-    /// @notice After a recycle, the hook should not hold more tokens than it
-    ///         started with plus what the PositionManager returned. This ensures
-    ///         the recycle does not create value from nothing (sandwich attacker
-    ///         could only extract value if there were surplus tokens).
+    /// @notice A fee-free recycle neither creates nor loses tokens: hook plus PositionManager balances are exactly
+    ///         unchanged, the PositionManager holds exactly the principal it records, and the hook holds exactly its
+    ///         ledgers.
     function test_Recycle_ConservesTokenBalances() public {
         _accumulateTokens(PROJECT_ID, 1e18);
 
-        // Record balances before the recycle
-        uint256 hookProjectBefore = projectToken.balanceOf(address(hook));
-        uint256 hookTerminalBefore = terminalToken.balanceOf(address(hook));
-        uint256 pmProjectBefore = projectToken.balanceOf(address(positionManager));
-        uint256 pmTerminalBefore = terminalToken.balanceOf(address(positionManager));
-
-        uint256 totalProjectBefore = hookProjectBefore + pmProjectBefore;
-        uint256 totalTerminalBefore = hookTerminalBefore + pmTerminalBefore;
+        uint256 totalProjectBefore =
+            projectToken.balanceOf(address(hook)) + projectToken.balanceOf(address(positionManager));
+        uint256 totalTerminalBefore =
+            terminalToken.balanceOf(address(hook)) + terminalToken.balanceOf(address(positionManager));
 
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
-        // After the recycle: total system tokens (hook + PM) should not increase
-        uint256 hookProjectAfter = projectToken.balanceOf(address(hook));
-        uint256 hookTerminalAfter = terminalToken.balanceOf(address(hook));
-        uint256 pmProjectAfter = projectToken.balanceOf(address(positionManager));
-        uint256 pmTerminalAfter = terminalToken.balanceOf(address(positionManager));
-
-        uint256 totalProjectAfter = hookProjectAfter + pmProjectAfter;
-        uint256 totalTerminalAfter = hookTerminalAfter + pmTerminalAfter;
-
-        assertLe(
-            totalProjectAfter,
+        assertEq(
+            projectToken.balanceOf(address(hook)) + projectToken.balanceOf(address(positionManager)),
             totalProjectBefore,
-            "Total project tokens should not increase after a recycle (no value creation)"
+            "project tokens exactly conserved"
         );
-        assertLe(
-            totalTerminalAfter,
+        assertEq(
+            terminalToken.balanceOf(address(hook)) + terminalToken.balanceOf(address(positionManager)),
             totalTerminalBefore,
-            "Total terminal tokens should not increase after a recycle (no value creation)"
+            "terminal tokens exactly conserved"
+        );
+        _assertBalancesBackedExactly();
+    }
+
+    /// @notice Across a recycle of BOTH positions with fees on both, each currency reconciles exactly: recovered
+    ///         principal plus ledgers plus fee remainders equals the new positions plus ledgers, and the only tokens
+    ///         that leave are the terminal-side fee cuts paid to the fee project (credited as claims).
+    function test_Recycle_TwoPositions_ReconcilesPrincipalAndLedgersExactly() public {
+        (uint256 askId, uint256 bidId) = _recycleIntoTwoPositions();
+        _accumulateTokens(PROJECT_ID, 7e18);
+        _setFees(askId, 3e18, 2e18);
+        _setFees(bidId, 1e18, 5e18);
+        terminal.setAccountingContext(
+            FEE_PROJECT_ID, address(terminalToken), uint32(uint160(address(terminalToken))), 18
+        );
+
+        (uint256 projectBefore, uint256 terminalBefore) = _inventory(askId, bidId);
+        uint256 cuts = 2e18 * FEE_PERCENT / 10_000 + 5e18 * FEE_PERCENT / 10_000;
+        uint256 feeTerminalBefore = terminalToken.balanceOf(address(terminal));
+
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
+
+        uint256 newAsk = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 newBid = hook.bidTokenIdOf(PROJECT_ID, address(terminalToken));
+        assertTrue(newAsk != askId && newAsk != bidId && newBid != askId && newBid != bidId, "both recycled");
+        (uint256 projectAfter, uint256 terminalAfter) = _inventory(newAsk, newBid);
+        // Project-token fees are forgiven in full (no fee terminal accepts project tokens).
+        assertEq(projectAfter, projectBefore + 3e18 + 1e18, "project principal + ledgers + fees reconcile");
+        assertEq(terminalAfter, terminalBefore + 2e18 + 5e18 - cuts, "terminal principal + ledgers + remainders");
+        assertEq(terminalToken.balanceOf(address(terminal)), feeTerminalBefore + cuts, "only the cuts left");
+        assertEq(hook.claimableFeeTokens(PROJECT_ID), cuts, "cuts credited 1:1 as fee-token claims");
+        _assertBalancesBackedExactly();
+    }
+
+    /// @notice Recorded principal of both positions plus the project's ledgers, per currency.
+    function _inventory(uint256 askId, uint256 bidId) internal view returns (uint256 project, uint256 terminal_) {
+        (uint256 askProject, uint256 askTerminal) = _sides(askId);
+        (uint256 bidProject, uint256 bidTerminal) = _sides(bidId);
+        project = askProject + bidProject + hook.accumulatedProjectTokens(PROJECT_ID);
+        terminal_ = askTerminal + bidTerminal + hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken));
+    }
+
+    /// @notice The PositionManager holds exactly its recorded principal and the hook exactly its ledgers.
+    function _assertBalancesBackedExactly() internal view {
+        assertEq(
+            projectToken.balanceOf(address(positionManager)),
+            positionManager.poolLocked(address(projectToken)),
+            "PM project balance is exactly locked principal"
+        );
+        assertEq(
+            terminalToken.balanceOf(address(positionManager)),
+            positionManager.poolLocked(address(terminalToken)),
+            "PM terminal balance is exactly locked principal"
+        );
+        assertEq(
+            projectToken.balanceOf(address(hook)), hook.accumulatedProjectTokens(PROJECT_ID), "hook project = ledger"
+        );
+        assertEq(
+            terminalToken.balanceOf(address(hook)),
+            hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)),
+            "hook terminal = ledger"
         );
     }
 
@@ -153,10 +198,6 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         uint256 tokenIdAfterFirst = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(tokenIdAfterFirst, 0, "Token ID should be nonzero after first recycle");
 
-        // Ensure PM has tokens for the second recycle
-        projectToken.mint(address(positionManager), 100e18);
-        terminalToken.mint(address(positionManager), 100e18);
-
         // Second recycle
         _accumulateTokens(PROJECT_ID, 1e18);
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
@@ -202,15 +243,6 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
     function test_Recycle_PartialUsage_LeftoversHandled() public {
         // Set PM to only use 50% of provided amounts
         positionManager.setUsagePercent(5000);
-
-        // Remove setUp's spare PositionManager funding: the mock's SWEEP would hand it to the hook as surplus,
-        // masking how much the mint consumed.
-        vm.startPrank(address(positionManager));
-        // forge-lint: disable-next-line(erc20-unchecked-transfer)
-        projectToken.transfer(address(0xdead), 100e18);
-        // forge-lint: disable-next-line(erc20-unchecked-transfer)
-        terminalToken.transfer(address(0xdead), 100e18);
-        vm.stopPrank();
 
         uint256 addToBalanceBefore = terminal.addToBalanceCallCount();
 
@@ -444,10 +476,6 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         // Change weight to something very different.
         controller.setWeight(PROJECT_ID, 1e18);
 
-        // Ensure PM has tokens for the recycle
-        projectToken.mint(address(positionManager), 100e18);
-        terminalToken.mint(address(positionManager), 100e18);
-
         _accumulateTokens(PROJECT_ID, 1e18);
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
@@ -460,24 +488,29 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
     // 15. Deploy with very small token amount (dust amounts)
     // -----------------------------------------------------------------------
 
-    /// @notice Deploying with a very small accumulated amount (1 wei) should either
-    ///         succeed or revert gracefully (no panic/overflow).
+    /// @notice Deploying a 1-wei accumulation mints zero liquidity, so it fails with the hook's own
+    ///         NoDeployableLiquidityAtSpot (never an arithmetic `Panic`) and rolls back completely: no pool marked
+    ///         deployed, no position, the wei still in the ledger.
     function test_ExtremePrice_DustAmount() public {
         uint256 dustProject = 9;
         _setupProject(dustProject);
-
-        // Accumulate just 1 wei of project tokens
         _accumulateTokensForProject(dustProject, 1);
 
-        // This might revert due to zero liquidity, but should not panic
         try hook.deployPool(dustProject) {
-            // If it succeeds, verify state is consistent
-            uint256 tokenId = hook.askTokenIdOf(dustProject, address(terminalToken));
-            assertNotEq(tokenId, 0, "Token ID should be nonzero if deploy succeeded");
+            assertTrue(false, "a 1-wei deploy must not succeed");
         } catch (bytes memory reason) {
-            // Acceptable reverts for dust amounts
-            assertTrue(reason.length > 0, "Should revert with a reason, not panic");
+            assertNotEq(bytes4(reason), bytes4(keccak256("Panic(uint256)")), "dust must not panic");
+            assertEq(
+                bytes4(reason),
+                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot.selector,
+                "dust fails with the hook's no-deployable-liquidity error"
+            );
         }
+
+        assertFalse(hook.hasDeployedPool(dustProject), "dust deploy rolled back");
+        assertEq(hook.askTokenIdOf(dustProject, address(terminalToken)), 0, "no ask minted");
+        assertEq(hook.bidTokenIdOf(dustProject, address(terminalToken)), 0, "no bid minted");
+        assertEq(hook.accumulatedProjectTokens(dustProject), 1, "the wei stays in the ledger");
     }
 
     // -----------------------------------------------------------------------
@@ -513,10 +546,6 @@ contract TestRegressionGaps is LPSplitHookV4TestBase {
         // If surplus gives 999 tokens per terminal token, the spread is tiny.
         // surplus of 0.999e18 means reclaimable = 0.999 * cashOutCount / 1e18
         store.setSurplus(PROJECT_ID, 999e15); // 0.999e18
-
-        // Ensure PM has tokens
-        projectToken.mint(address(positionManager), 100e18);
-        terminalToken.mint(address(positionManager), 100e18);
 
         _accumulateTokens(PROJECT_ID, 1e18);
         hook.addLiquidity(PROJECT_ID, address(terminalToken));

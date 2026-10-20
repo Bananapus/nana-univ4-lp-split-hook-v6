@@ -235,6 +235,7 @@ contract SingleSided_AddLiquidityTest is LPSplitHookV4TestBase {
         // `collectAndRouteLPFees` still collects from the tracked position (proving no value is stranded on burned
         // ids).
         positionManager.setCollectableFees(t3, terminalIsToken0 ? 0.01e18 : 0, terminalIsToken0 ? 0 : 0.01e18);
+        terminalToken.mint(address(positionManager), 0.01e18);
         uint256 decreaseCallsBefore = positionManager.decreaseLiquidityCallCount();
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
         assertEq(
