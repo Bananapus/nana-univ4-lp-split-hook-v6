@@ -555,8 +555,8 @@ contract LPSplitHookHandler is Test {
 
     /// @notice Whether `reason` is a justified `NoDeployableLiquidityAtSpot`: its decoded amounts equal the inventory
     /// the handler derived independently, and that inventory buys zero liquidity on both ranges the hook mints.
-    /// @dev The liquidity comes from `remintLiquidity`, which applies the hook library's own per-range rule, so an
-    /// amount that is small but still mintable is never accepted.
+    /// @dev The liquidity comes from `remintLiquidity`, which applies Uniswap's canonical amounts-to-liquidity rule
+    /// independently of the hook library, so an amount that is small but still mintable is never accepted.
     /// @param reason The revert data the hook returned.
     /// @param projectId The project whose deploy or recycle reverted.
     /// @param projectInventory The project tokens the handler expects the hook to have tried to deploy.
@@ -641,7 +641,7 @@ contract LPSplitHookHandler is Test {
     /// @dev Derives the ranges the way the hook does: the corridor from the hook library, the token0 range from the
     /// aligned tick at or above the spot up to the corridor's upper bound, the token1 range from the corridor's lower
     /// bound up to the aligned tick at or below the spot. The anchor is the spot (the oracle tracks the frozen spot).
-    /// Each range's liquidity is the hook library's `cappedSingleSidedLiquidity`.
+    /// Each range's liquidity is Uniswap's canonical `LiquidityAmounts.getLiquidityForAmounts` at the spot.
     /// @param projectId The project to price.
     /// @param projectAmount The project tokens to deploy.
     /// @param terminalAmount The terminal tokens to deploy.
