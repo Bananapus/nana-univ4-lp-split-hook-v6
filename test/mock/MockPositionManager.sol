@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {Pool} from "@uniswap/v4-core/src/libraries/Pool.sol";
 import {Position as V4Position} from "@uniswap/v4-core/src/libraries/Position.sol";
+import {SafeCast} from "@uniswap/v4-core/src/libraries/SafeCast.sol";
 import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickBitmap} from "@uniswap/v4-core/src/libraries/TickBitmap.sol";
@@ -27,11 +27,15 @@ import {MockPoolManager} from "./MockPoolManager.sol";
 /// PoolManager semantics for every action the hook encodes:
 ///      - MINT_POSITION / INCREASE_LIQUIDITY add exactly the requested liquidity at a cost computed from the live
 ///        price and range, rounded up as in v4-core, and revert with `MaximumAmountExceeded` above a maximum.
-///      - BURN_POSITION / DECREASE_LIQUIDITY remove principal from the same math rounded down, owner-only, and revert
-///        with `MinimumAmountInsufficient` below a minimum (fees excluded, like `validateMinOut`).
-///      - Each batch tracks a delta per currency: SETTLE / SETTLE_PAIR pay debt (honoring amount and payer), TAKE_PAIR
-///        takes credit, CLOSE_CURRENCY does whichever applies, and the batch reverts with `CurrencyNotSettled` unless
-///        every delta ends at zero. Unsupported actions revert with `UnsupportedAction`.
+///      - BURN_POSITION / DECREASE_LIQUIDITY remove principal from the same math rounded down, owner-only. A pool
+///        hook's take is subtracted from the signed principal delta, and `validateMinOut` semantics apply to it (fees
+///        excluded): a negative principal delta reverts `SafeCastOverflow`, one below a minimum reverts
+///        `MinimumAmountInsufficient`.
+///      - Each batch tracks a delta per currency: SETTLE / SETTLE_PAIR pay debt (honoring amount and payer, crediting
+///        what a user payer's transfer actually delivered), TAKE_PAIR takes credit, CLOSE_CURRENCY does whichever
+///        applies, and the batch reverts with `CurrencyNotSettled` unless every delta ends at zero. Outgoing transfers
+///        use v4's `CurrencyLibrary.transfer` (a false or failed ERC-20 transfer reverts). Unsupported actions revert
+///        with `UnsupportedAction`.
 ///      - The pool's reserves (`poolLocked`) are kept apart from this contract's own loose balance, which is all SWEEP
 ///        ever moves (the whole loose balance of the currency, native or ERC-20).
 contract MockPositionManager {
@@ -127,8 +131,9 @@ contract MockPositionManager {
         collectableAmount1[tokenId] = amount1;
     }
 
-    /// @notice Test helper: a pool hook keeps `amount0`/`amount1` of the principal each removal from `tokenId` would
-    /// return (V4's `afterRemoveLiquidity` return delta), so the caller receives less than the position's principal.
+    /// @notice Test helper: a pool hook keeps `amount0`/`amount1` of the principal each nonzero-liquidity removal from
+    /// `tokenId` would return (V4's `afterRemoveLiquidity` return delta), so the caller receives less than the
+    /// position's principal. A take above the principal leaves a negative principal delta, which reverts like V4.
     function setHookTakeOnRemove(uint256 tokenId, uint256 amount0, uint256 amount1) external {
         hookTakeOnRemove0[tokenId] = amount0;
         hookTakeOnRemove1[tokenId] = amount1;
@@ -221,7 +226,7 @@ contract MockPositionManager {
             } else if (action == Actions.SWEEP) {
                 (Currency currency, address to) = abi.decode(params[i], (Currency, address));
                 uint256 balance = _looseBalance(currency);
-                if (balance > 0) _transfer(currency, _mapRecipient(to), balance);
+                if (balance > 0) currency.transfer(_mapRecipient(to), balance);
             } else {
                 revert BaseActionsRouter.UnsupportedAction(action);
             }
@@ -349,8 +354,8 @@ contract MockPositionManager {
         _creditFees(tokenId);
     }
 
-    /// @dev Removes `liquidity`, crediting its rounded-down principal at the live price (less any pool-hook take),
-    /// checked against the minimums like V4's `validateMinOut`.
+    /// @dev Removes `liquidity`, crediting its rounded-down principal at the live price less any pool-hook take, as a
+    /// signed delta checked like V4's `validateMinOut` (which casts the fee-excluded delta with `SafeCast.toUint128`).
     function _removeLiquidity(uint256 tokenId, uint128 liquidity, uint128 amount0Min, uint128 amount1Min) internal {
         Position storage pos = _positions[tokenId];
         require(liquidity <= pos.liquidity, "liquidity underflow");
@@ -366,15 +371,29 @@ contract MockPositionManager {
         pos.liquidity -= liquidity;
         _shrinkTicks(pos, liquidity);
 
-        uint256 take0 = hookTakeOnRemove0[tokenId];
-        uint256 take1 = hookTakeOnRemove1[tokenId];
-        uint256 out0 = principal0 > take0 ? principal0 - take0 : 0;
-        uint256 out1 = principal1 > take1 ? principal1 - take1 : 0;
-        if (out0 < amount0Min) revert SlippageCheck.MinimumAmountInsufficient(amount0Min, _toUint128(out0));
-        if (out1 < amount1Min) revert SlippageCheck.MinimumAmountInsufficient(amount1Min, _toUint128(out1));
+        // The synthetic pool hook takes only from removals that move liquidity (a fee-only collect returns its own
+        // signed delta of zero principal).
+        (uint256 take0, uint256 take1) =
+            liquidity == 0 ? (0, 0) : (hookTakeOnRemove0[tokenId], hookTakeOnRemove1[tokenId]);
+        // Principal and takes are token amounts far below 2^255.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        int256 out0 = int256(principal0) - int256(take0);
+        // forge-lint: disable-next-line(unsafe-typecast)
+        int256 out1 = int256(principal1) - int256(take1);
+        _validateMinOut(out0, amount0Min);
+        _validateMinOut(out1, amount1Min);
 
-        _accountDelta(pos.poolKey.currency0, int256(out0));
-        _accountDelta(pos.poolKey.currency1, int256(out1));
+        _accountDelta(pos.poolKey.currency0, out0);
+        _accountDelta(pos.poolKey.currency1, out1);
+    }
+
+    /// @dev `SlippageCheck.validateMinOut` for one currency: the signed principal delta must cast to uint128 and meet
+    /// the minimum.
+    function _validateMinOut(int256 delta, uint128 amountMin) internal pure {
+        if (delta < 0 || delta > int256(uint256(type(uint128).max))) revert SafeCast.SafeCastOverflow();
+        // forge-lint: disable-next-line(unsafe-typecast)
+        uint128 received = uint128(uint256(delta));
+        if (received < amountMin) revert SlippageCheck.MinimumAmountInsufficient(amountMin, received);
     }
 
     function _creditFees(uint256 tokenId) internal {
@@ -472,17 +491,21 @@ contract MockPositionManager {
     }
 
     /// @dev Pays `amount` into the pool's reserves: native and payer-is-this-contract come out of the loose balance
-    /// (as V4 pays them from the PositionManager's own balance); a user payer is pulled through Permit2.
+    /// (as V4 pays them from the PositionManager's own balance); a user payer is pulled through Permit2. Like
+    /// `PoolManager.settle`, the credit is what the reserves actually received, so a short transfer leaves debt.
     function _settle(Currency currency, address payer, uint256 amount) internal {
         if (amount == 0) return;
         address token = Currency.unwrap(currency);
+        uint256 received = amount;
         if (currency.isAddressZero() || payer == address(this)) {
             require(_looseBalance(currency) >= amount, "settle: insufficient balance");
         } else {
+            uint256 balanceBefore = currency.balanceOfSelf();
             PERMIT2.transferFrom(payer, address(this), _toUint160(amount), token);
+            received = currency.balanceOfSelf() - balanceBefore;
         }
-        poolLocked[token] += amount;
-        _accountDelta(currency, int256(amount));
+        poolLocked[token] += received;
+        _accountDelta(currency, int256(received));
     }
 
     /// @dev Takes `amount` out of the pool's reserves; never pays from another position's stock or the loose balance.
@@ -492,23 +515,12 @@ contract MockPositionManager {
         require(currency.balanceOfSelf() >= poolLocked[token], "take: pool reserves unbacked");
         poolLocked[token] -= amount;
         _accountDelta(currency, -int256(amount));
-        _transfer(currency, recipient, amount);
+        currency.transfer(recipient, amount);
     }
 
     /// @dev This contract's own balance, apart from the pool's reserves (what SWEEP moves).
     function _looseBalance(Currency currency) internal view returns (uint256) {
         return currency.balanceOfSelf() - poolLocked[Currency.unwrap(currency)];
-    }
-
-    function _transfer(Currency currency, address to, uint256 amount) internal {
-        if (currency.isAddressZero()) {
-            (bool success,) = to.call{value: amount}("");
-            require(success, "ETH transfer failed");
-        } else {
-            // Test mock: return value not checked intentionally.
-            // forge-lint: disable-next-line(erc20-unchecked-transfer)
-            IERC20(Currency.unwrap(currency)).transfer(to, amount);
-        }
     }
 
     function _mapRecipient(address recipient) internal view returns (address) {

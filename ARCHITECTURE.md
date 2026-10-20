@@ -51,7 +51,7 @@ post-deployment, every recycle (inline on each distribution, or permissionless `
      token1 rests on [corridorLower, min(spotFloor, corridorUpper)]
   -> mints the ask from the whole project ledger and the bid from the whole terminal ledger; a side with an empty range or zero amount stays in its ledger
   -> if neither side mints, reverts `NoDeployableLiquidityAtSpot` and the live positions are kept
-  -> if the corridor is empty (cash-out value at or above the issuance price, or a band narrower than one spacing), retires both positions and holds the tokens; reverts `EmptyCorridor` when nothing was live
+  -> if the corridor is empty (cash-out value at or above the issuance price, or no aligned spacing fits between the bounds), retires both positions and holds the tokens; reverts `EmptyCorridor` when nothing was live
 trading between recycles
   -> buys fill the ask (it accrues terminal tokens); sells fill the bid (it accrues project tokens)
   -> the next recycle moves each converted amount back to the side it belongs on

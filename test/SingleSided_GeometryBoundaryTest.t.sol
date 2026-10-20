@@ -10,6 +10,8 @@ import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
+import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
+import {mulDiv} from "@prb/math/src/Common.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
@@ -17,7 +19,8 @@ import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {LiquidityAmounts} from "@uniswap/v4-core/test/utils/LiquidityAmounts.sol";
 
 /// @notice Exact recycle geometry at the price boundaries, in BOTH Uniswap currency orderings (a fresh ERC-20 pair is
-/// wired with the project token sorted as token0 or token1). Covers:
+/// wired with the project token sorted as token0 or token1) and, for the corridor-construction and narrow-band cases,
+/// with a native terminal token (pool currency0 = address(0), the project always token1). Covers:
 ///   - the ceiling and floor edges: the side with no range is skipped and its inventory carried in its ledger while
 ///     the other side mints corridor-bounded; zero-project bid-only inventory; a nonzero amount that rounds to zero
 ///     liquidity; and redeployment of the carried inventory with fresh ids once the geometry is restored;
@@ -27,8 +30,8 @@ import {LiquidityAmounts} from "@uniswap/v4-core/test/utils/LiquidityAmounts.sol
 ///     the corridor and skips token1 without an out-of-range TickMath call;
 ///   - corridor construction: bounds round inward against the exact cash-out and issuance prices, a corridor exactly
 ///     one spacing wide deploys, and tiny rates keep their price precision;
-///   - the empty corridor: once the cash-out value reaches the issuance price (even by less than one tick) or the band
-///     between them is narrower than one spacing, the corridor is empty, a recycle retires both live positions and
+///   - the empty corridor: once the cash-out value reaches the issuance price (even by less than one tick) or no
+///     aligned spacing fits between the bounds, the corridor is empty, a recycle retires both live positions and
 ///     holds every token in the ledgers, a recycle or deploy with nothing to retire reverts `EmptyCorridor` before any
 ///     pool is seeded, and fresh positions redeploy once the corridor reopens.
 /// @dev Spot moves go through `_swapTo`, which re-marks every live position to exactly the principal its liquidity
@@ -41,17 +44,26 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
     int24 internal constant SPACING = 200;
 
     MockERC20 internal proj;
-    MockERC20 internal term;
+    /// @notice The terminal token: a fresh ERC-20, or `JBConstants.NATIVE_TOKEN` when `nativeTerminal` is set.
+    address internal term;
     PoolKey internal key;
     bool internal projectIsToken0;
+    /// @notice Set before `_wire` to wire the native terminal token instead of an ERC-20.
+    bool internal nativeTerminal;
 
     // ─── Harness
     // ───────────────────────────────────────────────────────────
 
-    /// @notice Wire project `PID` against a fresh ERC-20 terminal token, with the project token sorted as requested.
+    /// @notice Wire project `PID` against a fresh ERC-20 terminal token, with the project token sorted as requested, or
+    /// against the native terminal token when `nativeTerminal` is set (which always sorts the project as token1).
     function _wire(bool wantProjectToken0) internal {
         proj = new MockERC20("Proj", "P", 18);
-        term = new MockERC20("Term", "T", 18);
+        if (nativeTerminal) {
+            require(!wantProjectToken0, "native: the project is always token1");
+            term = JBConstants.NATIVE_TOKEN;
+        } else {
+            term = address(new MockERC20("Term", "T", 18));
+        }
         while ((address(proj) < address(term)) != wantProjectToken0) {
             proj = new MockERC20("Proj", "P", 18);
         }
@@ -65,9 +77,9 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         _setDirectoryTerminal(PID, address(term), address(terminal));
         jbProjects.setOwner(PID, owner);
         terminal.setProjectToken(PID, address(proj));
-        terminal.setAccountingContext(PID, address(term), uint32(uint160(address(term))), 18);
+        terminal.setAccountingContext(PID, address(term), _termCurrencyId(), 18);
         terminal.addAccountingContext(
-            PID, JBAccountingContext({token: address(term), decimals: 18, currency: uint32(uint160(address(term)))})
+            PID, JBAccountingContext({token: address(term), decimals: 18, currency: _termCurrencyId()})
         );
         jbTokens.setToken(PID, address(proj));
         // A non-inverted corridor: the cash-out floor sits genuinely below the issuance ceiling.
@@ -75,7 +87,8 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         store.setBalance(address(terminal), PID, address(term), 10e18);
         _addDirectoryTerminal(PID, address(terminal));
 
-        (address c0, address c1) = wantProjectToken0 ? (address(proj), address(term)) : (address(term), address(proj));
+        address termCurrency = Currency.unwrap(_termCurrency());
+        (address c0, address c1) = wantProjectToken0 ? (address(proj), termCurrency) : (termCurrency, address(proj));
         key = PoolKey({
             currency0: Currency.wrap(c0),
             currency1: Currency.wrap(c1),
@@ -83,6 +96,26 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
             tickSpacing: hook.TICK_SPACING(),
             hooks: hook.oracleHook()
         });
+    }
+
+    /// @notice The terminal token's pool currency: address(0) for native.
+    function _termCurrency() internal view returns (Currency) {
+        return Currency.wrap(nativeTerminal ? address(0) : term);
+    }
+
+    /// @notice The terminal token's accounting currency (its address, truncated as Juicebox does).
+    function _termCurrencyId() internal view returns (uint32) {
+        // forge-lint: disable-next-line(unsafe-typecast)
+        return uint32(uint160(term));
+    }
+
+    function _termBalanceOf(address who) internal view returns (uint256) {
+        return nativeTerminal ? who.balance : MockERC20(term).balanceOf(who);
+    }
+
+    function _fundTerm(address to, uint256 amount) internal {
+        if (nativeTerminal) vm.deal(to, to.balance + amount);
+        else MockERC20(term).mint(to, amount);
     }
 
     function _corridor() internal view returns (int24 lower, int24 upper) {
@@ -180,7 +213,7 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
     function _addTerminalFee(uint256 tokenId, uint256 amount) internal {
         if (projectIsToken0) positionManager.setCollectableFees(tokenId, 0, amount);
         else positionManager.setCollectableFees(tokenId, amount, 0);
-        term.mint(address(positionManager), amount);
+        _fundTerm(address(positionManager), amount);
     }
 
     /// @notice Move the spot to `sqrtPriceX96` as a trade would: every live position of `PID` is re-marked to exactly
@@ -233,7 +266,7 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
     /// @notice The hook holds exactly the project's ledgers (no fee claims, no other project uses these tokens).
     function _assertLedgersBacked() internal view {
         assertEq(proj.balanceOf(address(hook)), _projLedger(), "project ledger equals the hook's project balance");
-        assertEq(term.balanceOf(address(hook)), _termLedger(), "terminal ledger equals the hook's terminal balance");
+        assertEq(_termBalanceOf(address(hook)), _termLedger(), "terminal ledger equals the hook's terminal balance");
     }
 
     /// @notice Deploy `projectAmount` at mid-corridor, then fold a forgiven terminal-side LP fee into a recycle at
@@ -307,6 +340,8 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         assertGt(_bidId(), idsBefore, "the bid is a fresh id");
         assertEq(_projLedger(), projectIn, "every project token is carried in the ask ledger");
         assertEq(_termLedger(), terminalIn - bidPlaced, "the bid consumed every terminal token but V4 rounding");
+        // The ask is intentionally unmintable here: no range at or past the ceiling.
+        _assertPlacedExactly(PID, address(proj), term, projectIn, terminalIn, false, true);
         _assertLedgersBacked();
 
         // Restore the geometry: the spot trades back to mid-corridor and the carried inventory redeploys.
@@ -375,6 +410,8 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         (uint256 askPlaced,) = _assertPosition(_askId(), lower, upper, projectIn, 0, "corridor-bounded ask");
         assertEq(_termLedger(), terminalIn, "every terminal token stays in the bid ledger");
         assertEq(_projLedger(), projectIn - askPlaced, "the ask consumed every project token but V4 rounding");
+        // The bid is intentionally unmintable here: no range at or past the floor.
+        _assertPlacedExactly(PID, address(proj), term, projectIn, terminalIn, true, false);
         _assertLedgersBacked();
 
         // Restore the geometry: the carried terminal redeploys as a fresh bid.
@@ -439,6 +476,8 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         assertEq(_bidId(), 0, "a zero-liquidity bid is skipped");
         _assertPosition(_askId(), askLower, askUpper, projectIn, 0, "ask");
         assertEq(_termLedger(), 1, "the dust terminal is carried, not lost");
+        // The bid is intentionally unmintable here: one wei rounds to zero liquidity.
+        _assertPlacedExactly(PID, address(proj), term, projectIn, 1, true, false);
         _assertLedgersBacked();
 
         _addTerminalFee(_askId(), 0.1e18);
@@ -811,6 +850,11 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         _runEmptyDeploy(false, Empty.Narrow, false);
     }
 
+    function test_EmptyCorridor_NarrowBand_DeployReverts_Native() public {
+        nativeTerminal = true;
+        _runEmptyDeploy(false, Empty.Narrow, false);
+    }
+
     /// @notice A cash-out value of 0.98 against an issuance price of 1/0.99 leaves exactly one aligned spacing between
     /// them, which stays a valid corridor: the seed folds onto the floor bound and the ask fills the whole spacing.
     function _runOneSpacing(bool wantProjectToken0) internal {
@@ -874,12 +918,22 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         _runInwardLower(false);
     }
 
+    function test_Corridor_LowerBoundRoundsInward_Native() public {
+        nativeTerminal = true;
+        _runInwardLower(false);
+    }
+
     /// @notice With no cash-out value, project token1's lower bound is the issuance ceiling and rounds inward too: an
     /// issuance price of 1/1.00005 (half a tick above tick 0) gives [200, 600], never an ask at tick 0 above it.
     function test_Corridor_ZeroCashOut_LowerBoundRoundsInward_ProjectToken1() public {
         _wire(false);
         _setPrices(0, 1.00005e18);
         _assertCorridor(200, 600);
+    }
+
+    function test_Corridor_ZeroCashOut_LowerBoundRoundsInward_Native() public {
+        nativeTerminal = true;
+        test_Corridor_ZeroCashOut_LowerBoundRoundsInward_ProjectToken1();
     }
 
     /// @notice Corridor prices keep their precision at tiny rates. A weight of 2 project-token wei per terminal token
@@ -904,6 +958,11 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         _runTinyIssuance(false);
     }
 
+    function test_Corridor_TinyIssuanceRate_KeepsPrecision_Native() public {
+        nativeTerminal = true;
+        _runTinyIssuance(false);
+    }
+
     /// @notice A cash-out value previewed at 2 wei per project token against an issuance rate of 1e33: the floor uses
     /// the preview's bound, 4e-18 terminal tokens per project token (tick -400,623 rounded inward to -400,600 in
     /// project-token0 terms), never the -414,400 that taking the root before scaling gave.
@@ -919,6 +978,11 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
     }
 
     function test_Corridor_TinyCashOutValue_KeepsPrecision_ProjectToken1() public {
+        _runTinyCashOut(false);
+    }
+
+    function test_Corridor_TinyCashOutValue_KeepsPrecision_Native() public {
+        nativeTerminal = true;
         _runTinyCashOut(false);
     }
 
@@ -1025,6 +1089,11 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         _runTaxedFloor(false);
     }
 
+    function test_Corridor_TaxedFloorAtOrAboveRealizedCashOut_Native() public {
+        nativeTerminal = true;
+        _runTaxedFloor(false);
+    }
+
     /// @notice A nonzero weight always issues something at some payment size, even when the 1-WAD sample rounds to 0.
     /// A weight of 1 wei with a 10% reserve previews 0, yet paying 10e18 mints 9 wei for the payer. The ceiling is the
     /// bound ceil((1 + 1) * 90%) = 2 (tick 407,554 aligned down to 407,400 in project-token0 terms), at or below the
@@ -1066,22 +1135,94 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         _runRoundedZeroIssuance(false);
     }
 
-    /// @notice With genuinely no issuance (zero weight) and no cash-out value, the range is full on the ceiling side
-    /// but its floor side still stops at the cash-out bound of 2 wei per project token (tick -407,4xx rounded inward to
-    /// -407,400 in project-token0 terms).
-    function _runNoIssuance(bool wantProjectToken0) internal {
+    /// @notice A nonzero weight whose 1-WAD sample itself rounds to 0 is not structurally zero: a weight of 1 against a
+    /// conversion price of 1e19 previews 0 gross, yet paying 10e18 terminal tokens mints 1. The ceiling is the finite
+    /// bound ceil((0 + 1) * 100%) = 1 project wei per terminal token, a pool price of 1e18 terminal per project (tick
+    /// 414,486 aligned down to 414,400 in project-token0 terms) at or below the payer's 10e18, with the two-spacing
+    /// floor gap; never the extreme price of a project with no issuance.
+    function _runGrossZeroIssuance(bool wantProjectToken0) internal {
         _wire(wantProjectToken0);
-        _setPrices(0, 0);
+        _setPrices(0, 1);
+        prices.setPrice(PID, _termCurrencyId(), 1, 1e19);
+        (, uint256 issuancePreview) = _previews();
+        assertEq(issuancePreview, 0, "precondition: the preview rounds to 0");
+        assertEq(_grossOut(1e18), 0, "precondition: the gross 1-WAD sample rounds to 0");
+        assertEq(_grossOut(10e18), 1, "precondition: paying 10e18 mints 1");
+
+        (int24 lower, int24 upper) = _corridor();
+        if (projectIsToken0) {
+            assertEq(lower, 414_000, "corridor lower");
+            assertEq(upper, 414_400, "ceiling bound");
+            assertLe(_cmpSquare(TickMath.getSqrtPriceAtTick(upper), 1, 10e18), 0, "ceiling at or below the payer");
+        } else {
+            assertEq(lower, -414_400, "ceiling bound");
+            assertEq(upper, -414_000, "corridor upper");
+            assertGe(_cmpSquare(TickMath.getSqrtPriceAtTick(lower), 10e18, 1), 0, "ceiling at or below the payer");
+        }
+    }
+
+    /// @notice The gross project tokens a payment of `amount` terminal tokens mints, before reserves.
+    function _grossOut(uint256 amount) internal view returns (uint256) {
+        (JBRuleset memory ruleset,) = controller.currentRulesetOf(PID);
+        return JBUniswapV4LPSplitHookMath.getProjectTokensOutForTerminalTokensIn({
+            directory: IJBDirectory(address(directory)),
+            projectId: PID,
+            terminalToken: term,
+            terminalTokenInAmount: amount,
+            controller: address(controller),
+            ruleset: ruleset
+        });
+    }
+
+    function test_Corridor_GrossZeroIssuanceIsBounded_ProjectToken0() public {
+        _runGrossZeroIssuance(true);
+    }
+
+    function test_Corridor_GrossZeroIssuanceIsBounded_ProjectToken1() public {
+        _runGrossZeroIssuance(false);
+    }
+
+    function test_Corridor_GrossZeroIssuanceIsBounded_Native() public {
+        nativeTerminal = true;
+        _runGrossZeroIssuance(false);
+    }
+
+    /// @notice With genuinely no issuance and no cash-out value, the range is full on the ceiling side but its floor
+    /// side still stops at the cash-out bound of 2 wei per project token (tick -407,4xx rounded inward to -407,400 in
+    /// project-token0 terms). Issuance is structurally zero for either cause: a zero weight, or a nonzero weight with
+    /// every minted token reserved.
+    function _runNoIssuance(bool wantProjectToken0, bool allReserved) internal {
+        _wire(wantProjectToken0);
+        _setPrices(0, allReserved ? DEFAULT_WEIGHT : 0);
+        if (allReserved) controller.setReservedPercent(PID, uint16(JBConstants.MAX_RESERVED_PERCENT));
         if (projectIsToken0) _assertCorridor(-407_400, 887_000);
         else _assertCorridor(-887_200, 407_400);
     }
 
     function test_Corridor_NoIssuance_FloorStopsAtCashOutBound_ProjectToken0() public {
-        _runNoIssuance(true);
+        _runNoIssuance(true, false);
     }
 
     function test_Corridor_NoIssuance_FloorStopsAtCashOutBound_ProjectToken1() public {
-        _runNoIssuance(false);
+        _runNoIssuance(false, false);
+    }
+
+    function test_Corridor_NoIssuance_FloorStopsAtCashOutBound_Native() public {
+        nativeTerminal = true;
+        _runNoIssuance(false, false);
+    }
+
+    function test_Corridor_AllReserved_FloorStopsAtCashOutBound_ProjectToken0() public {
+        _runNoIssuance(true, true);
+    }
+
+    function test_Corridor_AllReserved_FloorStopsAtCashOutBound_ProjectToken1() public {
+        _runNoIssuance(false, true);
+    }
+
+    function test_Corridor_AllReserved_FloorStopsAtCashOutBound_Native() public {
+        nativeTerminal = true;
+        _runNoIssuance(false, true);
     }
 
     /// @notice A cash-out preview of 0 still bounds the floor, and the floor wins over the zero-cash-out geometry. A
@@ -1090,7 +1231,7 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
     /// The cash-out bound (2 raw units) is above the issuance price, so the corridor is empty and has no seed.
     function _runZeroPreviewFloor(bool wantProjectToken0) internal {
         _wire(wantProjectToken0);
-        uint32 currency = uint32(uint160(address(term)));
+        uint32 currency = _termCurrencyId();
         terminal.setAccountingContext(PID, address(term), currency, 6);
         controller.setBaseCurrency(PID, currency);
         _setPrices(0, 2e24);
@@ -1109,6 +1250,11 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
     }
 
     function test_Corridor_ZeroCashOutPreview_FloorEmptiesCorridor_ProjectToken1() public {
+        _runZeroPreviewFloor(false);
+    }
+
+    function test_Corridor_ZeroCashOutPreview_FloorEmptiesCorridor_Native() public {
+        nativeTerminal = true;
         _runZeroPreviewFloor(false);
     }
 
@@ -1201,7 +1347,7 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
     /// @notice Each corridor price encodes conservatively and tightly: the cash-out floor at or above its bound (the
     /// preview plus two) in project price, the issuance ceiling at or below its bound (the gross rate plus one, no
     /// reserve here), each within one unit of root precision (one, or 2^64 when the ratio is at least 2^64 and the
-    /// root is shifted).
+    /// root is shifted), and clamped to TickMath's limits only when the exact price lies past them.
     function testFuzz_Encoder_FloorAtOrAboveCeilingAtOrBelow(
         bool wantProjectToken0,
         uint256 cashOutValue,
@@ -1209,7 +1355,7 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
     )
         public
     {
-        cashOutValue = bound(cashOutValue, 0, type(uint160).max - 2);
+        cashOutValue = bound(cashOutValue, 0, type(uint256).max - 2);
         issuanceRate = bound(issuanceRate, 1, type(uint112).max);
         _wire(wantProjectToken0);
         _setPrices(cashOutValue, issuanceRate);
@@ -1225,11 +1371,27 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         }
     }
 
-    /// @notice `sqrtPriceX96` is sqrt(amount1 / amount0) * 2^96 rounded up (or down), to `step` precision.
+    /// @notice `sqrtPriceX96` is sqrt(amount1 / amount0) * 2^96 rounded up (or down), to `step` precision, then clamped
+    /// to [MIN_SQRT_PRICE, MAX_SQRT_PRICE - 1]. A result on either limit is accepted only when the exact price puts the
+    /// rounded encoding itself on or past that limit, so a clamp of a representable price fails.
     function _assertEncodes(uint160 sqrtPriceX96, uint256 amount1, uint256 amount0, bool roundUp) internal pure {
-        // Clamped encodings sit outside every usable corridor tick.
-        if (sqrtPriceX96 <= TickMath.MIN_SQRT_PRICE || sqrtPriceX96 >= TickMath.MAX_SQRT_PRICE - 1) return;
         uint256 step = amount1 / amount0 < 2 ** 64 ? 1 : 2 ** 64;
+        uint256 maxPrice = TickMath.MAX_SQRT_PRICE - 1;
+        uint256 minPrice = TickMath.MIN_SQRT_PRICE;
+        if (sqrtPriceX96 == maxPrice) {
+            // Rounded up, the encoding exceeds the exact root by under one step; rounded down, it never exceeds it.
+            if (roundUp) {
+                assertLt(_cmpSquare(maxPrice - step, amount0, amount1), 0, "max clamp: exact above max - step");
+            } else {
+                assertLe(_cmpSquare(maxPrice, amount0, amount1), 0, "max clamp: exact at or above max");
+            }
+            return;
+        }
+        if (sqrtPriceX96 == minPrice) {
+            if (roundUp) assertGe(_cmpSquare(minPrice, amount0, amount1), 0, "min clamp: exact at or below min");
+            else assertGt(_cmpSquare(minPrice + step, amount0, amount1), 0, "min clamp: exact below min + step");
+            return;
+        }
         if (roundUp) {
             assertGe(_cmpSquare(sqrtPriceX96, amount0, amount1), 0, "rounded up: at or above the exact price");
             assertLt(_cmpSquare(sqrtPriceX96 - step, amount0, amount1), 0, "rounded up: within one step");
@@ -1239,16 +1401,74 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         }
     }
 
-    /// @notice Compare `root^2 * amount0` with `amount1 * 2^192` exactly in 512 bits (-1, 0 or 1). Needs `root` below
-    /// 2^161 and both amounts below 2^160.
+    /// @notice Compare `root^2 * amount0` with `amount1 * 2^192` exactly in 768 bits (-1, 0 or 1), for any 256-bit
+    /// inputs.
     function _cmpSquare(uint256 root, uint256 amount0, uint256 amount1) internal pure returns (int256) {
         (uint256 squareHi, uint256 squareLo) = _mul512(root, root);
-        (uint256 carry, uint256 lo) = _mul512(squareLo, amount0);
-        uint256 hi = squareHi * amount0 + carry;
-        (uint256 targetHi, uint256 targetLo) = (amount1 >> 64, amount1 << 192);
-        if (hi != targetHi) return hi > targetHi ? int256(1) : int256(-1);
-        if (lo != targetLo) return lo > targetLo ? int256(1) : int256(-1);
+        (uint256 carry, uint256 w0) = _mul512(squareLo, amount0);
+        (uint256 w2, uint256 mid) = _mul512(squareHi, amount0);
+        uint256 w1;
+        unchecked {
+            w1 = mid + carry;
+            if (w1 < mid) w2++;
+        }
+        // The target is (0, amount1 >> 64, amount1 << 192) in 256-bit words.
+        if (w2 != 0) return 1;
+        if (w1 != amount1 >> 64) return w1 > amount1 >> 64 ? int256(1) : int256(-1);
+        if (w0 != amount1 << 192) return w0 > amount1 << 192 ? int256(1) : int256(-1);
         return 0;
+    }
+
+    /// @notice Deterministic encodings around every scaling and clamping threshold of project token0's cash-out floor
+    /// (pool price (rate + 2) / 1e18, rounded up): the 2^64 and 2^128 ratio thresholds and MAX_SQRT_PRICE.
+    /// Representable prices on either side of each threshold encode unclamped; only prices past the limit clamp to it.
+    function test_Encoder_ClampsOnlyPastTheLimits_ProjectToken0() public {
+        // The bound whose exact price is MAX_SQRT_PRICE - 1.
+        uint256 maxPrice = TickMath.MAX_SQRT_PRICE - 1;
+        uint256 atMax = mulDiv(maxPrice, maxPrice * 1e18, 2 ** 192);
+        _wire(true);
+        _assertFloorEncodes(2 ** 64 * 1e18 - 1, false);
+        _assertFloorEncodes(2 ** 64 * 1e18, false);
+        _assertFloorEncodes(2 ** 64 * 1e18 + 1, false);
+        _assertFloorEncodes(2 ** 100 * 1e18, false);
+        _assertFloorEncodes(atMax - 2 ** 100, false);
+        // The exact price is just under the limit, but rounding up at 2^64 precision lands on or past it.
+        _assertFloorEncodes(atMax, true);
+        _assertFloorEncodes(atMax + 2 ** 100, true);
+        _assertFloorEncodes(2 ** 128 * 1e18 - 1, true);
+        _assertFloorEncodes(2 ** 128 * 1e18, true);
+        _assertFloorEncodes(type(uint256).max, true);
+        // A saturated floor empties the corridor.
+        _assertCorridorEmpty();
+    }
+
+    /// @notice Project token1's cash-out floor (pool price 1e18 / (rate + 2), rounded down) reaches MIN_SQRT_PRICE:
+    /// a price just above it encodes unclamped, one just below it clamps.
+    function test_Encoder_ClampsOnlyPastTheLimits_ProjectToken1() public {
+        // The bound whose exact price is MIN_SQRT_PRICE.
+        uint256 atMin = mulDiv(1e18, 2 ** 192, uint256(TickMath.MIN_SQRT_PRICE) * TickMath.MIN_SQRT_PRICE);
+        _wire(false);
+        _assertFloorEncodes(atMin - 2 ** 160, false);
+        _assertFloorEncodes(atMin + 2 ** 160, true);
+        _assertFloorEncodes(type(uint256).max, true);
+        // A saturated floor empties the corridor.
+        _assertCorridorEmpty();
+    }
+
+    /// @notice Set the cash-out floor's bound to `bound` (the preview plus two, saturating) and check its encoding:
+    /// conservative, tight, and on the TickMath limit exactly when `clamped`.
+    function _assertFloorEncodes(uint256 bound_, bool clamped) internal {
+        _setPrices(bound_ == type(uint256).max ? bound_ : bound_ - 2, 1);
+        (uint160 cashOutSqrtPrice,) = _exactPrices();
+        if (projectIsToken0) {
+            _assertEncodes(cashOutSqrtPrice, bound_, 1e18, true);
+            if (clamped) assertEq(cashOutSqrtPrice, TickMath.MAX_SQRT_PRICE - 1, "clamped to the maximum");
+            else assertLt(cashOutSqrtPrice, TickMath.MAX_SQRT_PRICE - 1, "representable: not clamped");
+        } else {
+            _assertEncodes(cashOutSqrtPrice, 1e18, bound_, false);
+            if (clamped) assertEq(cashOutSqrtPrice, TickMath.MIN_SQRT_PRICE, "clamped to the minimum");
+            else assertGt(cashOutSqrtPrice, TickMath.MIN_SQRT_PRICE, "representable: not clamped");
+        }
     }
 
     /// @notice The full 512-bit product of `a` and `b`.
@@ -1324,15 +1544,15 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
             "the PositionManager holds only pool reserves"
         );
         assertEq(
-            term.balanceOf(address(positionManager)),
-            positionManager.poolLocked(address(term)),
+            _termBalanceOf(address(positionManager)),
+            positionManager.poolLocked(Currency.unwrap(_termCurrency())),
             "the PositionManager holds only pool reserves"
         );
         assertLe(
             proj.balanceOf(address(positionManager)), positionManager.burnCallCount(), "project rounding in the pool"
         );
         assertLe(
-            term.balanceOf(address(positionManager)), positionManager.burnCallCount(), "terminal rounding in the pool"
+            _termBalanceOf(address(positionManager)), positionManager.burnCallCount(), "terminal rounding in the pool"
         );
 
         // Nothing left to retire: the recycle refuses and changes nothing.
@@ -1373,6 +1593,11 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
     }
 
     function test_EmptyCorridor_NarrowBand_RecycleRetiresAndHolds_ProjectToken1() public {
+        _runEmptyRecycle(false, Empty.Narrow);
+    }
+
+    function test_EmptyCorridor_NarrowBand_RecycleRetiresAndHolds_Native() public {
+        nativeTerminal = true;
         _runEmptyRecycle(false, Empty.Narrow);
     }
 }

@@ -466,7 +466,8 @@ contract LPSplitHookV4TestBase is Test {
     /// @notice `projectId`'s live ask and bid each hold exactly what their liquidity costs at the live spot (the ask
     /// only project tokens, the bid only terminal tokens), and together with the hook's ledgers they account for
     /// exactly `projectIn` project and `terminalIn` terminal tokens. What stays ledgered is only V4 rounding: each
-    /// position holds the most liquidity its inventory pays for.
+    /// position holds the most liquidity its inventory pays for. Every funded side must be live; a caller whose side
+    /// is intentionally unmintable says so with the overload below.
     function _assertPlacedExactly(
         uint256 projectId,
         address projectTokenAddr,
@@ -477,8 +478,37 @@ contract LPSplitHookV4TestBase is Test {
         internal
         view
     {
+        _assertPlacedExactly({
+            projectId: projectId,
+            projectTokenAddr: projectTokenAddr,
+            terminalTokenAddr: terminalTokenAddr,
+            projectIn: projectIn,
+            terminalIn: terminalIn,
+            askLive: projectIn != 0,
+            bidLive: terminalIn != 0
+        });
+    }
+
+    /// @notice `_assertPlacedExactly` with each side's expected liveness explicit: `askLive`/`bidLive` false asserts
+    /// that side holds no position (its inventory, if any, stays ledgered whole).
+    function _assertPlacedExactly(
+        uint256 projectId,
+        address projectTokenAddr,
+        address terminalTokenAddr,
+        uint256 projectIn,
+        uint256 terminalIn,
+        bool askLive,
+        bool bidLive
+    )
+        internal
+        view
+    {
         uint256 askId = hook.askTokenIdOf(projectId, terminalTokenAddr);
         uint256 bidId = hook.bidTokenIdOf(projectId, terminalTokenAddr);
+        if (askLive) assertNotEq(askId, 0, "the ask is live");
+        else assertEq(askId, 0, "no ask");
+        if (bidLive) assertNotEq(bidId, 0, "the bid is live");
+        else assertEq(bidId, 0, "no bid");
         (uint256 askProject, uint256 askTerminal) = _costSidesOf(askId, projectTokenAddr);
         (uint256 bidProject, uint256 bidTerminal) = _costSidesOf(bidId, projectTokenAddr);
         assertEq(askTerminal, 0, "the ask holds no terminal");

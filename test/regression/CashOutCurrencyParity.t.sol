@@ -262,14 +262,100 @@ contract CashOutAllTerminalsTest is LPSplitHookV4TestBase {
         assertEq(hook.accumulatedProjectTokens(PROJECT_ID), ledgerBefore + 1e18, "the intake is kept");
     }
 
+    /// @notice A failing surplus read on ANY local terminal reverts the rate and the bounds rather than counting that
+    /// terminal as zero surplus, even while the primary terminal's surplus and the reclaim preview stay healthy. A
+    /// recycle reverts and leaves the live position and both ledgers untouched, while a distribution's inline
+    /// automation fails softly and keeps the intake.
+    function _runFailingSecondarySurplus(address token) internal {
+        if (token == NATIVE) {
+            // forge-lint: disable-next-line(unsafe-typecast)
+            uint32 nativeCurrency = uint32(uint160(NATIVE));
+            terminal.addAccountingContext(
+                PROJECT_ID, JBAccountingContext({token: NATIVE, decimals: 18, currency: nativeCurrency})
+            );
+            store.setBalance(address(terminal), PROJECT_ID, NATIVE, 10e18);
+            store.setBalance(address(terminal), PROJECT_ID, address(terminalToken), 0);
+        }
+        _accumulateAndDeploy(PROJECT_ID, 100e18);
+        uint256 askId = hook.askTokenIdOf(PROJECT_ID, token);
+        assertNotEq(askId, 0, "precondition: the deployed ask is live");
+        uint128 liquidity = positionManager.getPositionLiquidity(askId);
+        uint256 projectLedger = hook.accumulatedProjectTokens(PROJECT_ID);
+        uint256 terminalLedger = hook.accumulatedTerminalTokens(PROJECT_ID, token);
+
+        vm.mockCallRevert(
+            address(secondTerminal),
+            abi.encodeWithSelector(IJBTerminal.currentSurplusOf.selector),
+            bytes("surplus down")
+        );
+        // forge-lint: disable-next-line(unsafe-typecast)
+        uint256 currency = uint32(uint160(token));
+        assertEq(
+            terminal.currentSurplusOf(PROJECT_ID, new address[](0), 18, currency),
+            100e18,
+            "precondition: the primary terminal's surplus is healthy"
+        );
+
+        vm.expectRevert(bytes("surplus down"));
+        this.rateOf(token);
+        vm.expectRevert(bytes("surplus down"));
+        this.boundsOf(token, address(projectToken));
+        vm.expectRevert(bytes("surplus down"));
+        hook.addLiquidity(PROJECT_ID, token);
+
+        assertEq(hook.askTokenIdOf(PROJECT_ID, token), askId, "the ask is kept");
+        assertEq(hook.bidTokenIdOf(PROJECT_ID, token), 0, "no bid appears");
+        assertEq(positionManager.getPositionLiquidity(askId), liquidity, "the ask keeps its liquidity");
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), projectLedger, "the project ledger is unchanged");
+        assertEq(hook.accumulatedTerminalTokens(PROJECT_ID, token), terminalLedger, "the terminal ledger is unchanged");
+
+        projectToken.mint(address(controller), 1e18);
+        vm.startPrank(address(controller));
+        projectToken.approve(address(hook), 1e18);
+        vm.expectEmit(true, false, false, false, address(hook));
+        emit IJBUniswapV4LPSplitHook.LiquidityAutomationFailed(PROJECT_ID, bytes4(0), address(controller));
+        hook.processSplitWith(_buildReservedContext(PROJECT_ID, 1e18));
+        vm.stopPrank();
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), projectLedger + 1e18, "the intake is kept");
+        assertEq(hook.askTokenIdOf(PROJECT_ID, token), askId, "the ask is still kept");
+    }
+
+    function test_failingSecondarySurplus_revertsBounds_inlineKeepsIntake() public {
+        _runFailingSecondarySurplus(address(terminalToken));
+    }
+
+    function test_failingSecondarySurplus_revertsBounds_inlineKeepsIntake_Native() public {
+        _runFailingSecondarySurplus(NATIVE);
+    }
+
     /// @notice External wrapper so `vm.expectRevert` can catch a library revert.
     function rateOf(address token) external view returns (uint256) {
         return _rate(token);
     }
 
+    /// @notice External wrapper so `vm.expectRevert` can catch a library revert.
+    function boundsOf(address token, address projectTokenAddr) external view returns (int24, int24) {
+        return _bounds(token, projectTokenAddr);
+    }
+
+    /// @notice With less than one whole token of supply, a preview whose scaled-up rate is representable scales
+    /// exactly even when the plain product overflows: 1e60 reclaimed by a 1e17 supply is 1e61 per 1e18 tokens, though
+    /// 1e60 * 1e18 exceeds 2^256.
+    function test_partialSupplyPreview_scalesPastAnOverflowingProduct() public {
+        controller.setTotalTokenSupplyWithReservedTokensOf(PROJECT_ID, 1e17);
+        vm.mockCall(
+            address(store),
+            abi.encodeWithSignature("currentReclaimableSurplusOf(uint256,uint256,uint256,uint256)"),
+            abi.encode(uint256(1e60))
+        );
+        assertEq(_rate(address(terminalToken)), 1e61, "the preview scales exactly");
+        assertEq(_rate(NATIVE), 1e61, "the preview scales exactly: native");
+    }
+
     /// @notice With less than one whole token of supply, scaling the preview up to 1e18 tokens saturates instead of
-    /// overflowing, and the saturated floor leaves an empty corridor rather than a revert.
-    function test_partialSupplyPreview_saturates() public {
+    /// overflowing, and the saturated floor leaves an empty corridor rather than a revert, in either ordering and for
+    /// a native terminal token.
+    function _runSaturation(address token, address projectTokenAddr) internal {
         controller.setTotalTokenSupplyWithReservedTokensOf(PROJECT_ID, 1);
         vm.mockCall(
             address(store),
@@ -281,8 +367,24 @@ contract CashOutAllTerminalsTest is LPSplitHookV4TestBase {
             abi.encodeWithSelector(MockJBTerminalStore.currentTotalSurplusOf.selector),
             abi.encode(type(uint256).max / 1e18 + 1)
         );
-        assertEq(_rate(address(terminalToken)), type(uint256).max, "the preview saturates");
-        (int24 lower, int24 upper) = _bounds(address(terminalToken), lowProjectToken);
+        assertEq(_rate(token), type(uint256).max, "the preview saturates");
+        _assertEmpty(token, projectTokenAddr);
+    }
+
+    function test_partialSupplyPreview_saturates_ProjectToken0() public {
+        _runSaturation(address(terminalToken), lowProjectToken);
+    }
+
+    function test_partialSupplyPreview_saturates_ProjectToken1() public {
+        _runSaturation(address(terminalToken), highProjectToken);
+    }
+
+    function test_partialSupplyPreview_saturates_Native() public {
+        _runSaturation(NATIVE, highProjectToken);
+    }
+
+    function _assertEmpty(address token, address projectTokenAddr) internal view {
+        (int24 lower, int24 upper) = _bounds(token, projectTokenAddr);
         assertEq(lower, 0, "a saturated floor empties the corridor: lower");
         assertEq(upper, 0, "a saturated floor empties the corridor: upper");
     }

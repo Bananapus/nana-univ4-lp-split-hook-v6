@@ -338,17 +338,23 @@ contract LPSplitHookHandler is Test {
         ];
         for (uint256 j; j < 2; j++) {
             if (ids[j] == 0) continue;
-            (PoolKey memory key, int24 lower, int24 upper, uint128 liquidity, uint256 locked0, uint256 locked1,) =
-                positionManager._positions(ids[j]);
-            (uint160 sqrtP,,,) = StateLibrary.getSlot0(IPoolManager(address(positionManager.poolManager())), key.toId());
-            uint160 sqrtA = TickMath.getSqrtPriceAtTick(lower);
-            uint160 sqrtB = TickMath.getSqrtPriceAtTick(upper);
-            sqrtP = sqrtP < sqrtA ? sqrtA : sqrtP > sqrtB ? sqrtB : sqrtP;
-            uint256 rounding0 = locked0 - SqrtPriceMath.getAmount0Delta(sqrtP, sqrtB, liquidity, false);
-            uint256 rounding1 = locked1 - SqrtPriceMath.getAmount1Delta(sqrtA, sqrtP, liquidity, false);
+            (uint256 rounding0, uint256 rounding1) = positionRounding(ids[j]);
             projectSide += projectIsToken0 ? rounding0 : rounding1;
             terminalSide += projectIsToken0 ? rounding1 : rounding0;
         }
+    }
+
+    /// @notice What burning live position `tokenId` leaves in the pool, per currency: its reserves minus the principal
+    /// V4 returns for its liquidity at the live spot (rounded down).
+    function positionRounding(uint256 tokenId) public view returns (uint256 rounding0, uint256 rounding1) {
+        (PoolKey memory key, int24 lower, int24 upper, uint128 liquidity, uint256 locked0, uint256 locked1,) =
+            positionManager._positions(tokenId);
+        (uint160 sqrtP,,,) = StateLibrary.getSlot0(IPoolManager(address(positionManager.poolManager())), key.toId());
+        uint160 sqrtA = TickMath.getSqrtPriceAtTick(lower);
+        uint160 sqrtB = TickMath.getSqrtPriceAtTick(upper);
+        sqrtP = sqrtP < sqrtA ? sqrtA : sqrtP > sqrtB ? sqrtB : sqrtP;
+        rounding0 = locked0 - SqrtPriceMath.getAmount0Delta(sqrtP, sqrtB, liquidity, false);
+        rounding1 = locked1 - SqrtPriceMath.getAmount1Delta(sqrtA, sqrtP, liquidity, false);
     }
 
     /// @notice A successful collection or recycle collected every live position's injected fees.
@@ -413,7 +419,8 @@ contract LPSplitHookHandler is Test {
 ///   4. exact per-project conservation per currency: ledgers plus live principal plus uncollected fees equal what
 ///      entered the project's books, net of the independently computed cuts
 ///   5. claimableFeeTokens equals the claims derived independently from the injected fees (cut and payout)
-///   6. at most two positions per project are alive, and every live position is a tracked ask or bid
+///   6. at most two positions per project are alive, every live position is a tracked ask or bid, and each holds at
+///      most one unit per currency beyond the principal its burn returns (fresh mints at the frozen price)
 ///   7. every campaign includes a successful deploy, fee collection and recycle (seeded in setUp), no handler call
 ///      fails without a justified error under a checked precondition, and every run ends with post-seed
 ///      collections and recycles of nonzero fees
@@ -885,11 +892,13 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
                 assertNotEq(askId, bidId, "INVARIANT VIOLATED: ask and bid share an id");
                 (,,,,,, bool askExists) = positionManager._positions(askId);
                 assertTrue(askExists, "INVARIANT VIOLATED: tracked ask is not alive");
+                _assertRoundingAtMostOne(askId);
                 trackedLive++;
             }
             if (bidId != 0) {
                 (,,,,,, bool bidExists) = positionManager._positions(bidId);
                 assertTrue(bidExists, "INVARIANT VIOLATED: tracked bid is not alive");
+                _assertRoundingAtMostOne(bidId);
                 trackedLive++;
             }
         }
@@ -901,6 +910,15 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
             if (exists) live++;
         }
         assertEq(live, trackedLive, "INVARIANT VIOLATED: orphaned position NFT (replaced id not burned)");
+    }
+
+    /// @notice A fresh mint at the frozen price locks its rounded-up cost and a burn returns its rounded-down
+    /// principal, so each position's rounding is at most one unit per currency: anything larger is a ledger or model
+    /// discrepancy, not rounding.
+    function _assertRoundingAtMostOne(uint256 tokenId) internal view {
+        (uint256 rounding0, uint256 rounding1) = handler.positionRounding(tokenId);
+        assertLe(rounding0, 1, "INVARIANT VIOLATED: token0 rounding above one unit");
+        assertLe(rounding1, 1, "INVARIANT VIOLATED: token1 rounding above one unit");
     }
 
     // ═══════════════════════════════════════════════════════════════════════

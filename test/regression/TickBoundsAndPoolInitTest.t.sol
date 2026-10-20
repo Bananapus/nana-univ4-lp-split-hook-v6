@@ -222,7 +222,7 @@ contract RegressionFixM4Test is LPSplitHookV4TestBase {
 }
 
 /// @notice Tests verifying the tick bounds stay inside the valid TickMath range at extreme prices, and that a band
-/// narrower than one spacing is an empty corridor.
+/// in which no aligned spacing fits is an empty corridor.
 /// @dev Without the clamp, a bound past MIN_TICK or MAX_TICK would make TickMath.getSqrtPriceAtTick revert. A collapsed
 ///      band returns (0, 0) and the hook holds, rather than opening a band around the issuance price whose asks would
 ///      sit below the cash-out value.
@@ -275,23 +275,48 @@ contract RegressionFixL6Test is LPSplitHookV4TestBase {
     // 4. An extreme issuance price is clamped to the valid range
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice A weight of 1 wei puts the issuance price at the far end of the tick range (a cash-out value of 900
-    /// sits far below it): the issuance-side bound clamps to the usable range and the corridor stays wide.
+    /// @notice A weight of 1 wei puts the issuance price far out (2 project wei per terminal token, tick -407,5xx
+    /// rounded inward to -407,400) but still inside the usable range, and a cash-out value of 900 sits far below it
+    /// (tick -68,0xx aligned down to -68,200): the corridor is wide and no clamp binds.
     function test_L6_ExtremeIssuancePrice_ClampedToValidRange() public {
         store.setSurplus(PROJECT_ID, 900e18);
         controller.setWeight(PROJECT_ID, 1);
         controller.setReservedPercent(PROJECT_ID, 0);
+        assertTrue(address(terminalToken) < address(projectToken), "precondition: the project is token1");
 
         (int24 tickLower, int24 tickUpper) =
             testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
 
-        assertGe(tickLower, _minUsableTick(), "tickLower must be >= minUsable after clamping");
-        assertLe(tickUpper, _maxUsableTick(), "tickUpper must be <= maxUsable after clamping");
-        assertGt(tickUpper - tickLower, TICK_SPACING, "the corridor stays wider than one spacing");
+        assertEq(tickLower, -407_400, "tickLower");
+        assertEq(tickUpper, -68_200, "tickUpper");
+    }
+
+    /// @notice A saturated endpoint: with a cash-out value but no issuance (zero weight) the issuance price encodes at
+    /// TickMath's limit. With the project as token0 it is MAX_SQRT_PRICE - 1 (tick 887,271, aligned down to 887,200),
+    /// one spacing past the usable range, and the upper clamp brings it to exactly 887,000. With the project as token1
+    /// it is MIN_SQRT_PRICE (tick -887,272), whose inward rounding lands exactly on the usable minimum -887,200. The
+    /// cash-out floor (0.0005 per token) bounds the other side.
+    function test_L6_SaturatedIssuanceEndpoint_ClampsToUsableRange() public {
+        controller.setWeight(PROJECT_ID, 0);
+        controller.setReservedPercent(PROJECT_ID, 0);
+        address lowProjectToken = address(uint160(address(terminalToken)) - 1);
+        assertTrue(address(terminalToken) < address(projectToken), "precondition: the project is token1");
+
+        (int24 tickLower, int24 tickUpper) =
+            testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), lowProjectToken);
+        assertEq(tickLower, -76_000, "project token0: the cash-out floor");
+        assertEq(tickUpper, _maxUsableTick(), "project token0: clamped to the usable maximum");
+        assertEq(tickUpper, 887_000, "project token0: the usable maximum");
+
+        (tickLower, tickUpper) =
+            testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
+        assertEq(tickLower, _minUsableTick(), "project token1: the usable minimum");
+        assertEq(tickLower, -887_200, "project token1: the usable minimum");
+        assertEq(tickUpper, 76_000, "project token1: the cash-out floor");
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 5. A band narrower than one spacing at an extreme price is empty
+    // 5. A band no aligned spacing fits in, at an extreme price, is empty
     // ─────────────────────────────────────────────────────────────────────
 
     /// @notice A cash-out value 1% under an extreme issuance price (weight type(uint88).max, around tick +/-195,500)
