@@ -110,8 +110,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     error JBUniswapV4LPSplitHook_InvalidTerminalToken(uint256 projectId, address terminalToken);
 
     /// @notice Thrown when a project's corridor is empty and the hook holds no live position to retire: the cash-out
-    /// value per token reaches the issuance price, or the band between them is narrower than one tick spacing, so no
-    /// quotable price is both at or above the cash-out value and at or below the issuance price.
+    /// value per token reaches the issuance price, or no aligned tick spacing fits between them, so no quotable price
+    /// is both at or above the cash-out value and at or below the issuance price.
     error JBUniswapV4LPSplitHook_EmptyCorridor(uint256 projectId, address terminalToken);
 
     /// @notice Thrown when the pool's live spot leaves nothing for the hook to deploy: no aligned ask range between the

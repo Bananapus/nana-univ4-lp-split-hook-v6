@@ -110,7 +110,7 @@ library JBUniswapV4LPSplitHookMath {
     /// @param ruleset The project's current ruleset (pre-fetched to avoid redundant lookups).
     /// @return tickLower The lower tick bound of the LP position.
     /// @return tickUpper The upper tick bound of the LP position. Equal to `tickLower` (an empty corridor) when the
-    /// cash-out value per token reaches the issuance price, or the band between them is narrower than one spacing.
+    /// cash-out value per token reaches the issuance price, or no aligned spacing fits between them.
     function calculateTickBounds(
         IJBDirectory directory,
         IJBSuckerRegistry suckerRegistry,
@@ -231,7 +231,6 @@ library JBUniswapV4LPSplitHookMath {
             tickLower = JBLPSplitHookHelpers.alignTickToSpacingCeil({
                 tick: _tickAtOrAbove(ceilingSqrtPrice), spacing: _TICK_SPACING
             });
-            if (tickLower < minUsable) tickLower = minUsable;
             if (tickLower > maxUsable - floorGap) tickLower = maxUsable - floorGap;
             tickUpper = tickLower + floorGap;
         }
@@ -285,15 +284,13 @@ library JBUniswapV4LPSplitHookMath {
             tick: TickMath.getTickAtSqrtPrice(sqrtUpper), spacing: _TICK_SPACING
         });
 
-        // Clamp to valid V4 tick range after alignment.
-        int24 minUsable =
-            JBLPSplitHookHelpers.alignTickToSpacing({tick: TickMath.MIN_TICK, spacing: _TICK_SPACING}) + _TICK_SPACING;
+        // Clamp the upper bound to the usable V4 range. The ceil-aligned lower bound of any tick at or above MIN_TICK
+        // is already at or above the lowest usable tick, so it needs no clamp.
         int24 maxUsable =
             JBLPSplitHookHelpers.alignTickToSpacing({tick: TickMath.MAX_TICK, spacing: _TICK_SPACING}) - _TICK_SPACING;
-        if (tickLower < minUsable) tickLower = minUsable;
         if (tickUpper > maxUsable) tickUpper = maxUsable;
 
-        // A band narrower than one aligned spacing holds no price that respects both bounds: return it empty.
+        // When no aligned spacing fits between the bounds, no price respects both: return the corridor empty.
         if (tickLower >= tickUpper) return (0, 0);
     }
 
