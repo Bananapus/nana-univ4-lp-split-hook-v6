@@ -354,8 +354,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @custom:param projectId The ID of the project to check deployment status for.
     mapping(uint256 projectId => bool hasDeployedPool) public hasDeployedPool;
 
-    /// @notice The ruleset weight recorded at each project's first successful deploy or recycle.
-    /// @dev Snapshotted once, by the first `deployPool`/`addLiquidity` run (intake does not read rulesets), as a
+    /// @notice The first nonzero ruleset weight recorded by a successful deploy or recycle of each project.
+    /// @dev Written by the first successful `deployPool`/`addLiquidity` run whose ruleset weight is nonzero (zero is
+    /// the unset sentinel, so a zero-weight run leaves it for a later one; intake does not read rulesets), as a
     /// processing-era reference. Both entry points are permissionless and gated only by the economic and oracle-TWAP
     /// guards, not by this weight.
     /// @custom:param projectId The ID of the project to get the initial accumulation-era ruleset weight of.
@@ -970,7 +971,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // forge-lint: disable-next-line(unused-return)
         (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
 
-        // Record the ruleset weight once, at the first successful deploy or recycle, as a processing-era reference.
+        // Record the first nonzero ruleset weight a successful deploy or recycle sees, as a processing-era reference.
         if (initialWeightOf[projectId] == 0) initialWeightOf[projectId] = ruleset.weight;
 
         // Recycling is allowed at any time, with or without new tokens, so idle ledgered inventory and a moved corridor
@@ -1513,7 +1514,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             currency0: currency0, currency1: currency1, fee: POOL_FEE, tickSpacing: TICK_SPACING, hooks: oracleHook
         });
 
-        // The seed price for a pool this hook initializes: one tick spacing inside the cash-out floor.
+        // The seed price for a pool this hook initializes: one tick spacing inside the cash-out floor, or on the floor
+        // when the corridor is only one spacing wide.
         uint160 sqrtPriceX96 = JBUniswapV4LPSplitHookMath.computeInitialSqrtPrice({
             directory: IJBDirectory(DIRECTORY),
             suckerRegistry: SUCKER_REGISTRY,
@@ -1593,7 +1595,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // forge-lint: disable-next-line(unused-return)
         (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
 
-        // Record the ruleset weight once, at the first successful deploy or recycle, as a processing-era reference.
+        // Record the first nonzero ruleset weight a successful deploy or recycle sees, as a processing-era reference.
         if (initialWeightOf[projectId] == 0) initialWeightOf[projectId] = ruleset.weight;
 
         // Auto-select the terminal token with the highest ETH-denominated value.

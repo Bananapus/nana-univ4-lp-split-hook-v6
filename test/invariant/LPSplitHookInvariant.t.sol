@@ -23,6 +23,7 @@ import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
 import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {MockGeomeanOracle} from "../mock/MockGeomeanOracle.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
+import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
 import {LibClone} from "solady/src/utils/LibClone.sol";
 
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
@@ -848,7 +849,11 @@ contract LPSplitHookHandler is Test {
         projectId = deployed[seed % count];
     }
 
-    /// @notice The liquidity one single-sided mint buys over `[tickLower, tickUpper]`, or zero when the hook skips it.
+    /// @notice The liquidity one single-sided mint buys over `[tickLower, tickUpper]` at the current spot, or zero for
+    /// an empty or unfunded range.
+    /// @dev Uses Uniswap's canonical `LiquidityAmounts`, not the hook's library, so a regression in the hook's own
+    /// liquidity math cannot also make this check read zero. It ignores the per-tick cap, which the campaign never
+    /// reaches; a capped skip therefore reads as mintable and surfaces as an unexpected failure.
     /// @param manager The pool manager holding the pool.
     /// @param key The pool key.
     /// @param tickLower The range's lower tick.
@@ -870,12 +875,13 @@ contract LPSplitHookHandler is Test {
     {
         // The hook skips an empty or inverted range, and a range with nothing to fund it.
         if (tickLower >= tickUpper || (amount0 == 0 && amount1 == 0)) return 0;
-        // Otherwise it mints what the library's capped single-sided rule buys.
-        liquidity = JBUniswapV4LPSplitHookMath.cappedSingleSidedLiquidity({
-            poolManager: manager,
-            key: key,
-            tickLower: tickLower,
-            tickUpper: tickUpper,
+        // Read the spot the mint prices against.
+        (uint160 sqrtPriceX96,,,) = StateLibrary.getSlot0({manager: manager, poolId: key.toId()});
+        // Otherwise it buys what the canonical amounts-to-liquidity rule gives for the range's funding at the spot.
+        liquidity = LiquidityAmounts.getLiquidityForAmounts({
+            sqrtPriceX96: sqrtPriceX96,
+            sqrtPriceAX96: TickMath.getSqrtPriceAtTick(tickLower),
+            sqrtPriceBX96: TickMath.getSqrtPriceAtTick(tickUpper),
             amount0: amount0,
             amount1: amount1
         });
