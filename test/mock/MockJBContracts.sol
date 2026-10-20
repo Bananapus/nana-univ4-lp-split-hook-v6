@@ -91,6 +91,15 @@ contract MockJBDirectory {
         _terminalsList[projectId].push(terminal);
     }
 
+    /// @dev Matches JBDirectory.isTerminalOf: whether `terminal` is in the project's terminal list.
+    function isTerminalOf(uint256 projectId, address terminal) external view returns (bool) {
+        address[] storage terminals = _terminalsList[projectId];
+        for (uint256 i; i < terminals.length; i++) {
+            if (terminals[i] == terminal) return true;
+        }
+        return false;
+    }
+
     // Fallback handles controllerOf, primaryTerminalOf, terminalsOf, PROJECTS
     // because IJBDirectory.controllerOf returns IERC165, not address,
     // so we must use fallback to avoid selector conflicts with mismatched return types.
@@ -159,6 +168,12 @@ contract MockJBController {
 
     // Track burn calls for verification
     uint256 public burnCallCount;
+    /// @notice When set, `burnTokensOf` reverts, modeling a controller that rejects burns. Off by default.
+    bool public revertOnBurn;
+
+    function setRevertOnBurn(bool value) external {
+        revertOnBurn = value;
+    }
     uint256 public lastBurnProjectId;
     uint256 public lastBurnAmount;
     address public lastBurnHolder;
@@ -312,13 +327,17 @@ contract MockJBController {
     )
         external
     {
+        require(!revertOnBurn, "BURN_PAUSED");
         burnCallCount++;
         lastBurnProjectId = projectId;
         lastBurnAmount = amount;
         lastBurnHolder = holder;
 
-        // Actually burn the tokens if possible (need to know the project token)
-        // This is handled by the test setup - tokens are burned from the holder
+        // Burn like Core: the controller forwards to `JBTokens.burnFrom`, which spends the holder's credits before its
+        // ERC-20.
+        if (tokensContract != address(0)) {
+            MockJBTokens(tokensContract).burnFrom({holder: holder, projectId: projectId, count: amount});
+        }
     }
 
     function claimTokensFor(address holder, uint256 projectId, uint256 tokenCount, address beneficiary) external {
@@ -535,20 +554,44 @@ contract MockJBMultiTerminal {
         bumpSurplusOnAddToBalance = value;
     }
 
+    /// @notice When set, `addToBalanceOf` reverts, modeling a terminal that rejects deposits (paused, or not accepting
+    /// the token). Off by default.
+    bool public revertOnAddToBalance;
+
+    function setRevertOnAddToBalance(bool value) external {
+        revertOnAddToBalance = value;
+    }
+
+    // The last `addToBalanceOf` call's arguments.
+    uint256 public lastAddToBalanceProjectId;
+    address public lastAddToBalanceToken;
+    uint256 public lastAddToBalanceAmount;
+    uint256 public lastAddToBalanceValue;
+    bool public lastAddToBalanceShouldReturnHeldFees;
+    string public lastAddToBalanceMemo;
+    bytes public lastAddToBalanceMetadata;
+
     function addToBalanceOf(
         uint256 projectId,
         address token,
         uint256 amount,
-        bool,
-        /* shouldReturnHeldTokens */
-        string calldata,
-        /* memo */
-        bytes calldata /* metadata */
+        bool shouldReturnHeldFees,
+        string calldata memo,
+        bytes calldata metadata
     )
         external
         payable
+        virtual
     {
+        require(!revertOnAddToBalance, "ADD_TO_BALANCE_REJECTED");
         addToBalanceCallCount++;
+        lastAddToBalanceProjectId = projectId;
+        lastAddToBalanceToken = token;
+        lastAddToBalanceAmount = amount;
+        lastAddToBalanceValue = msg.value;
+        lastAddToBalanceShouldReturnHeldFees = shouldReturnHeldFees;
+        lastAddToBalanceMemo = memo;
+        lastAddToBalanceMetadata = metadata;
 
         if (amount > 0 && token != address(0x000000000000000000000000000000000000EEEe)) {
             require(MockERC20(token).transferFrom(msg.sender, address(this), amount), "TRANSFER_FROM_FAILED");

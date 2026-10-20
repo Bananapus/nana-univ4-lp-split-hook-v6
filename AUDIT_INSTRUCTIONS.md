@@ -40,16 +40,19 @@ Key integrations:
 Lifecycle:
 
 - before pool deployment, reserved project tokens accumulate in the hook
+- after deployment, payout splits from the project's terminals in the pool's terminal token fund the bid ledger and attempt the same inline recycle
 - `deployPool(...)` (or the inline attempt on a distribution) creates or joins a V4 pool and runs the first recycle, which mints the ask
-- every later recycle (inline on each reserved distribution, or permissionless `addLiquidity(...)` at any time) runs under a 30-minute spot-vs-TWAP guard (200 ticks): for each live position, collect and route fees, burn with a contract-derived slippage floor, credit recovered principal; claim credits; recompute the corridor; mint the ask from the whole project ledger on `[max(spotCeil, floor), ceiling]` (`spotCeil` = first aligned tick at or above the spot) and the bid from the whole terminal ledger on `[floor, min(spotFloor, ceiling)]` (in token0/token1 tick terms). If neither side mints the recycle reverts `NoDeployableLiquidityAtSpot`. The hook never cashes out and never burns project tokens.
-- fees can be collected from both positions, routed, and claimed through separate accounting paths
+- every later recycle (inline on each reserved distribution, or permissionless `addLiquidity(...)` at any time) runs under a 30-minute spot-vs-TWAP guard (200 ticks): for each live position, collect and route fees, burn with a contract-derived slippage floor, credit recovered principal; claim credits; recompute the corridor; mint the ask from the whole project ledger on `[max(spotCeil, floor), ceiling]` (`spotCeil` = first aligned tick at or above the spot) and the bid from the whole terminal ledger on `[floor, min(spotFloor, ceiling)]` (in token0/token1 tick terms). If neither side mints the recycle reverts `NoDeployableLiquidityAtSpot`. The hook never cashes out and never burns reserved tokens.
+- fees can be collected from both positions, routed, and claimed through separate accounting paths; after the best-effort fee-project cut, the terminal-token remainder is added to the project's balance and the project-token remainder is burned (`sendToTerminal`, `burnFeeRemainder` self-calls), each falling back to its ledger when it reverts
 
 ## Roles and privileges
 
 | Role | Powers | How constrained |
 |------|--------|-----------------|
 | Project owner or delegate | Claim tracked fee value | Must hold `SET_BUYBACK_POOL` |
-| Permissionless caller | Deploy a fresh clone, deploy the pool, recycle (`addLiquidity` or reserved distribution), collect fees | Spot-vs-TWAP guard, TWAP-anchored quotes, corridor caps, contract-derived burn floor |
+| Permissionless caller | Deploy a fresh clone, deploy the pool, recycle (`addLiquidity`, reserved distribution, or payout distribution), collect fees | Spot-vs-TWAP guard, TWAP-anchored quotes, corridor caps, contract-derived burn floor |
+| Project controller | Deliver reserved-token splits (group 1) | `msg.sender` must be the project's controller |
+| Project terminal | Deliver payout splits | Must be a terminal of the project, under the token's group, after deployment, in the pool's terminal token |
 | Hook contract | Hold tokens, manage LP state, and route fees | Must preserve treasury value and claim segregation |
 
 ## Integration assumptions
@@ -58,6 +61,7 @@ Lifecycle:
 |------------|------------|----------------------|
 | `nana-core-v6` | Reserved-token issuance and cash-out economics match the hook's pricing model | LP bounds and cash-out math drift |
 | `univ4-router-v6` or selected oracle hook | Market-side assumptions stay coherent enough for pool behavior | Pool behavior and price reasoning drift |
+| Project terminal and controller | `addToBalanceOf` and `burnTokensOf` move exactly the fee remainder or revert | A remainder is lost or double counted |
 | Uniswap V4 managers | Position and liquidity operations behave as expected | Burn, mint, collect, or recycle paths break |
 
 ## Critical invariants
@@ -77,13 +81,16 @@ Lifecycle:
 - the collect, burn, recompute, mint recycle flow across two positions (`_recycle`, `_retirePosition`, `_mintSingleSided`)
 - best-effort inline automation (`_attemptAutomation`, `executeAutomationFor`) and its rollback boundary
 - fee-token and fee-credit bookkeeping
+- fee remainder routing (`_routeCollectedFees`, `sendToTerminal`, `burnFeeRemainder`) and its ledger fallback, including the credit-first burn order
+- payout intake (`_acceptPayout`): sender, group, stage, token, and value checks
 - clone initialization and project-path identity
 
 ## Accepted risks or behaviors
 
 - Some fee collection paths are intentionally permissionless.
-- Newly received reserved tokens are intentionally re-accumulated after deployment and later added as liquidity via `addLiquidity`. The hook never burns; supply-reducing burns are a protocol-layer split-routing decision (`{projectId:0, hook:0, beneficiary:0xdead}`).
+- Newly received reserved tokens are intentionally re-accumulated after deployment and later added as liquidity via `addLiquidity`. The hook never burns reserved tokens; supply-reducing burns of reserved tokens are a protocol-layer split-routing decision (`{projectId:0, hook:0, beneficiary:0xdead}`). Only collected project-token LP fees are burned.
 - Recycles are permissionless at any time, so a caller controls their timing, down to the block. Both quotes are anchored to the validated TWAP, so a manipulation inside the band only widens the gap between the positions; neither quote crosses the TWAP price, and the corridor caps bound both positions. `test_fork_twoPositionRecycle_bandEdgeCycling_notProfitable` runs the gap-walk attack (dust-cross a boundary, recycle, cross the empty gap free, trade only at the band edges) on real Uniswap V4 and requires it to lose.
+- Credits sent to the hook from outside are claimed into the ask ledger before a fee burn and at every recycle; only fee-credit claims the hook owes (a fee project with pre-tokenization claims) keep that project's fee burns in the ledger fallback (no loss; the remainder becomes ask liquidity).
 - A recycle can revert (TWAP unavailable or deviated, nothing deployable at spot) and is expected to be retried; the inline attempt reports failures with `LiquidityAutomationFailed` and never reverts intake.
 
 ## Verification

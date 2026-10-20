@@ -114,7 +114,8 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
     // -----------------------------------------------------------------------
 
     /// @notice When terminal token fees are collected, the fee-project cut is paid via terminal.pay and the remainder
-    /// is carried into the terminal bid-leg ledger (protocol-owned liquidity), NOT deposited into the treasury.
+    /// is added to the project's balance in its primary terminal (raising its surplus); the bid-leg ledger is
+    /// unchanged.
     function test_CollectFees_RoutesTerminalTokenFees() public {
         uint256 feeAmount = 1000e18;
         _setTerminalTokenFees(feeAmount);
@@ -122,44 +123,58 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
         uint256 payCountBefore = terminal.payCallCount();
         uint256 addBalanceCountBefore = terminal.addToBalanceCallCount();
         uint256 ledgerBefore = hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken));
+        uint256 terminalBalanceBefore = terminalToken.balanceOf(address(terminal));
 
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
 
         uint256 expectedCut = (feeAmount * FEE_PERCENT) / 10_000;
-        assertGt(terminal.payCallCount(), payCountBefore, "terminal.pay should have been called for the fee cut");
+        assertEq(terminal.payCallCount(), payCountBefore + 1, "terminal.pay should have been called for the fee cut");
+        assertEq(terminal.addToBalanceCallCount(), addBalanceCountBefore + 1, "the remainder is added to the balance");
+        assertEq(terminal.lastAddToBalanceProjectId(), PROJECT_ID, "added to the originating project");
+        assertEq(terminal.lastAddToBalanceToken(), address(terminalToken), "in the terminal token");
+        assertEq(terminal.lastAddToBalanceAmount(), feeAmount - expectedCut, "exactly the remainder");
+        assertEq(terminal.lastAddToBalanceValue(), 0, "no value for an ERC-20");
+        assertFalse(terminal.lastAddToBalanceShouldReturnHeldFees(), "held fees are not returned");
+        assertEq(bytes(terminal.lastAddToBalanceMemo()).length, 0, "empty memo");
+        assertEq(terminal.lastAddToBalanceMetadata().length, 0, "empty metadata");
         assertEq(
-            terminal.addToBalanceCallCount(),
-            addBalanceCountBefore,
-            "terminal remainder is no longer deposited into the treasury"
+            terminalToken.balanceOf(address(terminal)) - terminalBalanceBefore,
+            feeAmount,
+            "the terminal received the cut and the remainder"
         );
         assertEq(
-            hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)) - ledgerBefore,
-            feeAmount - expectedCut,
-            "terminal remainder is carried into the bid-leg ledger"
+            hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)),
+            ledgerBefore,
+            "the bid-leg ledger is unchanged"
         );
+        assertEq(terminalToken.allowance(address(hook), address(terminal)), 0, "no allowance left behind");
     }
 
     // -----------------------------------------------------------------------
-    // 3. Project token fees are carried forward (not burned)
+    // 3. Project token fees are burned
     // -----------------------------------------------------------------------
 
-    /// @notice When project-token LP fees are collected, they are carried into the accumulation ledger to become future
-    ///         liquidity, never burned.
-    function test_CollectFees_CarriesProjectTokenFeesForward() public {
+    /// @notice When project-token LP fees are collected (the cut is forgiven: the fee project has no project-token
+    ///         terminal), the whole amount is burned through the controller, lowering supply; the ask ledger is
+    ///         unchanged.
+    function test_CollectFees_BurnsProjectTokenFees() public {
         uint256 projFeeAmount = 500e18;
         _setProjectTokenFees(projFeeAmount);
 
         uint256 burnCountBefore = controller.burnCallCount();
         uint256 accumulatedBefore = hook.accumulatedProjectTokens(PROJECT_ID);
+        uint256 supplyBefore = projectToken.totalSupply();
+        uint256 hookBalanceBefore = projectToken.balanceOf(address(hook));
 
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
 
-        assertEq(controller.burnCallCount(), burnCountBefore, "no burn should occur when collecting fees");
-        assertEq(
-            hook.accumulatedProjectTokens(PROJECT_ID),
-            accumulatedBefore + projFeeAmount,
-            "project-token fees should be carried into the accumulation ledger"
-        );
+        assertEq(controller.burnCallCount(), burnCountBefore + 1, "one burn");
+        assertEq(controller.lastBurnHolder(), address(hook), "the hook burns its own tokens");
+        assertEq(controller.lastBurnProjectId(), PROJECT_ID, "of the originating project");
+        assertEq(controller.lastBurnAmount(), projFeeAmount, "the whole forgiven-cut fee");
+        assertEq(supplyBefore - projectToken.totalSupply(), projFeeAmount, "supply fell by exactly the fee");
+        assertEq(projectToken.balanceOf(address(hook)), hookBalanceBefore, "the collected fee left the hook");
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), accumulatedBefore, "the ask ledger is unchanged");
     }
 
     // -----------------------------------------------------------------------
@@ -214,7 +229,7 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
     // 7. Fee split arithmetic: 38% to fee project, 62% to original project
     // -----------------------------------------------------------------------
 
-    /// @notice Terminal token fees should be split: 38% paid to the fee project, 62% carried into the bid-leg ledger.
+    /// @notice Terminal token fees should be split: 38% paid to the fee project, 62% added to the project's balance.
     function test_RouteFees_SplitsBetweenFeeAndOriginal() public {
         uint256 feeAmount = 1000e18;
         _setTerminalTokenFees(feeAmount);
@@ -229,12 +244,10 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
         assertEq(terminal.lastPayProjectId(), FEE_PROJECT_ID, "Pay should target FEE_PROJECT_ID");
         assertEq(terminal.lastPayAmount(), expectedFee, "Pay amount should be 38% of total fees");
 
-        // The remaining 62% is carried into the terminal bid-leg ledger, not deposited to the treasury.
-        assertEq(
-            hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)),
-            feeAmount - expectedFee,
-            "remainder carried into the bid-leg ledger"
-        );
+        // The remaining 62% is added to the project's balance; the bid-leg ledger stays empty.
+        assertEq(terminal.lastAddToBalanceProjectId(), PROJECT_ID, "remainder added to the original project");
+        assertEq(terminal.lastAddToBalanceAmount(), feeAmount - expectedFee, "remainder is 62% of total fees");
+        assertEq(hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)), 0, "nothing ledgered");
     }
 
     // -----------------------------------------------------------------------

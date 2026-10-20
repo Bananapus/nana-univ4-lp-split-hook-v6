@@ -45,7 +45,8 @@ contract PartialPullTerminal {
 
 /// @notice A fee terminal that returns from `pay` without consuming its whole temporary approval leaves live spend
 /// authority behind. The hook must reject that payment (`TemporaryAllowanceNotConsumed`), roll the payment subcall
-/// back, and forgive the cut: the whole fee stays protocol-owned liquidity and no fee-project claim is credited.
+/// back, and forgive the cut: the whole fee accrues to the project (terminal side added to its balance, project side
+/// burned) and no fee-project claim is credited.
 contract TemporaryAllowanceNotConsumedTest is TwoPositionFixture {
     uint256 internal constant PROJECT_FEE = 10e18;
     uint256 internal constant TERMINAL_FEE = 4e18;
@@ -84,21 +85,31 @@ contract TemporaryAllowanceNotConsumedTest is TwoPositionFixture {
         uint256 terminalCut = TERMINAL_FEE * FEE_PERCENT / 10_000;
         uint256 projectLedgerBefore = hook.accumulatedProjectTokens(PROJECT_ID);
         uint256 terminalLedgerBefore = hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken));
+        uint256 supplyBefore = projectToken.totalSupply();
+        uint256 projectTerminalBefore = terminalToken.balanceOf(address(terminal));
 
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
 
         assertEq(projectToken.balanceOf(address(feeTerminal)), projectCut, "project-token cut paid");
         assertEq(terminalToken.balanceOf(address(feeTerminal)), terminalCut, "terminal-token cut paid");
         assertEq(hook.claimableFeeTokens(PROJECT_ID), projectCut + terminalCut, "both cuts credited");
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), projectLedgerBefore + PROJECT_FEE - projectCut);
+        // The remainders accrue to the project: the project side burned, the terminal side added to its balance.
+        assertEq(supplyBefore - projectToken.totalSupply(), PROJECT_FEE - projectCut, "project remainder burned");
+        assertEq(
+            terminalToken.balanceOf(address(terminal)) - projectTerminalBefore,
+            TERMINAL_FEE - terminalCut,
+            "terminal remainder added to the project's balance"
+        );
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), projectLedgerBefore, "ask ledger unchanged");
         assertEq(
             hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)),
-            terminalLedgerBefore + TERMINAL_FEE - terminalCut
+            terminalLedgerBefore,
+            "bid ledger unchanged"
         );
     }
 
     /// @notice The payment target itself reverts with the exact leftover allowance, in both fee currencies.
-    function test_payFeeProjectCut_revertsWithLeftoverAllowance() public {
+    function test_sendToTerminal_revertsWithLeftoverAllowance() public {
         _assertPayReverts(address(terminalToken), 0);
         _assertPayReverts(address(terminalToken), 5000);
         _assertPayReverts(address(projectToken), 0);
@@ -120,7 +131,9 @@ contract TemporaryAllowanceNotConsumedTest is TwoPositionFixture {
             )
         );
         vm.prank(address(hook));
-        hook.payFeeProjectCut({feeTerminal: address(feeTerminal), feeToken: token, amount: amount});
+        hook.sendToTerminal({
+            terminal: address(feeTerminal), projectId: FEE_PROJECT_ID, token: token, amount: amount, shouldPay: true
+        });
     }
 
     function _assertBothCutsForgiven(uint256 bps) internal {
@@ -129,6 +142,8 @@ contract TemporaryAllowanceNotConsumedTest is TwoPositionFixture {
         uint256 terminalLedgerBefore = hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken));
         uint256 projectBalanceBefore = projectToken.balanceOf(address(hook));
         uint256 terminalBalanceBefore = terminalToken.balanceOf(address(hook));
+        uint256 supplyBefore = projectToken.totalSupply();
+        uint256 projectTerminalBefore = terminalToken.balanceOf(address(terminal));
 
         // Each side (project token first, then terminal token) reports a forgiven cut: nothing paid, the whole fee
         // remains, no fee tokens minted.
@@ -154,15 +169,21 @@ contract TemporaryAllowanceNotConsumedTest is TwoPositionFixture {
         assertEq(terminalToken.allowance(address(hook), address(feeTerminal)), 0, "terminal-token approval cleared");
         assertEq(feeProjectToken.balanceOf(address(hook)), 0, "fee-project mint rolled back");
 
-        // The entire fee stays with the LP.
-        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), projectLedgerBefore + PROJECT_FEE, "project fee kept");
+        // The entire fee accrues to the project: the project side burned, the terminal side added to its balance.
+        assertEq(supplyBefore - projectToken.totalSupply(), PROJECT_FEE, "project fee burned");
+        assertEq(
+            terminalToken.balanceOf(address(terminal)) - projectTerminalBefore,
+            TERMINAL_FEE,
+            "terminal fee added to the project's balance"
+        );
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), projectLedgerBefore, "ask ledger unchanged");
         assertEq(
             hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)),
-            terminalLedgerBefore + TERMINAL_FEE,
-            "terminal fee kept"
+            terminalLedgerBefore,
+            "bid ledger unchanged"
         );
-        assertEq(projectToken.balanceOf(address(hook)), projectBalanceBefore + PROJECT_FEE, "project fee held");
-        assertEq(terminalToken.balanceOf(address(hook)), terminalBalanceBefore + TERMINAL_FEE, "terminal fee held");
+        assertEq(projectToken.balanceOf(address(hook)), projectBalanceBefore, "no project fee left on the hook");
+        assertEq(terminalToken.balanceOf(address(hook)), terminalBalanceBefore, "no terminal fee left on the hook");
 
         // No claim or reserve credit.
         assertEq(hook.claimableFeeTokens(PROJECT_ID), 0, "no fee-token claim");

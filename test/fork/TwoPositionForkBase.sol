@@ -29,6 +29,7 @@ import {PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PositionInfo, PositionInfoLibrary} from "@uniswap/v4-periphery/src/libraries/PositionInfoLibrary.sol";
 import {SqrtPriceMath} from "@uniswap/v4-core/src/libraries/SqrtPriceMath.sol";
+import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
@@ -168,6 +169,19 @@ abstract contract TwoPositionForkBase is ForkDeployHelper {
         return (info.tickLower(), info.tickUpper());
     }
 
+    /// @notice The fees a position has accrued but not collected, exactly as `Pool` computes them on its next touch.
+    function _feesOf(uint256 tokenId, PoolKey memory key) internal view returns (uint256 fee0, uint256 fee1) {
+        (int24 tickLower, int24 tickUpper) = _ticksOf(tokenId);
+        (uint128 liquidity, uint256 last0, uint256 last1) = V4_POOL_MANAGER.getPositionInfo(
+            key.toId(), address(V4_POSITION_MANAGER), tickLower, tickUpper, bytes32(tokenId)
+        );
+        (uint256 inside0, uint256 inside1) = V4_POOL_MANAGER.getFeeGrowthInside(key.toId(), tickLower, tickUpper);
+        unchecked {
+            fee0 = FullMath.mulDiv(inside0 - last0, liquidity, 1 << 128);
+            fee1 = FullMath.mulDiv(inside1 - last1, liquidity, 1 << 128);
+        }
+    }
+
     /// @notice What burning a position returns at the live spot: `Pool.modifyLiquidity` rounds a removal down.
     function _principalOf(uint256 tokenId, PoolKey memory key)
         internal
@@ -190,6 +204,24 @@ abstract contract TwoPositionForkBase is ForkDeployHelper {
 
     /// @notice Launch a native-ETH project with zero cash-out tax, local cash-out scope and owner minting.
     function _launchProject(uint16 reservedPercent, uint112 weight) internal returns (uint256 id) {
+        return _launchProjectWith({
+            reservedPercent: reservedPercent,
+            weight: weight,
+            splitGroups: new JBSplitGroup[](0),
+            fundAccessLimitGroups: new JBFundAccessLimitGroup[](0)
+        });
+    }
+
+    /// @notice `_launchProject` with the given split groups and fund access limits.
+    function _launchProjectWith(
+        uint16 reservedPercent,
+        uint112 weight,
+        JBSplitGroup[] memory splitGroups,
+        JBFundAccessLimitGroup[] memory fundAccessLimitGroups
+    )
+        internal
+        returns (uint256 id)
+    {
         JBRulesetConfig[] memory rulesetConfigs = new JBRulesetConfig[](1);
         rulesetConfigs[0].weight = weight;
         rulesetConfigs[0].approvalHook = IJBRulesetApprovalHook(address(0));
@@ -215,8 +247,8 @@ abstract contract TwoPositionForkBase is ForkDeployHelper {
             dataHook: address(0),
             metadata: 0
         });
-        rulesetConfigs[0].splitGroups = new JBSplitGroup[](0);
-        rulesetConfigs[0].fundAccessLimitGroups = new JBFundAccessLimitGroup[](0);
+        rulesetConfigs[0].splitGroups = splitGroups;
+        rulesetConfigs[0].fundAccessLimitGroups = fundAccessLimitGroups;
         JBAccountingContext[] memory tokensToAccept = new JBAccountingContext[](1);
         // forge-lint: disable-next-line(unsafe-typecast)
         tokensToAccept[0] = JBAccountingContext({token: NATIVE, decimals: 18, currency: uint32(uint160(NATIVE))});

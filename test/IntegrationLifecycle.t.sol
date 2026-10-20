@@ -85,19 +85,26 @@ contract IntegrationLifecycle is LPSplitHookV4TestBase {
         uint256 payCountBefore = terminal.payCallCount();
         uint256 burnCountBefore = controller.burnCallCount();
         uint256 accumulatedBefore = hook.accumulatedProjectTokens(PROJECT_ID);
+        uint256 terminalLedgerBefore = hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken));
+        uint256 supplyBefore = projectToken.totalSupply();
 
         // Collect and route fees
         hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
 
-        // Verify terminal token fees were routed (pay was called for fee project)
+        // Verify terminal token fees were routed (pay was called for fee project), and the remainder was added to the
+        // project's balance.
         assertGt(terminal.payCallCount(), payCountBefore, "terminal.pay should be called to route terminal token fees");
+        uint256 terminalCut = terminalFeeAmount * FEE_PERCENT / 10_000;
+        assertEq(terminal.lastAddToBalanceAmount(), terminalFeeAmount - terminalCut, "terminal remainder added");
 
-        // Verify project token fees were carried into the accumulation ledger, not burned.
-        assertEq(controller.burnCallCount(), burnCountBefore, "no burn should occur when collecting fees");
+        // Verify project token fees were burned (the project-side cut is forgiven: no fee terminal for it).
+        assertEq(controller.burnCallCount(), burnCountBefore + 1, "the project-side fee is burned");
+        assertEq(supplyBefore - projectToken.totalSupply(), projectFeeAmount, "supply fell by the project-side fee");
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), accumulatedBefore, "the ask ledger is unchanged");
         assertEq(
-            hook.accumulatedProjectTokens(PROJECT_ID),
-            accumulatedBefore + projectFeeAmount,
-            "project-token fees should be carried into the accumulation ledger"
+            hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)),
+            terminalLedgerBefore,
+            "the bid ledger is unchanged"
         );
     }
 

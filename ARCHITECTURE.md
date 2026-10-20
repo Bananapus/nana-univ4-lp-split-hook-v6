@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`univ4-lp-split-hook-v6` turns reserved project tokens into treasury-owned Uniswap V4 liquidity. It accumulates reserved tokens, deploys a pool, and holds the liquidity as at most two single-sided positions per project (an ask of project tokens and a bid of terminal tokens) bounded by Juicebox economics, recycling both on every reserved-token distribution.
+`univ4-lp-split-hook-v6` turns reserved project tokens into treasury-owned Uniswap V4 liquidity. It accumulates reserved tokens, deploys a pool, and holds the liquidity as at most two single-sided positions per project (an ask of project tokens and a bid of terminal tokens) bounded by Juicebox economics, recycling both on every reserved-token distribution. After deployment it also accepts payout splits in the pool's terminal token, which fund the bid.
 
 ## System overview
 
@@ -13,8 +13,8 @@
 - Both positions stay inside the project's economic corridor: the ask never sells below the cash-out floor and the bid never buys above the issuance ceiling.
 - A project holds at most two positions per pair, tracked in `askTokenIdOf` and `bidTokenIdOf`; both are single-sided, with the spot in the gap between them and neither quote past the validated TWAP.
 - The hook has materially different pre-deployment and post-deployment behavior.
-- Fee routing takes a best-effort `feeProjectId` cut symmetrically on both the project-token and terminal-token fee sides, then carries each side's non-cut remainder into the project's own ask/bid ledgers — never into the project's treasury.
-- A project's accumulation ledger is the single sink for reserved-token inflows both before AND after pool deployment; the hook never burns. Pre-deploy, `deployPool` consumes the accumulation; post-deploy, each recycle does.
+- Fee routing takes a best-effort `feeProjectId` cut symmetrically on both the project-token and terminal-token fee sides, then routes each side's non-cut remainder to the project so it raises the cash-out floor: the terminal-token remainder is added to the project's balance in its primary terminal for that token, and the project-token remainder is burned. Either route is best effort; a side that fails is carried into its ask/bid ledger instead.
+- A project's accumulation ledger is the single sink for reserved-token inflows both before AND after pool deployment; the hook never burns reserved tokens. Pre-deploy, `deployPool` consumes the accumulation; post-deploy, each recycle does.
 - A hook instance should map a project and terminal-token pair to one pool path.
 
 ## Modules
@@ -37,14 +37,16 @@
 ```text
 reserved-token split distributions
   -> accumulate project tokens before pool deployment
+payout split distributions (after deployment, in the pool's terminal token, from a project terminal)
+  -> credit `accumulatedTerminalTokens`, emit `PayoutAccepted`, then attempt the same inline recycle
 deploy (inline on a distribution, or permissionless `deployPool`)
   -> computes price bounds from issuance and cash-out economics (floor tick = cash-out price), each rounded inward against its exact price
   -> deploys or uses the target pool (an already-initialized pool must pass the spot-vs-TWAP guard)
   -> runs the first recycle, which mints a single-sided ask from the accumulated project tokens (no cash-out)
 post-deployment, every recycle (inline on each distribution, or permissionless `addLiquidity` at any time)
   -> requires the pool spot within 200 ticks of the 30-minute oracle TWAP
-  -> for each live position: collect fees (best-effort `feeProjectId` cut per side; project remainder into `accumulatedProjectTokens`, terminal remainder into `accumulatedTerminalTokens`), burn it with a contract-derived slippage floor, credit recovered principal to the same ledgers
-  -> claims hook-held credits into the project ledger and recomputes the corridor
+  -> for each live position: collect fees (best-effort `feeProjectId` cut per side; terminal remainder added to the project's balance, project remainder burned, each falling back to `accumulatedTerminalTokens` / `accumulatedProjectTokens` on failure), burn it with a contract-derived slippage floor, credit recovered principal to the same ledgers
+  -> claims hook-held credits into the project ledger and recomputes the corridor (after fee routing, so the raised floor is priced in)
   -> spotFloor = min(spot, TWAP) aligned down to the 200 spacing
      spotCeil = max(first aligned tick at or above the spot, TWAP aligned up)
      token0 rests on [max(spotCeil, corridorLower), corridorUpper]
@@ -56,14 +58,14 @@ trading between recycles
   -> buys fill the ask (it accrues terminal tokens); sells fill the bid (it accrues project tokens)
   -> the next recycle moves each converted amount back to the side it belongs on
 `collectAndRouteLPFees` (permissionless)
-  -> collects and routes fees from both positions without touching principal
+  -> collects and routes fees from both positions without touching principal; the floor rises, and the positions move at the next recycle
 ```
 
 ## Accounting model
 
 The hook owns local staging and LP-management state. It does not own reserved-token issuance or terminal accounting.
 
-It owns two per-project ledgers that hold protocol-owned liquidity outside any Uniswap V4 position: `accumulatedProjectTokens` (the ask-side ledger) and `accumulatedTerminalTokens[projectId][terminalToken]` (the per-terminal-token bid-side ledger). The project ledger accrues from split distributions and claimed credits; both accrue from the principal recovered by burning the project's own positions, mint leftovers, and the non-cut remainder of collected LP fees. Each recycle mints the whole project ledger into the ask and the whole terminal ledger into the bid. Neither is ever deposited into the project's terminal.
+It owns two per-project ledgers that hold protocol-owned liquidity outside any Uniswap V4 position: `accumulatedProjectTokens` (the ask-side ledger) and `accumulatedTerminalTokens[projectId][terminalToken]` (the per-terminal-token bid-side ledger). The project ledger accrues from reserved-token split distributions and claimed credits; the terminal ledger accrues from payout split distributions; both accrue from the principal recovered by burning the project's own positions, mint leftovers, and the non-cut LP-fee remainders whose add to the project's balance (terminal side) or burn (project side) failed. Each recycle mints the whole project ledger into the ask and the whole terminal ledger into the bid. Ledgered tokens are never deposited into the project's terminal; only collected LP-fee remainders are.
 
 It also owns claim segregation for routed LP-fee cuts. Outstanding ERC-20 fee-token claims and credit-only fee claims owed to the fee project are tracked separately so the hook's accumulation and LP-funding paths do not consume fee assets being held for that beneficiary.
 

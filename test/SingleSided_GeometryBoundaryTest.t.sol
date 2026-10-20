@@ -208,9 +208,11 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         (projectSide, terminalSide) = projectIsToken0 ? (amount0, amount1) : (amount1, amount0);
     }
 
-    /// @notice Give a live position a collectable terminal-side LP fee (forgiven in full: the fee project has no
-    /// terminal for this fresh terminal token), funding the PositionManager for it.
+    /// @notice Give a live position a collectable terminal-side LP fee that lands whole in the bid ledger, funding the
+    /// PositionManager for it: the cut is forgiven (the fee project has no terminal for this fresh terminal token) and
+    /// the project's terminal rejects the remainder, so it falls back to the ledger.
     function _addTerminalFee(uint256 tokenId, uint256 amount) internal {
+        terminal.setRevertOnAddToBalance(true);
         if (projectIsToken0) positionManager.setCollectableFees(tokenId, 0, amount);
         else positionManager.setCollectableFees(tokenId, amount, 0);
         _fundTerm(address(positionManager), amount);
@@ -269,7 +271,7 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         assertEq(_termBalanceOf(address(hook)), _termLedger(), "terminal ledger equals the hook's terminal balance");
     }
 
-    /// @notice Deploy `projectAmount` at mid-corridor, then fold a forgiven terminal-side LP fee into a recycle at
+    /// @notice Deploy `projectAmount` at mid-corridor, then fold a ledgered terminal-side LP fee into a recycle at
     /// the same spot so both an ask and a bid are live.
     function _deployBothAtMid(uint256 projectAmount, uint256 terminalAmount) internal returns (int24 mid) {
         mid = _midTick();

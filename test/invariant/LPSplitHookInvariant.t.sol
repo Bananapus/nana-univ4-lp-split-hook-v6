@@ -69,6 +69,8 @@ contract LPSplitHookHandler is Test {
     MockERC20 public terminalToken;
     MockJBController public controller;
     MockPositionManager public positionManager;
+    MockJBMultiTerminal public terminal;
+    MockJBTokens public jbTokens;
     address public owner;
 
     /// @dev Project IDs the handler exercises. Using a small set (1-3) keeps the
@@ -103,6 +105,32 @@ contract LPSplitHookHandler is Test {
     mapping(uint256 projectId => uint256 amount) public projectFeesInjected;
     mapping(uint256 projectId => uint256 amount) public terminalFeesInjected;
 
+    /// @dev Ghost variable: injected fees not yet collected, by side (settled by the next successful collection or
+    ///      recycle of the project).
+    mapping(uint256 projectId => uint256 amount) public pendingProjectFees;
+    mapping(uint256 projectId => uint256 amount) public pendingTerminalFees;
+
+    /// @dev Ghost variable: collected fee remainders that accrued to the project: project-token fees burned (the
+    ///      project-side cut is always forgiven here) and terminal-token remainders added to its balance. A side whose
+    ///      route was failing at collection stays in the project's books instead.
+    mapping(uint256 projectId => uint256 amount) public projectFeesBurned;
+    mapping(uint256 projectId => uint256 amount) public terminalFeesAddedToBalance;
+
+    /// @dev Ghost variable: terminal tokens accepted from payout splits into each project's bid ledger.
+    mapping(uint256 projectId => uint256 amount) public terminalPayouts;
+
+    /// @dev Ghost variables: payouts accepted, and payouts rejected because the project's pool was not deployed yet.
+    uint256 public payoutCount;
+    uint256 public payoutRejectedCount;
+
+    /// @dev Ghost variable: every project token the handler minted (reserved intake and injected fees).
+    uint256 public projectTokensMinted;
+
+    /// @dev Whether the project's terminal currently rejects `addToBalanceOf`, and whether the controller currently
+    ///      rejects `burnTokensOf` (so the hook forgives the burn).
+    bool public addToBalanceFails;
+    bool public burnFails;
+
     /// @dev Ghost variable: number of successful deployPool calls.
     uint256 public deployCallCount;
 
@@ -135,6 +163,8 @@ contract LPSplitHookHandler is Test {
         MockERC20 _terminalToken,
         MockJBController _controller,
         MockPositionManager _positionManager,
+        MockJBMultiTerminal _terminal,
+        MockJBTokens _jbTokens,
         address _owner
     ) {
         hook = _hook;
@@ -142,7 +172,18 @@ contract LPSplitHookHandler is Test {
         terminalToken = _terminalToken;
         controller = _controller;
         positionManager = _positionManager;
+        terminal = _terminal;
+        jbTokens = _jbTokens;
         owner = _owner;
+    }
+
+    /// @notice Make the LP-fee routes fail or succeed: the project's terminal rejecting deposits (a paused terminal),
+    /// and the controller rejecting burns (a paused controller).
+    function setRouteFailures(bool addFails, bool burnsFail) external {
+        addToBalanceFails = addFails;
+        burnFails = burnsFail;
+        terminal.setRevertOnAddToBalance(addFails);
+        controller.setRevertOnBurn(burnsFail);
     }
 
     /// @notice Accumulate project tokens via processSplitWith (before or after deployment; the hook never burns).
@@ -157,6 +198,7 @@ contract LPSplitHookHandler is Test {
 
         // Mint tokens to the controller and approve the hook.
         projectToken.mint(address(controller), amount);
+        projectTokensMinted += amount;
 
         // Build the split hook context.
         JBSplitHookContext memory context = JBSplitHookContext({
@@ -186,6 +228,56 @@ contract LPSplitHookHandler is Test {
             _latch(reason);
         }
         vm.stopPrank();
+    }
+
+    /// @notice Pay out terminal tokens to the hook from the project's terminal, the way Core's payout path does
+    /// (an allowance for the net amount, the token's payout group). Accepted once the pool is deployed, rejected
+    /// before; a rejection moves nothing, so the terminal keeps (here: burns back) what it offered.
+    function payout(uint256 projectIdSeed, uint256 amount) external {
+        uint256 projectId = bound(projectIdSeed, 1, MAX_PROJECT_ID);
+        amount = bound(amount, 0, 1e24);
+        bool deployed = hook.hasDeployedPool(projectId);
+
+        uint256 heldBefore = terminalToken.balanceOf(address(terminal));
+        terminalToken.mint(address(terminal), amount);
+        JBSplitHookContext memory context = JBSplitHookContext({
+            token: address(terminalToken),
+            amount: amount,
+            decimals: 18,
+            projectId: projectId,
+            groupId: uint256(uint160(address(terminalToken))),
+            split: JBSplit({
+                percent: 1_000_000,
+                projectId: 0,
+                beneficiary: payable(address(0)),
+                preferAddToBalance: false,
+                lockedUntil: 0,
+                hook: IJBSplitHook(address(hook))
+            })
+        });
+
+        vm.startPrank(address(terminal));
+        terminalToken.approve(address(hook), amount);
+        try hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context) {
+            if (!deployed) _latch("payout accepted before deploy");
+            terminalPayouts[projectId] += amount;
+            payoutCount++;
+        } catch (bytes memory reason) {
+            if (
+                deployed
+                    || _selectorOf(reason)
+                        != JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidStageForAction.selector
+            ) {
+                _latch(reason);
+            }
+            payoutRejectedCount++;
+        }
+        terminalToken.approve(address(hook), 0);
+        vm.stopPrank();
+        // Core refunds a rejected payout to the project's balance; the campaign's terminal only holds fee flows, so
+        // whatever was not taken is removed again.
+        uint256 untaken = terminalToken.balanceOf(address(terminal)) - heldBefore;
+        if (untaken > 0) terminalToken.burn({from: address(terminal), amount: untaken});
     }
 
     /// @notice Call processSplitWith with zero amount (edge case).
@@ -323,8 +415,11 @@ contract LPSplitHookHandler is Test {
         (uint256 projectFee, uint256 terminalFee) = projectIsToken0 ? (fee0, fee1) : (fee1, fee0);
         projectToken.mint(address(positionManager), projectFee);
         terminalToken.mint(address(positionManager), terminalFee);
+        projectTokensMinted += projectFee;
         projectFeesInjected[projectId] += projectFee;
         terminalFeesInjected[projectId] += terminalFee;
+        pendingProjectFees[projectId] += projectFee;
+        pendingTerminalFees[projectId] += terminalFee;
         pendingExpectedClaims[projectId] += (terminalFee * FEE_PERCENT) / BPS;
         uncollectedFees[projectId] += projectFee + terminalFee;
     }
@@ -359,9 +454,17 @@ contract LPSplitHookHandler is Test {
 
     /// @notice A successful collection or recycle collected every live position's injected fees.
     /// @return collectedFees Whether a nonzero injected fee was collected.
+    /// @dev The remainders go where the routes in force at collection send them: burned / added to the balance, or
+    /// (when that route fails) left in the project's books.
     function _settleCollectedFees(uint256 projectId) internal returns (bool collectedFees) {
         collectedFees = uncollectedFees[projectId] != 0;
         uncollectedFees[projectId] = 0;
+        if (!burnFails) projectFeesBurned[projectId] += pendingProjectFees[projectId];
+        if (!addToBalanceFails) {
+            terminalFeesAddedToBalance[projectId] += pendingTerminalFees[projectId] - pendingExpectedClaims[projectId];
+        }
+        pendingProjectFees[projectId] = 0;
+        pendingTerminalFees[projectId] = 0;
         expectedClaims[projectId] += pendingExpectedClaims[projectId];
         pendingExpectedClaims[projectId] = 0;
     }
@@ -479,6 +582,7 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
 
         // Wire JB infrastructure for project IDs 1-3 and fee project
         controller.setPrices(address(prices));
+        controller.setTokens(address(jbTokens));
         directory.setProjects(address(jbProjects));
 
         // Set up fee project
@@ -526,7 +630,9 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
         });
 
         // Deploy the handler
-        handler = new LPSplitHookHandler(hook, projectToken, terminalToken, controller, positionManager, owner);
+        handler = new LPSplitHookHandler(
+            hook, projectToken, terminalToken, controller, positionManager, terminal, jbTokens, owner
+        );
 
         // Seed one successful deploy, fee collection and recycle so every campaign starts from real activity (and a
         // live ask plus bid), and so the activity invariant can require it.
@@ -536,17 +642,23 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
         targetContract(address(handler));
     }
 
-    /// @notice Project 1: accumulate, deploy, inject fees on the ask, collect them (the terminal remainder funds the
-    /// bid ledger), and recycle into a live ask and bid.
+    /// @notice Project 1: accumulate, deploy, inject fees on the ask, collect them while the project's terminal
+    /// rejects deposits (so the terminal remainder falls back to the bid ledger), and recycle into a live ask and bid.
     function _seedActivity() internal {
         handler.accumulate(1, 10e18);
         handler.deployPool(1);
         assertEq(handler.deployCallCount(), 1, "seed: deploy must succeed");
         handler.injectFees(1, 3e18, 5e18, 0, 0);
+        handler.setRouteFailures(true, false);
         handler.collectAndRouteLPFees(1, 0);
+        handler.setRouteFailures(false, false);
         assertEq(handler.collectFeeCallCount(), 1, "seed: fee collection must succeed");
         handler.addLiquidity(1, 0);
         assertEq(handler.recycleCallCount(), 1, "seed: recycle must succeed");
+        handler.payout(2, 1e18);
+        assertEq(handler.payoutRejectedCount(), 1, "seed: a payout before deploy is rejected");
+        handler.payout(1, 1e18);
+        assertEq(handler.payoutCount(), 1, "seed: a payout after deploy is accepted");
         seedFeeCollections = handler.feeCollectionCount();
         seedFeeRecycles = handler.feeRecycleCount();
         assertNotEq(hook.askTokenIdOf(1, address(terminalToken)), 0, "seed: ask live");
@@ -613,9 +725,10 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
     }
 
     /// @notice Distinct fees on the live ask and bid are each cut exactly (terminal side paid, project side forgiven)
-    ///         by a standalone collection that leaves both positions' principal untouched; a second round of distinct
-    ///         fees is then collected by a recycle with zero new accumulation, which folds every remainder and both
-    ///         positions' principal into the fresh ask and bid. Claims stay exactly backed throughout.
+    ///         by a standalone collection that leaves both positions' principal and both ledgers untouched: the
+    ///         project-side fees are burned and the terminal remainders added to the project's balance. A second round
+    ///         of distinct fees is then collected by a recycle with zero new accumulation, which routes them the same
+    ///         way and re-mints exactly both positions' principal plus the ledgers. Claims stay exactly backed.
     function test_bothPositionsFees_collectThenRecycleWithoutNewTokens() public {
         uint256 askId = hook.askTokenIdOf(1, address(terminalToken));
         uint256 bidId = hook.bidTokenIdOf(1, address(terminalToken));
@@ -638,18 +751,23 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
             projectIsToken0 ? fees[3] : fees[2]
         );
         uint256 payCalls = terminal.payCallCount();
+        uint256 terminalHeld = terminalToken.balanceOf(address(terminal));
+        uint256 supply = projectToken.totalSupply();
         handler.collectAndRouteLPFees(1, 0);
         assertEq(handler.collectFeeCallCount(), 2, "standalone collection succeeded");
 
         assertEq(terminal.payCallCount(), payCalls + 2, "one terminal-side cut paid per position");
         uint256 cuts = _cut(fees[1]) + _cut(fees[3]);
         assertEq(hook.claimableFeeTokens(1), claims + cuts, "claims equal the two terminal-side cuts");
-        assertEq(hook.accumulatedProjectTokens(1), projectLedger + fees[0] + fees[2], "project fees forgiven in full");
+        // The claims are minted in the project token here (the fee project shares it), so supply nets them out.
+        assertEq(supply + cuts - projectToken.totalSupply(), fees[0] + fees[2], "project fees burned in full");
         assertEq(
-            hook.accumulatedTerminalTokens(1, address(terminalToken)),
-            terminalLedger + fees[1] + fees[3] - cuts,
-            "terminal remainders ledgered"
+            terminalToken.balanceOf(address(terminal)) - terminalHeld,
+            fees[1] + fees[3],
+            "the terminal received the cuts and the remainders"
         );
+        assertEq(hook.accumulatedProjectTokens(1), projectLedger, "the ask ledger is unchanged");
+        assertEq(hook.accumulatedTerminalTokens(1, address(terminalToken)), terminalLedger, "the bid ledger unchanged");
         assertEq(hook.askTokenIdOf(1, address(terminalToken)), askId, "collection keeps the ask");
         assertEq(hook.bidTokenIdOf(1, address(terminalToken)), bidId, "collection keeps the bid");
         (uint256 p, uint256 t) = _sides(askId);
@@ -669,6 +787,8 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
         uint256 accumulatedBefore = hook.accumulatedProjectTokens(1);
         uint256 terminalBefore = hook.accumulatedTerminalTokens(1, address(terminalToken));
         uint256 cuts2 = _cut(fees2[1]) + _cut(fees2[3]);
+        uint256 supply2 = projectToken.totalSupply();
+        uint256 terminalHeld2 = terminalToken.balanceOf(address(terminal));
         uint256 projectRoundingBefore = handler.projectBurnRounding(1);
         uint256 terminalRoundingBefore = handler.terminalBurnRounding(1);
         handler.addLiquidity(1, 0);
@@ -688,13 +808,21 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
         assertEq(newBidProject, 0, "the bid holds no project token");
         assertEq(
             newAskProject + hook.accumulatedProjectTokens(1),
-            askProject + bidProject - projectRounding + accumulatedBefore + fees2[0] + fees2[2],
-            "every project token (principal + ledger + forgiven fees) is in the ask or its ledger"
+            askProject + bidProject - projectRounding + accumulatedBefore,
+            "every project token (principal + ledger) is in the ask or its ledger"
         );
         assertEq(
             newBidTerminal + hook.accumulatedTerminalTokens(1, address(terminalToken)),
-            askTerminal + bidTerminal - terminalRounding + terminalBefore + fees2[1] + fees2[3] - cuts2,
-            "every terminal token (principal + ledger + fee remainders) is in the bid or its ledger"
+            askTerminal + bidTerminal - terminalRounding + terminalBefore,
+            "every terminal token (principal + ledger) is in the bid or its ledger"
+        );
+        assertEq(
+            supply2 + cuts2 - projectToken.totalSupply(), fees2[0] + fees2[2], "the recycle burned the project fees"
+        );
+        assertEq(
+            terminalToken.balanceOf(address(terminal)) - terminalHeld2,
+            fees2[1] + fees2[3],
+            "the recycle sent the cuts and remainders to the terminal"
         );
 
         // Claim backing and segregation: the hook holds exactly its ledgers plus the fee-token claims.
@@ -728,18 +856,17 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
 
     /// @notice Nothing is donated in this campaign, so every balance is exactly its books: the hook holds its ledgers
     ///         plus the fee tokens it owes (which share the project token here), the PositionManager holds the live
-    ///         principal plus uncollected fees plus the rounding past burns left in the pool, and the fee terminal
-    ///         holds exactly the independently computed cuts.
+    ///         principal plus uncollected fees plus the rounding past burns left in the pool, the shared terminal holds
+    ///         exactly the independently computed cuts plus the fee remainders added to the projects' balances, and
+    ///         the project token's supply is exactly what was minted less the fee remainders burned.
     /// @dev Catches tokens credited without arriving, ledgers erased while their tokens strand, and cuts that are
     ///      over- or under-paid.
     function invariant_exactGlobalBacking() public view {
         uint256 hookProjectBooks;
         uint256 hookTerminalBooks;
-        uint256 cuts;
         for (uint256 i = 1; i <= handler.MAX_PROJECT_ID(); i++) {
             hookProjectBooks += hook.accumulatedProjectTokens(i) + hook.claimableFeeTokens(i);
             hookTerminalBooks += hook.accumulatedTerminalTokens(i, address(terminalToken));
-            cuts += handler.expectedClaims(i);
         }
         (uint256 pmProjectBooks, uint256 pmTerminalBooks) = _positionManagerBooks();
         // Burns leave V4's rounding in the pool.
@@ -760,7 +887,27 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
             pmTerminalBooks,
             "INVARIANT VIOLATED: PositionManager terminal backing"
         );
-        assertEq(terminalToken.balanceOf(address(terminal)), cuts, "INVARIANT VIOLATED: fee terminal holds the cuts");
+        (uint256 cuts, uint256 added, uint256 burned) = _feeOutflows();
+        assertEq(
+            terminalToken.balanceOf(address(terminal)),
+            cuts + added,
+            "INVARIANT VIOLATED: the terminal holds the cuts plus the added remainders"
+        );
+        // The fee project's claims are minted in the project token here (by the mock terminal's `pay`).
+        assertEq(
+            projectToken.totalSupply(),
+            handler.projectTokensMinted() + cuts - burned,
+            "INVARIANT VIOLATED: project token supply differs from mints less burned fees"
+        );
+    }
+
+    /// @notice The fee-project cuts, terminal remainders added to balances, and project-side fees burned, summed.
+    function _feeOutflows() internal view returns (uint256 cuts, uint256 added, uint256 burned) {
+        for (uint256 i = 1; i <= handler.MAX_PROJECT_ID(); i++) {
+            cuts += handler.expectedClaims(i);
+            added += handler.terminalFeesAddedToBalance(i);
+            burned += handler.projectFeesBurned(i);
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -814,9 +961,9 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
     // ═══════════════════════════════════════════════════════════════════════
 
     /// @notice For each project, its ledgers plus the principal and uncollected fees of its live ask and bid equal
-    ///         exactly what entered its books: every reserved token minted for it plus every project-side fee
-    ///         injected (the project-side cut is forgiven), and every terminal-side fee injected minus the cuts
-    ///         computed independently from the collected fees.
+    ///         exactly what entered its books less what left them: every reserved token minted for it plus every
+    ///         project-side fee injected, less the collected project-side fees burned (the cut is forgiven); and every
+    ///         terminal-side fee injected, less the cuts and the remainders added to its balance.
     /// @dev Follows tokens through deploy, collection and recycle, catching any loss, cross-project leakage or value
     ///      creation (recycled principal is credited back exactly once).
     function invariant_exactPerProjectConservation() public view {
@@ -839,13 +986,14 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
             terminalBooks += handler.terminalBurnRounding(i);
             assertEq(
                 projectBooks,
-                handler.totalMintedToHook(i) + handler.projectFeesInjected(i),
+                handler.totalMintedToHook(i) + handler.projectFeesInjected(i) - handler.projectFeesBurned(i),
                 "INVARIANT VIOLATED: per-project project-token books differ from what entered them"
             );
             assertEq(
                 terminalBooks,
-                handler.terminalFeesInjected(i) - handler.expectedClaims(i),
-                "INVARIANT VIOLATED: per-project terminal-token books differ from fees injected net of paid cuts"
+                handler.terminalFeesInjected(i) + handler.terminalPayouts(i) - handler.expectedClaims(i)
+                    - handler.terminalFeesAddedToBalance(i),
+                "INVARIANT VIOLATED: per-project terminal-token books differ from payouts and fees net of cuts and adds"
             );
         }
     }

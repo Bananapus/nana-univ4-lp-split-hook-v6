@@ -387,14 +387,14 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
         (lo, hi) = _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
     }
 
-    // ─── Finding 5 (MEDIUM): a recycle collects fees before the re-mint, folding them into the bid ledger
+    // ─── Finding 5 (MEDIUM): a recycle routes fees to the treasury before it prices the corridor
     // ───
 
-    /// @notice A recycle collects and routes LP fees BEFORE the burn/re-mint. The terminal-fee remainder is folded
-    /// into this project's bid ledger and re-minted as bid liquidity — it is NOT deposited into the treasury and does
-    /// NOT bump the project's surplus (so it never moves the cash-out floor).
-    function test_Finding5_FeesFoldToBidLedgerNotSurplus() public {
-        // Even with the treasury-surplus bump enabled, no `addToBalanceOf` deposit happens for routed fees.
+    /// @notice A recycle collects and routes LP fees BEFORE it prices the corridor and re-mints. The terminal-fee
+    /// remainder is added to the project's balance, raising its surplus, so the re-minted ranges already sit inside the
+    /// corridor of the raised cash-out floor; the bid holds only the recovered terminal principal.
+    function test_Finding5_FeesRaiseSurplusBeforeTheCorridorIsPriced() public {
+        // Model a real terminal: an `addToBalanceOf` deposit raises the project's surplus.
         terminal.setBumpSurplusOnAddToBalance(true);
         (int24 corridorLower, int24 corridorUpper) = _corridorAtMid();
         positionManager.initializePool(
@@ -416,26 +416,30 @@ contract SingleSided_CodexFixesTest is LPSplitHookV4TestBase {
 
         uint256 surplusBefore = store.surplusPerToken(PROJECT_ID);
         uint256 addToBalanceBefore = terminal.addToBalanceCallCount();
-        uint256 feeProjectBalanceBefore = terminalToken.balanceOf(address(terminal));
+        uint256 terminalBalanceBefore = terminalToken.balanceOf(address(terminal));
+        (int24 lowerBefore, int24 upperBefore) = _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
 
         _accumulateTokens(PROJECT_ID, 0.5e18);
         uint256 projectIn = recoveredProject + hook.accumulatedProjectTokens(PROJECT_ID);
         vm.prank(user);
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
-        // The terminal fee remainder was NOT deposited to the treasury and did NOT bump the project's surplus.
-        assertEq(
-            terminal.addToBalanceCallCount(), addToBalanceBefore, "routed fees are not deposited into the treasury"
-        );
-        assertEq(store.surplusPerToken(PROJECT_ID), surplusBefore, "routed fees do not bump the project's surplus");
+        // The fee-project cut and the project's remainder both went to the shared terminal; the remainder raised the
+        // project's surplus by exactly its amount.
+        uint256 cut = fee * FEE_PERCENT / 10_000;
+        assertEq(terminal.addToBalanceCallCount(), addToBalanceBefore + 1, "the remainder is added to the balance");
+        assertEq(terminal.lastAddToBalanceAmount(), fee - cut, "exactly the remainder");
+        assertEq(terminalToken.balanceOf(address(terminal)) - terminalBalanceBefore, fee, "the whole fee left the hook");
+        assertEq(store.surplusPerToken(PROJECT_ID), surplusBefore + fee - cut, "the remainder raised the surplus");
 
-        // The fee remainder (fee minus the fee-project cut paid to the terminal) joins the recovered terminal in the
-        // bid.
-        uint256 feeCut = terminalToken.balanceOf(address(terminal)) - feeProjectBalanceBefore;
-        assertLt(feeCut, fee, "only a cut of the fee leaves the hook");
-        _assertPlacedExactly(
-            PROJECT_ID, address(projectToken), address(terminalToken), projectIn, recoveredTerminal + fee - feeCut
-        );
+        // The raised floor moved the corridor, and the re-mint used the moved one.
+        (int24 lowerAfter, int24 upperAfter) = _corridorOf(PROJECT_ID, address(terminalToken), address(projectToken));
+        if (address(projectToken) < address(terminalToken)) {
+            assertGt(lowerAfter, lowerBefore, "a token0 project's floor (the lower bound) rose");
+        } else {
+            assertLt(upperAfter, upperBefore, "a token1 project's floor (the upper bound) rose");
+        }
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), projectIn, recoveredTerminal);
         _assertRecycleGeometry(PROJECT_ID, address(terminalToken), address(projectToken));
     }
 

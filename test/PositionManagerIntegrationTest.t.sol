@@ -168,7 +168,7 @@ contract PositionManagerIntegrationTest is TwoPositionFixture {
     // ─── Recycle with fees: full cycle collect → route → burn → mint ─
 
     /// @notice End-to-end recycle with accumulated fees exercises the full token flow: collect fees → route the
-    /// fee-project cut → burn → mint, with the terminal-fee remainder re-minted as the bid.
+    /// fee-project cut → add the terminal-fee remainder to the project's balance → burn → mint.
     function test_Recycle_FullCycleWithFees() public {
         _preInitAtMid();
         _accumulateAndDeploy(PROJECT_ID, 100e18);
@@ -194,17 +194,19 @@ contract PositionManagerIntegrationTest is TwoPositionFixture {
         uint256 projectIn = recovered0 + recovered1 + hook.accumulatedProjectTokens(PROJECT_ID);
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
-        // The fee-project cut was paid; nothing was deposited into the project's treasury.
+        // The fee-project cut was paid and the remainder added to the project's balance (the two share a terminal).
+        uint256 feeCut = termFee * FEE_PERCENT / 10_000;
         assertEq(terminal.payCallCount(), payBefore + 1, "the fee-project cut is paid");
-        assertEq(terminal.addToBalanceCallCount(), addBefore, "fees are never deposited into the treasury");
-        uint256 feeCut = terminalToken.balanceOf(address(terminal)) - terminalHeldBefore;
-        assertGt(feeCut, 0, "a nonzero cut left the hook");
+        assertEq(terminal.lastPayAmount(), feeCut, "the cut");
+        assertEq(terminal.addToBalanceCallCount(), addBefore + 1, "the remainder is added to the project's balance");
+        assertEq(terminal.lastAddToBalanceAmount(), termFee - feeCut, "the remainder");
+        assertEq(terminalToken.balanceOf(address(terminal)) - terminalHeldBefore, termFee, "every fee left the hook");
 
-        // The remainder is the new bid; the ask re-mints every project token.
+        // With no terminal principal and the fee gone to the treasury, the recycle mints only the ask.
         uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
         assertNotEq(newTokenId, tokenId, "New position should be minted");
-        assertNotEq(hook.bidTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "the fee remainder mints a bid");
-        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), projectIn, termFee - feeCut);
+        assertEq(hook.bidTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "no terminal inventory, no bid");
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), projectIn, 0);
         assertEq(
             terminalToken.balanceOf(address(hook)),
             hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)),

@@ -80,6 +80,13 @@ contract PullingFeeTerminal {
         }
     }
 
+    /// @notice When set, `addToBalanceOf` reverts, so a project's LP-fee remainder falls back to its terminal ledger.
+    bool public rejectAddToBalance;
+
+    function setRejectAddToBalance(bool value) external {
+        rejectAddToBalance = value;
+    }
+
     function addToBalanceOf(
         uint256,
         address token,
@@ -91,6 +98,7 @@ contract PullingFeeTerminal {
         external
         payable
     {
+        require(!rejectAddToBalance, "ADD_TO_BALANCE_REJECTED");
         if (token != address(0x000000000000000000000000000000000000EEEe) && amount > 0) {
             require(IERC20(token).transferFrom(msg.sender, address(this), amount), "transferFrom failed");
         }
@@ -160,6 +168,10 @@ contract FeeClaimReserveCaptureRegression is TwoPositionFixture {
     }
 
     function test_projectBDeployCannotConsumeProjectAsReservedFeeClaim() public {
+        // A's terminal rejects deposits, so A's terminal-side fee remainders fall back to A's terminal ledger: the
+        // hook then holds a ledger and a reserved claim in the same token, the case this regression isolates.
+        pullingTerminal.setRejectAddToBalance(true);
+
         // 1. Project A distributes reserved tokens and deploys its pool, paired with feeProjectToken as the
         // terminal token.
         projectToken.mint(address(controller), 100e18);
@@ -188,8 +200,9 @@ contract FeeClaimReserveCaptureRegression is TwoPositionFixture {
 
         uint256 claimableFeeTokens = hook.claimableFeeTokens(PROJECT_ID);
         assertGt(claimableFeeTokens, 0, "precondition: project A should have claimable fee tokens");
-        // The terminal token here IS the fee-project token, so the non-cut remainder is carried into project A's
-        // terminal ledger. The hook therefore holds A's reserved fee claim PLUS A's terminal ledger.
+        // The terminal token here IS the fee-project token, and A's terminal rejected the remainder, so the non-cut
+        // remainder is carried into project A's terminal ledger. The hook therefore holds A's reserved fee claim PLUS
+        // A's terminal ledger.
         uint256 ledgerA = hook.accumulatedTerminalTokens(PROJECT_ID, address(feeProjectToken));
         assertGt(ledgerA, 0, "precondition: project A's terminal ledger holds the fee remainder");
         assertEq(

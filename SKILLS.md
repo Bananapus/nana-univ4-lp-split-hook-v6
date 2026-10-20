@@ -28,7 +28,7 @@
 
 ## Purpose
 
-Reserved-token split hook that accumulates Juicebox project tokens and holds them as Uniswap V4 liquidity in at most two single-sided positions per project: an ask of project tokens (spot to issuance ceiling, never below the cash-out floor) and a bid of terminal tokens (spot to cash-out floor, never above the issuance ceiling). Every reserved distribution recycles both around the live spot; fees go back into the project's ledgers net of a fee-project cut.
+Reserved-token split hook that accumulates Juicebox project tokens and holds them as Uniswap V4 liquidity in at most two single-sided positions per project: an ask of project tokens (spot to issuance ceiling, never below the cash-out floor) and a bid of terminal tokens (spot to cash-out floor, never above the issuance ceiling). Every reserved distribution recycles both around the live spot, and after deployment payout splits in the pool's terminal token fund the bid; fees net of a fee-project cut raise the project's cash-out floor (terminal side added to its balance, project side burned), falling back to the ledgers when that fails.
 
 ## Reference files
 
@@ -38,9 +38,9 @@ Reserved-token split hook that accumulates Juicebox project tokens and holds the
 ## Working rules
 
 - Start in [`src/JBUniswapV4LPSplitHook.sol`](./src/JBUniswapV4LPSplitHook.sol) for runtime behavior, but check the deployer when the problem might be clone config or provenance.
-- Pool deployment is a one-way lifecycle transition. Once a project has a pool, every reserved distribution (or `addLiquidity`) recycles: collect fees, burn the ask and bid, re-mint both from everything the hook holds for the project. The hook never burns project tokens.
+- Pool deployment is a one-way lifecycle transition. Once a project has a pool, every reserved distribution (or `addLiquidity`) recycles: collect fees, burn the ask and bid, re-mint both from everything the hook holds for the project. The hook never burns reserved tokens, only collected project-token LP fees.
 - Treat pool deployment, the recycle (`_recycle` geometry, TWAP guard, burn floor), fee routing, and fee claiming as high-risk.
-- `deployPool(...)`, `addLiquidity(...)`, and `collectAndRouteLPFees(...)` are permissionless; only `claimFeeTokensFor(...)` is gated by `SET_BUYBACK_POOL`. Recycles run at any time once the spot is within 200 ticks of the 30-minute TWAP; only the inline attempt skips dust below `1e15`.
+- `deployPool(...)`, `addLiquidity(...)`, and `collectAndRouteLPFees(...)` are permissionless; only `claimFeeTokensFor(...)` is gated by `SET_BUYBACK_POOL`. Recycles run at any time once the spot is within 200 ticks of the 30-minute TWAP; only the inline attempt on a reserved distribution skips dust below `1e15`; payouts attempt at any size.
 - Position ids live in `askTokenIdOf` and `bidTokenIdOf`; either can be zero when that side had no range or no tokens at the last recycle.
 - This hook supports only one deployed terminal-token pool per project because split contexts do not carry terminal-token identity.
 - Fee accounting can end up as ERC-20 fee tokens or fee credits depending on whether the fee project has an ERC-20 deployed.

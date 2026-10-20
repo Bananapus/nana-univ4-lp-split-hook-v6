@@ -399,9 +399,10 @@ contract Integration_SingleSidedRevnet is ForkDeployHelper {
         vm.prank(attacker);
         IERC20(address(pToken)).approve(address(swapHelper), type(uint256).max);
 
-        // Give the hook both sides: a buyer partly fills the ask, then a recycle at the pinned TWAP opens the bid.
-        int24 twapTick = _spotTick(key);
-        _swapTo(swapHelper, key, attacker, twapTick - 100);
+        // Give the hook both sides: a buyer partly fills the ask (the TWAP is pinned inside the filled part, so the ask
+        // holds ETH principal; LP fees no longer stay with the hook), then a recycle at the pinned TWAP opens the bid.
+        int24 twapTick = _spotTick(key) - 100;
+        _swapTo(swapHelper, key, attacker, twapTick);
         twapTick = JBLPSplitHookHelpers.alignTickToSpacing({tick: twapTick, spacing: tickSpacing}) + anchorOffset;
         _swapTo(swapHelper, key, attacker, twapTick);
         _mockOracleTwapEqualsSpot(hook.oracleHook(), V4_POOL_MANAGER, key);

@@ -59,8 +59,9 @@ contract TestRegressionGaps is TwoPositionFixture {
     }
 
     /// @notice Across a recycle of BOTH positions with fees on both, each currency reconciles exactly: recovered
-    ///         principal plus ledgers plus fee remainders equals the new positions plus ledgers, and the only tokens
-    ///         that leave are the terminal-side fee cuts paid to the fee project (credited as claims).
+    ///         principal plus ledgers equals the new positions plus ledgers, and the fees all leave: the terminal-side
+    ///         cuts to the fee project (credited as claims), the terminal-side remainders to the project's balance, and
+    ///         the project-side fees (cut forgiven) burned.
     function test_Recycle_TwoPositions_ReconcilesPrincipalAndLedgersExactly() public {
         (uint256 askId, uint256 bidId) = _recycleIntoTwoPositions();
         _accumulateTokens(PROJECT_ID, 7e18);
@@ -73,6 +74,8 @@ contract TestRegressionGaps is TwoPositionFixture {
         (uint256 projectBefore, uint256 terminalBefore) = _recoverable(askId, bidId);
         uint256 cuts = 2e18 * FEE_PERCENT / 10_000 + 5e18 * FEE_PERCENT / 10_000;
         uint256 feeTerminalBefore = terminalToken.balanceOf(address(terminal));
+        uint256 supplyBefore = projectToken.totalSupply();
+        uint256 addsBefore = terminal.addToBalanceCallCount();
 
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
@@ -80,10 +83,13 @@ contract TestRegressionGaps is TwoPositionFixture {
         uint256 newBid = hook.bidTokenIdOf(PROJECT_ID, address(terminalToken));
         assertTrue(newAsk != askId && newAsk != bidId && newBid != askId && newBid != bidId, "both recycled");
         (uint256 projectAfter, uint256 terminalAfter) = _inventory(newAsk, newBid);
-        // Project-token fees are forgiven in full (no fee terminal accepts project tokens).
-        assertEq(projectAfter, projectBefore + 3e18 + 1e18, "project principal + ledgers + fees reconcile");
-        assertEq(terminalAfter, terminalBefore + 2e18 + 5e18 - cuts, "terminal principal + ledgers + remainders");
-        assertEq(terminalToken.balanceOf(address(terminal)), feeTerminalBefore + cuts, "only the cuts left");
+        // Project-token fee cuts are forgiven (no fee terminal accepts project tokens), so both fees burn in full.
+        assertEq(projectAfter, projectBefore, "project principal + ledgers reconcile");
+        assertEq(supplyBefore - projectToken.totalSupply(), 3e18 + 1e18, "the project-side fees are burned");
+        assertEq(terminalAfter, terminalBefore, "terminal principal + ledgers reconcile");
+        // The fee project and the project share this terminal: it receives the cuts and both remainders.
+        assertEq(terminal.addToBalanceCallCount(), addsBefore + 2, "one remainder added per position");
+        assertEq(terminalToken.balanceOf(address(terminal)), feeTerminalBefore + 2e18 + 5e18, "every terminal fee left");
         assertEq(hook.claimableFeeTokens(PROJECT_ID), cuts, "cuts credited 1:1 as fee-token claims");
         _assertBalancesBackedExactly();
     }

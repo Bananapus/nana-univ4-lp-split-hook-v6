@@ -64,7 +64,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
     // 3. processSplitWith -- payout groupId (0) reverts
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice processSplitWith reverts with TerminalTokensNotAllowed when groupId != 1 (payouts).
+    /// @notice A groupId other than 1 is read as a payout, so it must match the token's payout group.
     function test_PayoutGroupId_Reverts() public {
         uint256 amount = 100e18;
         projectToken.mint(address(hook), amount);
@@ -73,7 +73,11 @@ contract SecurityTest is LPSplitHookV4TestBase {
         JBSplitHookContext memory context = _buildContext(PROJECT_ID, address(projectToken), amount, 0);
 
         vm.prank(address(controller));
-        vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_TerminalTokensNotAllowed.selector);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidSplitGroup.selector, 0, address(projectToken)
+            )
+        );
         hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
     }
 

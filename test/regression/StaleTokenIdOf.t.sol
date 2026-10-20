@@ -169,10 +169,10 @@ contract StaleTokenIdOfTest is TwoPositionFixture {
         (uint256 bidProject, uint256 bidTerminal) = _sides(bidId);
         assertTrue(askProject + bidProject > 0 && askTerminal + bidTerminal > 0, "fixture: inventory on both sides");
 
-        // No fee terminal accepts project tokens, so the project-side cut is forgiven; the terminal-side cut is paid.
-        projectAmount = hook.accumulatedProjectTokens(PROJECT_ID) + askProject + bidProject + 2 * projectFee;
-        terminalAmount = hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)) + askTerminal + bidTerminal
-            + terminalFee - terminalFee * FEE_PERCENT / 10_000;
+        // The fees leave before the mint: the project-side fees are burned and the terminal-side remainder is added to
+        // the project's balance, so the recycle tries to deploy only the ledgers plus the retired principal.
+        projectAmount = hook.accumulatedProjectTokens(PROJECT_ID) + askProject + bidProject;
+        terminalAmount = hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)) + askTerminal + bidTerminal;
     }
 
     function _snapshot() internal view returns (Snapshot memory s) {

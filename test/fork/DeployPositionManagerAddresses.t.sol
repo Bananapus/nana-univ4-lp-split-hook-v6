@@ -17,11 +17,14 @@ contract DeployPositionManagerAddressesForkTest is Test {
     address internal constant ARBITRUM_SEPOLIA_PM = 0xAc631556d3d4019C95769033B5E719dD77124BAc;
 
     function _assertHasCode(string memory chainName, address pm, uint256 forkBlock) internal {
-        // Pin chains that already have a stable fork block in this suite. Some CI RPCs lag their advertised latest
-        // block, and an unpinned fork can fail before the bytecode assertion runs.
+        // Pin chains that already have a stable fork block in this suite. For the rest, ask for the code at "latest"
+        // in one request: a load-balanced RPC can advertise a head block that the node then serving the fork's state
+        // reads cannot find yet, and old blocks are pruned on non-archive endpoints.
         if (forkBlock == 0) {
-            try vm.createSelectFork(chainName) {
-                _assertCodeAt({chainName: chainName, pm: pm});
+            try vm.rpc(chainName, "eth_getCode", string.concat('["', vm.toString(pm), '","latest"]')) returns (
+                bytes memory code
+            ) {
+                assertGt(code.length, 0, string.concat("PositionManager has no code on ", chainName));
             } catch {
                 vm.skip(true);
             }

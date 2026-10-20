@@ -153,7 +153,7 @@ contract AccumulationStageTest is LPSplitHookV4TestBase {
     // 8. processSplitWith -- reverts if groupId is not 1
     // -----------------------------------------------------------------------
 
-    /// @notice processSplitWith reverts with TerminalTokensNotAllowed when groupId != 1.
+    /// @notice A groupId other than 1 is read as a payout, so it must match the token's payout group.
     function test_ProcessSplit_RevertsIf_GroupIdNotOne() public {
         uint256 amount = 100e18;
         projectToken.mint(address(hook), amount);
@@ -163,7 +163,7 @@ contract AccumulationStageTest is LPSplitHookV4TestBase {
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_TerminalTokensNotAllowed.selector, 0, 1
+                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidSplitGroup.selector, 0, address(projectToken)
             )
         );
         vm.prank(address(controller));

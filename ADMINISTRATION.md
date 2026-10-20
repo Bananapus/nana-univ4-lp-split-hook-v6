@@ -17,7 +17,7 @@
 
 - Project owner or `SET_BUYBACK_POOL` delegate controls only the fee-claim path (`claimFeeTokensFor`).
 - The deployer path is permissionless for creating a new hook instance.
-- Pool deployment, recycles (`addLiquidity`, and the inline attempt on every reserved distribution), and fee collection are permissionless.
+- Pool deployment, recycles (`addLiquidity`, and the inline attempt on every reserved distribution or payout split), and fee collection are permissionless.
 - The deployer's hook implementation is immutable, and chain-specific V4 constants are configured once. Each clone receives the pool manager, position manager, and oracle hook during one-time initialization.
 
 ## Roles
@@ -34,7 +34,8 @@
 | --- | --- | --- | --- |
 | `JBUniswapV4LPSplitHook` | `deployPool(...)` | Anyone (permissionless); the seed reverts once spot reaches the issuance ceiling | Irreversibly transitions a project path into deployed LP mode |
 | `JBUniswapV4LPSplitHook` | `addLiquidity(...)` | Anyone (permissionless), at any time, bounded by an oracle-TWAP deviation check | Recycles the project's ask and bid: collects fees, burns both, re-mints both single-sided around the live spot inside the corridor |
-| `JBUniswapV4LPSplitHook` | `collectAndRouteLPFees(...)` | Anyone (permissionless) | Collects fees from the ask and bid into the project's ledgers, net of the best-effort fee-project cut |
+| `JBUniswapV4LPSplitHook` | `collectAndRouteLPFees(...)` | Anyone (permissionless) | Collects fees from the ask and bid and, net of the best-effort fee-project cut, adds the terminal-token side to the project's balance and burns the project-token side (each falling back to its ledger on failure) |
+| `JBUniswapV4LPSplitHook` | `processSplitWith(...)` | The project's controller (reserved tokens, group 1) or a terminal of the project (payouts in the pool's terminal token, after deployment) | Accepts the split into the ask or bid ledger, then attempts an inline recycle |
 | `JBUniswapV4LPSplitHook` | `claimFeeTokensFor(...)` | Project owner or `SET_BUYBACK_POOL` delegate | Claims fee-project token balances |
 | `JBUniswapV4LPSplitHookDeployer` | `deployHookFor(...)` | Anyone | Deploys and initializes a new hook clone |
 

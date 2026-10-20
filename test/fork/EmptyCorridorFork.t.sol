@@ -4,7 +4,6 @@ pragma solidity 0.8.28;
 import {IJBToken} from "@bananapus/core-v6/src/interfaces/IJBToken.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
-import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
@@ -106,23 +105,28 @@ contract EmptyCorridorFork is TwoPositionForkBase {
             assertEq(lo, hi, "the donation empties the corridor");
         }
 
-        // Expected ledgers: pre-retire ledgers, plus each position's burn principal at the live spot, plus its fees
-        // after the fee-project cut (taken only on the ETH side; the fee project has no terminal for this token).
+        // Expected ledgers: pre-retire ledgers plus each position's burn principal at the live spot. The fees accrue to
+        // the project instead: the ETH fees after the fee-project cut are added to its balance, and the project-token
+        // fees (no cut: the fee project has no terminal for this token) are burned.
         uint256 expectedProject = hook.accumulatedProjectTokens(pid);
         uint256 expectedTerminal = hook.accumulatedTerminalTokens(pid, NATIVE);
         uint256 routedFees0;
         uint256 routedFees1;
+        uint256 ethRemainder;
         uint256[2] memory ids = [askId, bidId];
         for (uint256 i; i < 2; i++) {
             (uint256 principal0, uint256 principal1) = _principalOf(ids[i], key);
             (uint256 fee0, uint256 fee1) = _feesOf(ids[i], key);
             routedFees0 += fee0;
             routedFees1 += fee1;
-            expectedTerminal += principal0 + fee0 - (fee0 * hook.feePercent()) / hook.BPS();
-            expectedProject += principal1 + fee1;
+            expectedTerminal += principal0;
+            expectedProject += principal1;
+            ethRemainder += fee0 - (fee0 * hook.feePercent()) / hook.BPS();
         }
         assertGt(routedFees0, 0, "the ask earned ETH fees");
         assertGt(routedFees1, 0, "the bid earned project-token fees");
+        uint256 projectBalanceBefore = jbTerminalStore.balanceOf(address(jbMultiTerminal), pid, NATIVE);
+        uint256 supplyBefore = IERC20(address(pToken)).totalSupply();
 
         _mockOracleTwapEqualsSpot(hook.oracleHook(), V4_POOL_MANAGER, key);
         vm.prank(randomCaller);
@@ -133,8 +137,16 @@ contract EmptyCorridorFork is TwoPositionForkBase {
         assertEq(hook.askTokenIdOf(pid, NATIVE), 0, "no live ask");
         assertEq(hook.bidTokenIdOf(pid, NATIVE), 0, "no live bid");
         assertEq(V4_POOL_MANAGER.getLiquidity(key.toId()), 0, "the pool holds no liquidity at all");
-        assertEq(hook.accumulatedProjectTokens(pid), expectedProject, "project ledger: principal plus fees");
-        assertEq(hook.accumulatedTerminalTokens(pid, NATIVE), expectedTerminal, "terminal ledger: principal plus fees");
+        assertEq(hook.accumulatedProjectTokens(pid), expectedProject, "project ledger: principal");
+        assertEq(hook.accumulatedTerminalTokens(pid, NATIVE), expectedTerminal, "terminal ledger: principal");
+        assertEq(
+            jbTerminalStore.balanceOf(address(jbMultiTerminal), pid, NATIVE) - projectBalanceBefore,
+            ethRemainder,
+            "the ETH fee remainders were added to the project's balance"
+        );
+        assertEq(
+            supplyBefore - IERC20(address(pToken)).totalSupply(), routedFees1, "the project-token fees were burned"
+        );
         assertEq(IERC20(address(pToken)).balanceOf(address(hook)), expectedProject, "project tokens all held");
         assertEq(address(hook).balance, expectedTerminal, "ETH all held");
 
@@ -271,18 +283,5 @@ contract EmptyCorridorFork is TwoPositionForkBase {
             controller: address(jbController),
             ruleset: ruleset
         });
-    }
-
-    /// @notice The fees a position has accrued but not collected, exactly as `Pool` computes them on its next touch.
-    function _feesOf(uint256 tokenId, PoolKey memory key) internal view returns (uint256 fee0, uint256 fee1) {
-        (int24 tickLower, int24 tickUpper) = _ticksOf(tokenId);
-        (uint128 liquidity, uint256 last0, uint256 last1) = V4_POOL_MANAGER.getPositionInfo(
-            key.toId(), address(V4_POSITION_MANAGER), tickLower, tickUpper, bytes32(tokenId)
-        );
-        (uint256 inside0, uint256 inside1) = V4_POOL_MANAGER.getFeeGrowthInside(key.toId(), tickLower, tickUpper);
-        unchecked {
-            fee0 = FullMath.mulDiv(inside0 - last0, liquidity, 1 << 128);
-            fee1 = FullMath.mulDiv(inside1 - last1, liquidity, 1 << 128);
-        }
     }
 }

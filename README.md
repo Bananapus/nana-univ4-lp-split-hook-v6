@@ -20,6 +20,7 @@ The hook has a two-stage lifecycle:
 
 - before pool deployment, it accumulates reserved project tokens
 - after deployment, every reserved-token distribution recycles the project's positions inline (best-effort, gas permitting), and anyone can run the same recycle through `addLiquidity` at any time; fee collection is also permissionless
+- after deployment, the hook also accepts payout splits in the pool's terminal token from the project's terminals; each payout funds the bid and triggers the same best-effort inline recycle
 
 Each project holds at most two positions on its pool:
 
@@ -62,10 +63,11 @@ It does not own the project's issuance logic itself.
 - first-pool deployment validates any pre-initialized pool price against the project's economic tick bounds and reverts if out of range
 - LP management depends on both live market state and live Juicebox economics
 - fee claiming (`claimFeeTokensFor`) is an operational power gated to the project owner or `SET_BUYBACK_POOL` delegate; deploy, add, and fee collection are permissionless but bounded by economic and oracle-TWAP guards, so projects should understand who can trigger them and how new ranges are chosen before treating the hook as hands-off infrastructure
-- newly received reserved tokens keep accumulating after deployment and become liquidity at the next recycle (inline on the distribution, or via `addLiquidity`); the hook never burns project tokens (supply-reducing burns are a protocol-layer split-routing decision)
+- newly received reserved tokens keep accumulating after deployment and become liquidity at the next recycle (inline on the distribution, or via `addLiquidity`); the hook never burns reserved tokens (supply-reducing burns of reserved tokens are a protocol-layer split-routing decision)
 - the normal reserved-token path requires a deployed project ERC-20; if the hook also holds internal project credits, deploy/add liquidity claims them into that ERC-20 before minting so accounting remains tied to transferable tokens
-- the hook never cashes out: the bid is funded only from this project's terminal-token ledger, which holds the terminal tokens recovered by burning its own positions, its own LP-fee remainders, and its own mint leftovers, never by redeeming project tokens against the terminal
-- LP-fee collection takes a best-effort `feeProjectId` cut symmetrically on both the project-token and terminal-token sides (each paid to the fee project's primary terminal for that token when one exists, forgiven otherwise); every non-cut remainder becomes the project's own protocol-owned liquidity, never a deposit into the project's terminal
+- the hook never cashes out: the bid is funded only from this project's terminal-token ledger, which holds the terminal tokens recovered by burning its own positions, its own mint leftovers, its own payout splits, and its own LP-fee remainders whose add to the project's balance failed, never by redeeming project tokens against the terminal
+- a payout split must arrive under the token's group (`uint256(uint160(token))`) from a terminal of the project, after pool deployment, in the deployed pool's terminal token; any rejection reverts and Core returns the whole payout to the project's balance. Core charges its normal fee on payouts to split hooks unless the project is feeless
+- LP-fee collection takes a best-effort `feeProjectId` cut symmetrically on both the project-token and terminal-token sides (each paid to the fee project's primary terminal for that token when one exists, forgiven otherwise); the non-cut remainder accrues to the project and raises its cash-out floor: the terminal-token side is added to the project's balance in its primary terminal for that token (more surplus) and the project-token side is burned through the controller (less supply). A side whose add or burn fails stays in its ledger and becomes liquidity at the next recycle
 - fee-project credits owed to claimants are reserved from that credit normalization, so a fee project cannot consume other projects' claimable fee credits as its own LP principal
 
 ## Where state lives
@@ -118,7 +120,7 @@ script/
 - first-pool deployment is publicly observable and can be front-run by outside initialization
 - LP deployment and every recycle depend on current project economics and live market structure
 - direct ETH or tokens sent to the hook are settlement dust unless a supported LP-management path accounts for them
-- after deployment, newly received reserved tokens keep accumulating and are recycled into the ask on the next distribution or `addLiquidity`; the hook never burns
+- after deployment, newly received reserved tokens keep accumulating and are recycled into the ask on the next distribution or `addLiquidity`; the hook never burns reserved tokens, only collected project-token LP fees
 - TWAP and oracle assumptions come from the UniV4 router and should be evaluated together with this hook
 
 ## For AI agents

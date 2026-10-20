@@ -22,7 +22,7 @@ This file focuses on the lifecycle, pricing, and fee-accounting risks in `JBUnis
 - **Uniswap V4 PositionManager.** Burn, mint, decrease-liquidity, and fee collection depend on it.
 - **Oracle hook.** The chosen hook in the pool key is immutable. A bad oracle hook can affect every pool managed by the split hook.
 - **Permit2.** Used for ERC-20 approvals into the position-management flow.
-- **JB Directory and Controller.** `controllerOf`, `primaryTerminalOf`, and project-owner resolution are all trusted integration points.
+- **JB Directory and Controller.** `controllerOf`, `primaryTerminalOf`, `isTerminalOf`, and project-owner resolution are all trusted integration points. The project's primary terminal (`addToBalanceOf` of terminal-token fee remainders) and controller (`burnTokensOf` of project-token fee remainders) are called best effort, so a failing one only sends that remainder back to its ledger.
 - **Fee routing config.** `FEE_PROJECT_ID` and `FEE_PERCENT` are fixed at initialization.
 
 ## 2. Economic risks
@@ -51,17 +51,18 @@ This file focuses on the lifecycle, pricing, and fee-accounting risks in `JBUnis
 
 ## 4. Recycle risks
 
-- **Recycles run on every distribution.** The inline attempt is best-effort: it needs at least 1,000,000 gas plus a 64,000 reserve (a full recycle measured about 955k on a mainnet fork), and a failed attempt emits `LiquidityAutomationFailed` while the accepted inventory stays in the ledgers for the permissionless `addLiquidity` retry.
+- **Recycles run on every distribution.** Reserved-token distributions and payout splits both make the inline attempt. It is best-effort: it needs at least 1,500,000 gas plus a 64,000 reserve (a full recycle with fee routing and the credit claim measured about 857k to 1.39M across the mainnet fork suite, so the floor sits above the heaviest measured recycle; a heavier one that still runs out of gas is reported like any failure), and a failed attempt emits `LiquidityAutomationFailed` while the accepted inventory stays in the ledgers for the permissionless `addLiquidity` retry. Fee routing adds up to four external calls per recycle (an add to balance and a burn per retired position), which count against the same floor, so more inline attempts can fall back to the retry. Reserved-token distributions skip the attempt while the project ledger is below the churn threshold; payouts attempt at any size.
 - **Atomicity matters.** Both positions are retired and both mints happen in one call; `askTokenIdOf` and `bidTokenIdOf` are written only after the mints, and a recycle that cannot mint either side reverts with the old positions intact.
-- **Leftover token handling matters.** Leftover project tokens are carried back into `accumulatedProjectTokens`; leftover terminal tokens into `accumulatedTerminalTokens`. Nothing is burned and nothing is deposited into the project's terminal.
-- **Fee collection order matters.** Each position's fees are collected and routed before it is burned, so the fee-project cut applies to trading fees only, never to principal. Each side takes a best-effort fee-project cut, and the non-cut remainder lands in this project's own ledger (`accumulatedProjectTokens` or `accumulatedTerminalTokens`).
+- **Leftover token handling matters.** Leftover project tokens are carried back into `accumulatedProjectTokens`; leftover terminal tokens into `accumulatedTerminalTokens`. Leftovers are never burned and never deposited into the project's terminal.
+- **Fee collection order matters.** Each position's fees are collected and routed before it is burned, so the fee-project cut applies to trading fees only, never to principal. Each side takes a best-effort fee-project cut; the non-cut terminal-token remainder is added to the project's balance and the project-token remainder is burned, each landing in this project's own ledger (`accumulatedTerminalTokens` or `accumulatedProjectTokens`) when that route fails. Fees are routed before the corridor is priced, so the recycle mints around the raised floor.
 - **Spot price is used during every recycle.** Operators should treat recycle timing as economically sensitive; the TWAP guard bounds it, it does not remove it.
 
 ## 5. Access control risks
 
 - **`deployPool` is permissionless.** The seed reverts once the pool spot reaches the issuance ceiling, so accumulated tokens are never locked behind an operator and a caller cannot deploy outside the economic corridor.
 - **`addLiquidity` is permissionless.** It runs at any time, and reverts if the pool spot price deviates from the oracle TWAP by more than the bound or the TWAP is unavailable; accumulation continues safely until it can run.
-- **`collectAndRouteLPFees` is permissionless.** It collects fees from the ask and bid without touching principal.
+- **`collectAndRouteLPFees` is permissionless.** It collects fees from the ask and bid without touching principal. It raises the cash-out floor without moving the positions, which keep quoting their old range until the next recycle.
+- **`processSplitWith` accepts two senders.** Reserved-token splits (group 1) only from the project's controller; payout splits only from a terminal of the project, under the token's group, after deployment, in the pool's terminal token. Any rejection reverts, and Core returns the allocation to the project.
 - **`claimFeeTokensFor` is gated.** Unclaimed fee tokens or fee credits can sit in the hook indefinitely.
 - **`initialize` is one-shot.** First-call semantics on clones matter.
 
@@ -90,7 +91,7 @@ The design assumes trusted Juicebox and Uniswap components on the critical exter
 
 Fee routing into the fee project intentionally does not set a local slippage floor. The fee project's own terminal and hook logic are expected to own that behavior.
 
-If the fee project has no primary terminal for the collected token, the fee project simply misses that collection and the full amount is carried into the originating project's own ledger instead (the ask ledger `accumulatedProjectTokens` or the bid ledger `accumulatedTerminalTokens`, depending on which side was being cut). This is accepted because fee-project terminal configuration is owned by the fee project, not by this LP split hook.
+If the fee project has no primary terminal for the collected token, the fee project simply misses that collection and the full amount is routed to the originating project like any remainder (added to its balance or burned, falling back to `accumulatedTerminalTokens` or `accumulatedProjectTokens`). This is accepted because fee-project terminal configuration is owned by the fee project, not by this LP split hook.
 
 ### 7.3 Permit2 approval bounds and cleanup
 
@@ -110,9 +111,9 @@ When `deployPool` encounters an already-initialized pool (e.g. by an attacker or
 
 LP trading fees accrue in both tokens. When fees are collected and routed, the `feeProjectId` protocol cut is attempted symmetrically on both the terminal-token side and the project-token side: for each side, the hook checks whether the fee project has a primary terminal that accepts that token, and if so pays the cut there so it becomes claimable by the fee project as fee tokens or fee-project credits. The payment is wrapped so a missing fee-project terminal or a reverting payment is forgiven — fee collection never fails because of the fee project's own configuration or state.
 
-Whatever is not taken as a cut becomes the originating project's own protocol-owned liquidity, never the project's terminal balance: the project-token remainder is carried into `accumulatedProjectTokens` (the ask-side ledger), and the terminal-token remainder is carried into `accumulatedTerminalTokens[projectId][terminalToken]` (the per-project bid-side ledger). Each recycle mints the whole project ledger into the ask and the whole terminal ledger into the bid.
+Whatever is not taken as a cut accrues to the originating project and raises its cash-out floor: the terminal-token remainder is added to the project's balance in its primary terminal for that token (`addToBalanceOf`, more surplus), and the project-token remainder is burned through the controller (`burnTokensOf`, less supply). Each route is best effort: when it reverts (no primary terminal, a rejecting terminal, a reverting controller, an inexact burn), that remainder is carried into `accumulatedTerminalTokens[projectId][terminalToken]` (the bid-side ledger) or `accumulatedProjectTokens` (the ask-side ledger) and becomes liquidity at the next recycle. A failure never blocks the collection or the other side.
 
-In practice, the project-token cut is usually forgiven, because the fee project rarely has a terminal configured to accept an arbitrary project's token — so project-token fees typically stay entirely as the project's own liquidity. The mechanism captures the cut whenever such a fee-project terminal does exist; nothing in the design privileges one side over the other.
+In practice, the project-token cut is usually forgiven, because the fee project rarely has a terminal configured to accept an arbitrary project's token — so project-token fees are typically burned in full. The mechanism captures the cut whenever such a fee-project terminal does exist; nothing in the design privileges one side over the other.
 
 ### 7.6 `deployPool` auto-selects and permanently locks the terminal token
 
@@ -123,3 +124,11 @@ This is accepted as low severity: the influencer must deposit real value into th
 ### 7.7 Existing clones keep their own position model
 
 The two-position hook ships as a new library, implementation, and deployer at fresh addresses. Clones of an earlier deployment (for example 1.4.0) are unaffected and keep their single-position behavior. A project adopts the two-position model by deploying a clone from the new deployer and re-pointing its reserved-token split to it; inventory already held by the old clone stays under the old clone's rules.
+
+### 7.8 Owed fee credits keep a fee project's own fee burns in the ledger
+
+Core burns a holder's credits before its ERC-20, so `burnFeeRemainder` first claims every credit the hook holds for the project into the ERC-20 and the ask ledger (`_claimHookCreditsFor`, the same step a recycle runs), then accepts the burn only when exactly the remainder left the hook's ERC-20 balance and its credit balance is unchanged (otherwise `JBUniswapV4LPSplitHook_FeeBurnNotExact`, forgiven). Credits a third party sends the hook are claimed this way, so they cannot divert the burn; they become ask inventory. The one exception is fee-credit claims the hook owes (`_totalOutstandingFeeCreditClaims`): they exist only when the project is itself the fee project and accrued fee credits before it had an ERC-20. They are never claimed, so while any are outstanding the burn would consume them first and is forgiven instead; that project's project-token fee remainders become ask liquidity rather than a supply reduction until the claims are settled. No value is lost.
+
+### 7.9 Payout splits pay Core's fee
+
+Core charges its normal fee on payouts to split hooks unless the project is feeless, so a payout routed to this hook funds the bid with the net amount.
