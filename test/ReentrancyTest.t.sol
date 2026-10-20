@@ -38,20 +38,6 @@ contract ReentrantControllerTerminal is MockJBController {
     mapping(uint256 projectId => mapping(address token => JBAccountingContext)) public _contexts;
     mapping(uint256 projectId => JBAccountingContext[]) public _contextsList;
 
-    /// @dev Matches IJBTerminal.currentSurplusOf: this terminal's own surplus, as its store reports it.
-    function currentSurplusOf(
-        uint256 projectId,
-        address[] calldata,
-        uint256 decimals,
-        uint256 currency
-    )
-        external
-        view
-        returns (uint256)
-    {
-        return MockJBTerminalStore(storeAddr).currentTotalSurplusOf(projectId, decimals, currency);
-    }
-
     constructor(
         JBUniswapV4LPSplitHook _hook,
         MockERC20 projToken,
@@ -147,6 +133,27 @@ contract ReentrantControllerTerminal is MockJBController {
 
             accumulatedDuringReentry = hook.accumulatedProjectTokens(targetProjectId);
         }
+    }
+
+    /// @notice This terminal's own surplus for a project, as its store reports it.
+    /// @dev Matches `IJBTerminal.currentSurplusOf`; the unnamed accounting-context list is ignored because the store
+    /// reports the total surplus.
+    /// @param projectId The project to read the surplus of.
+    /// @param decimals The decimals the surplus is expressed in.
+    /// @param currency The currency the surplus is expressed in.
+    /// @return surplus The project's surplus in this terminal.
+    function currentSurplusOf(
+        uint256 projectId,
+        address[] calldata,
+        uint256 decimals,
+        uint256 currency
+    )
+        external
+        view
+        returns (uint256 surplus)
+    {
+        // Delegate to the store so the hook reads the same surplus a real terminal would report.
+        return MockJBTerminalStore(storeAddr).currentTotalSurplusOf(projectId, decimals, currency);
     }
 
     function pay(
@@ -249,7 +256,7 @@ contract ReentrantFeeTerminal {
             } else if (reentryMode == ReentryMode.ADD_LIQUIDITY) {
                 // Re-enter addLiquidity. `addLiquidity` is permissionless, so only the `nonReentrant` guard can stop
                 // this.
-                try hook.addLiquidity(projectId, terminalTokenAddr) {
+                try hook.addLiquidity({projectId: projectId, terminalToken: terminalTokenAddr}) {
                 // Should NOT reach here.
                 }
                 catch (bytes memory reason) {
@@ -371,8 +378,9 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
 
         // 8. Only the project-token leftover the capped ask could not place is carried back to the ledger — a pure
         // state write with no external call.
-        uint256 askId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 askId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         assertEq(positionManager.getPositionLiquidity(askId), room, "the ask is capped at the per-tick room");
+        // The leftover is whatever the capped ask's liquidity did not cost at spot.
         (uint256 cost0, uint256 cost1) = _mintCostAtSpot(askId);
         uint256 legitimateLeftover = accumulateAmount - (cost0 + cost1);
         assertGt(legitimateLeftover, 0, "the cap leaves a leftover");
@@ -399,34 +407,35 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
     ///         recycle is protected by a deterministic guard rather than an incidental (and fragile) revert.
     function test_reentrancy_addLiquidity_cannotReenter() public {
         // 1. Deploy pool normally, then accumulate enough for a recycle.
-        _accumulateAndDeploy(PROJECT_ID, 1000e18);
-        _accumulateTokens(PROJECT_ID, 10e18);
+        _accumulateAndDeploy({projectId: PROJECT_ID, amount: 1000e18});
+        _accumulateTokens({projectId: PROJECT_ID, amount: 10e18});
 
         // 2. Create malicious fee terminal.
         ReentrantFeeTerminal malFeeTerminal =
             new ReentrantFeeTerminal(hook, feeProjectToken, PROJECT_ID, address(terminalToken));
 
         // 3. Register it as the fee terminal for FEE_PROJECT_ID.
-        _setDirectoryTerminal(FEE_PROJECT_ID, address(terminalToken), address(malFeeTerminal));
+        _setDirectoryTerminal({projectId: FEE_PROJECT_ID, token: address(terminalToken), term: address(malFeeTerminal)});
 
         // 4. Set up LP fees to collect.
-        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
-        (address token0,) = _sortForTest(address(projectToken), address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
+        (address token0,) = _sortForTest({tokenA: address(projectToken), tokenB: address(terminalToken)});
 
+        // Record the terminal-side fee in whichever currency slot the terminal token sorts to, and fund the PM.
         uint256 feeAmount = 50e18;
         if (token0 == address(terminalToken)) {
-            positionManager.setCollectableFees(tokenId, feeAmount, 0);
+            positionManager.setCollectableFees({tokenId: tokenId, amount0: feeAmount, amount1: 0});
         } else {
-            positionManager.setCollectableFees(tokenId, 0, feeAmount);
+            positionManager.setCollectableFees({tokenId: tokenId, amount0: 0, amount1: feeAmount});
         }
-        terminalToken.mint(address(positionManager), feeAmount);
+        terminalToken.mint({to: address(positionManager), amount: feeAmount});
 
         // 5. Enable re-entry mode: try to re-enter addLiquidity.
         malFeeTerminal.setReentryMode(ReentrantFeeTerminal.ReentryMode.ADD_LIQUIDITY);
 
         // 6. Call addLiquidity as an arbitrary, unpermissioned caller — it's permissionless by design.
         vm.prank(user);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken));
+        hook.addLiquidity({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
         // 7. Verify: re-entry was attempted, and specifically blocked by the `nonReentrant` guard — the only thing
         // standing between a permissionless nested recycle and the outer recycle's in-flight state.
@@ -439,7 +448,7 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
         );
 
         // 8. Verify: the outer recycle completed despite the blocked re-entry — the old ask was burned and replaced.
-        uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 newTokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         assertNotEq(newTokenId, 0, "Ask should exist after a successful recycle");
         assertNotEq(newTokenId, tokenId, "The old ask must be replaced by the recycle");
     }
@@ -463,7 +472,7 @@ contract ReentrancyTest is LPSplitHookV4TestBase {
         _setDirectoryTerminal(FEE_PROJECT_ID, address(terminalToken), address(malFeeTerminal));
 
         // 4. Set up LP fees to collect.
-        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         (address token0,) = _sortForTest(address(projectToken), address(terminalToken));
 
         uint256 feeAmount = 50e18;

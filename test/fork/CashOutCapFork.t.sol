@@ -75,7 +75,8 @@ contract CashOutCapFork is ForkDeployHelper {
         vm.prank(multisig);
         hook.deployPool(pid);
         assertTrue(hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN), "Pool should deploy");
-        uint256 tokenId = hook.askTokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+        // Read the ask position that the deploy minted.
+        uint256 tokenId = hook.askTokenIdOf({projectId: pid, terminalToken: JBConstants.NATIVE_TOKEN});
         uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         assertTrue(posLiq > 0, "Position should have liquidity");
         PoolKey memory key = hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN);
@@ -161,6 +162,7 @@ contract CashOutCapFork is ForkDeployHelper {
         });
         vm.startPrank(address(jbController));
         IERC20(tokenAddr).approve(address(hook), amount);
+        // Cap the gas so the split is only taken in and the hook skips its inline automation.
         hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
     }

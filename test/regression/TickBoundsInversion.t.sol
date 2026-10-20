@@ -95,7 +95,7 @@ contract TestableHookForTickBounds is JBUniswapV4LPSplitHook {
 ///      e.g. native ETH pools, the cashOut tick is HIGHER than the issuance tick, causing
 ///      tickLower >= tickUpper and collapsing the intended economic range.
 ///
-///      The bounds are now sorted by their exact sqrt prices before rounding inward to tickLower/tickUpper.
+///      The bounds are sorted by their exact sqrt prices before rounding inward to tickLower/tickUpper.
 contract TickBoundsInversionTest is LPSplitHookV4TestBase {
     TestableHookForTickBounds public testableHook;
 
@@ -166,7 +166,7 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
         );
 
         // Set surplus so the cash-out rate is nonzero and below the issuance price.
-        store.setSurplus(TEST_PROJECT_ID, DEFAULT_SURPLUS_PER_TOKEN);
+        store.setSurplus({projectId: TEST_PROJECT_ID, surplus: DEFAULT_SURPLUS_PER_TOKEN});
 
         // Set balance so auto-select picks lowTerminalToken for this project.
         store.setBalance(address(terminal), TEST_PROJECT_ID, address(lowTerminalToken), 10e18);
@@ -188,12 +188,17 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
     ///         This demonstrates the root cause: the raw ticks are inverted relative
     ///         to the naive cashOut=lower, issuance=upper assumption.
     function test_rawTicksAreInverted_whenTerminalIsToken0() public view {
-        uint160 sqrtPriceCashOut = testableHook.exposed_getCashOutRateSqrtPriceX96(
-            TEST_PROJECT_ID, address(lowTerminalToken), address(highProjectToken)
-        );
-        uint160 sqrtPriceIssuance = testableHook.exposed_getIssuanceRateSqrtPriceX96(
-            TEST_PROJECT_ID, address(lowTerminalToken), address(highProjectToken)
-        );
+        // Read both raw bound prices for the token0-terminal pair.
+        uint160 sqrtPriceCashOut = testableHook.exposed_getCashOutRateSqrtPriceX96({
+            projectId: TEST_PROJECT_ID,
+            terminalToken: address(lowTerminalToken),
+            projectToken: address(highProjectToken)
+        });
+        uint160 sqrtPriceIssuance = testableHook.exposed_getIssuanceRateSqrtPriceX96({
+            projectId: TEST_PROJECT_ID,
+            terminalToken: address(lowTerminalToken),
+            projectToken: address(highProjectToken)
+        });
 
         // When terminal is token0 the price is project tokens per terminal token:
         //   cashOut sqrtPrice  = sqrt(WAD^2 / cashOutRate) = sqrt(1e36 / 0.0005e18) = sqrt(2000e18)
@@ -229,15 +234,21 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
     ///         With the fix, sorting ensures tickLower < tickUpper and the range is correct.
     function test_lowCashOutRate_wideRange_whenTerminalIsToken0() public {
         // Set a very low surplus => low cash-out rate.
-        store.setSurplus(TEST_PROJECT_ID, 1e12);
+        store.setSurplus({projectId: TEST_PROJECT_ID, surplus: 1e12});
 
-        uint160 sqrtPriceCashOut = testableHook.exposed_getCashOutRateSqrtPriceX96(
-            TEST_PROJECT_ID, address(lowTerminalToken), address(highProjectToken)
-        );
-        uint160 sqrtPriceIssuance = testableHook.exposed_getIssuanceRateSqrtPriceX96(
-            TEST_PROJECT_ID, address(lowTerminalToken), address(highProjectToken)
-        );
+        // Read both raw bound prices for the token0-terminal pair.
+        uint160 sqrtPriceCashOut = testableHook.exposed_getCashOutRateSqrtPriceX96({
+            projectId: TEST_PROJECT_ID,
+            terminalToken: address(lowTerminalToken),
+            projectToken: address(highProjectToken)
+        });
+        uint160 sqrtPriceIssuance = testableHook.exposed_getIssuanceRateSqrtPriceX96({
+            projectId: TEST_PROJECT_ID,
+            terminalToken: address(lowTerminalToken),
+            projectToken: address(highProjectToken)
+        });
 
+        // Convert each raw price to the tick at or below it.
         int24 tickCashOut = TickMath.getTickAtSqrtPrice(sqrtPriceCashOut);
         int24 tickIssuance = TickMath.getTickAtSqrtPrice(sqrtPriceIssuance);
 
@@ -249,9 +260,11 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
         );
 
         // Despite the raw tick inversion, _calculateTickBounds should sort correctly.
-        (int24 tickLower, int24 tickUpper) = testableHook.exposed_calculateTickBounds(
-            TEST_PROJECT_ID, address(lowTerminalToken), address(highProjectToken)
-        );
+        (int24 tickLower, int24 tickUpper) = testableHook.exposed_calculateTickBounds({
+            projectId: TEST_PROJECT_ID,
+            terminalToken: address(lowTerminalToken),
+            projectToken: address(highProjectToken)
+        });
 
         assertLt(tickLower, tickUpper, "tickLower must be < tickUpper after sorting");
 
@@ -267,7 +280,7 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
         int24 issuanceTickAtOrAbove =
             TickMath.getSqrtPriceAtTick(tickIssuance) < sqrtPriceIssuance ? tickIssuance + 1 : tickIssuance;
         int24 alignedIssuance = _alignTickToSpacingCeil({tick: issuanceTickAtOrAbove, spacing: 200});
-        int24 alignedCashOut = _alignTickToSpacing(tickCashOut, 200);
+        int24 alignedCashOut = _alignTickToSpacing({tick: tickCashOut, spacing: 200});
         assertEq(tickLower, alignedIssuance, "tickLower should be the ceil-aligned issuance tick (the lower raw tick)");
         assertEq(tickUpper, alignedCashOut, "tickUpper should be the floor-aligned cashOut tick (the higher raw tick)");
     }
@@ -309,8 +322,9 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
         // Build context for the test project.
         vm.startPrank(address(controller));
         highProjectToken.approve(address(hook), accAmount);
+        // Cap the gas below the inline-automation floor so the split is only accumulated.
         hook.processSplitWith{gas: INTAKE_ONLY_GAS}(
-            _buildContext(TEST_PROJECT_ID, address(highProjectToken), accAmount, 1)
+            _buildContext({projectId: TEST_PROJECT_ID, token: address(highProjectToken), amount: accAmount, groupId: 1})
         );
         vm.stopPrank();
 
@@ -320,8 +334,8 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(TEST_PROJECT_ID);
 
-        // Verify pool was deployed successfully.
-        uint256 tokenId = hook.askTokenIdOf(TEST_PROJECT_ID, address(lowTerminalToken));
+        // Verify pool was deployed successfully with an ask position.
+        uint256 tokenId = hook.askTokenIdOf({projectId: TEST_PROJECT_ID, terminalToken: address(lowTerminalToken)});
         assertNotEq(tokenId, 0, "tokenIdOf should be nonzero after deploy");
         assertTrue(hook.isPoolDeployed(TEST_PROJECT_ID, address(lowTerminalToken)), "projectDeployed should be true");
     }
@@ -333,23 +347,30 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
     /// @notice A cash-out value of 0.5 terminal tokens per project token exceeds the issuance price (1/900): no price
     /// respects both bounds, so the corridor is empty instead of sorted, and a first deploy refuses.
     function test_economicInversion_emptyCorridor_deployReverts_whenTerminalIsToken0() public {
-        store.setSurplus(TEST_PROJECT_ID, 0.5e18);
+        // Lift the cash-out value above the issuance price.
+        store.setSurplus({projectId: TEST_PROJECT_ID, surplus: 0.5e18});
 
-        (int24 tickLower, int24 tickUpper) = testableHook.exposed_calculateTickBounds(
-            TEST_PROJECT_ID, address(lowTerminalToken), address(highProjectToken)
-        );
+        // No price respects both bounds, so the corridor is the empty (0, 0) band.
+        (int24 tickLower, int24 tickUpper) = testableHook.exposed_calculateTickBounds({
+            projectId: TEST_PROJECT_ID,
+            terminalToken: address(lowTerminalToken),
+            projectToken: address(highProjectToken)
+        });
         assertEq(tickLower, 0, "inverted economics: empty corridor lower");
         assertEq(tickUpper, 0, "inverted economics: empty corridor upper");
 
+        // Accumulate reserved tokens through the controller, capping the gas below the inline-automation floor so the
+        // split is only accumulated.
         uint256 accAmount = 100e18;
-        highProjectToken.mint(address(controller), accAmount);
+        highProjectToken.mint({to: address(controller), amount: accAmount});
         vm.startPrank(address(controller));
-        highProjectToken.approve(address(hook), accAmount);
+        highProjectToken.approve({spender: address(hook), amount: accAmount});
         hook.processSplitWith{gas: INTAKE_ONLY_GAS}(
-            _buildContext(TEST_PROJECT_ID, address(highProjectToken), accAmount, 1)
+            _buildContext({projectId: TEST_PROJECT_ID, token: address(highProjectToken), amount: accAmount, groupId: 1})
         );
         vm.stopPrank();
 
+        // The first deploy refuses the empty corridor and leaves the reserved tokens ledgered.
         vm.expectRevert(
             abi.encodeWithSelector(
                 JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_EmptyCorridor.selector,

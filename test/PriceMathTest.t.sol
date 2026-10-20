@@ -18,18 +18,25 @@ import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerR
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
 /// @notice Wrapper that exposes the internal price math library functions for testing.
-/// @dev Standalone (NOT inheriting the hook): the wrappers only call `JBUniswapV4LPSplitHookMath` /
-/// `JBLPSplitHookHelpers`, and inheriting the full hook pushed this test contract past the EIP-170 runtime size
+/// @dev Standalone rather than inheriting the hook: the wrappers only call `JBUniswapV4LPSplitHookMath` and
+/// `JBLPSplitHookHelpers`, and inheriting the full hook would push this test contract past the EIP-170 runtime size
 /// checked by `forge build --sizes`.
 contract TestableJBUniswapV4LPSplitHook {
-    // Mirror the hook's immutables the math library reads.
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
+    /// @notice The directory the math library reads controllers, terminals and stores from, mirroring the hook's
+    /// immutable.
     address public immutable DIRECTORY;
-    // forge-lint: disable-next-line(screaming-snake-case-immutable)
+
+    /// @notice The sucker registry passed to the math library, the zero address because these tests deploy no
+    /// registry.
     IJBSuckerRegistry public immutable SUCKER_REGISTRY = IJBSuckerRegistry(address(0));
 
-    constructor(address _directory, IJBPermissions, address, IAllowanceTransfer) {
-        DIRECTORY = _directory;
+    /// @notice Stores the directory the wrapped math reads from.
+    /// @dev The unnamed permissions, tokens and permit2 parameters keep the hook's constructor shape so callers deploy
+    /// this wrapper the same way they deploy the hook; the math never reads them.
+    /// @param directory The directory to expose to the math library.
+    constructor(address directory, IJBPermissions, address, IAllowanceTransfer) {
+        // Record the directory every wrapper reads through `_fetchControllerAndRuleset` and the math library.
+        DIRECTORY = directory;
     }
 
     /// @dev Helper to fetch controller and ruleset for a project.
@@ -290,6 +297,7 @@ contract PriceMathTest is LPSplitHookV4TestBase {
 
         // The bounds are sorted by price, so the range is wide.
         assertLt(tickLower, tickUpper, "Sorted ticks should produce tickLower < tickUpper");
+        // The extreme cash-out inverse places the bounds more than two spacings apart.
         assertGt(tickUpper - tickLower, 2 * int24(200), "Range should span more than two spacings");
     }
 

@@ -79,7 +79,8 @@ contract Integration_HighReservedZeroTax is ForkDeployHelper {
             (uint160 sqrtPriceX96,,,) = V4_POOL_MANAGER.getSlot0(key.toId());
             assertTrue(sqrtPriceX96 > TickMath.MIN_SQRT_PRICE, "sqrtPrice > MIN");
             assertTrue(sqrtPriceX96 < TickMath.MAX_SQRT_PRICE, "sqrtPrice < MAX");
-            uint256 tokenId = hook.askTokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+            // Read the ask position that the deploy minted.
+            uint256 tokenId = hook.askTokenIdOf({projectId: pid, terminalToken: JBConstants.NATIVE_TOKEN});
             uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
             assertTrue(posLiq > 0, "Position has liquidity");
             // Accumulation consumed by the deploy; only an unpaired remainder is carried forward (never burned).
@@ -174,6 +175,7 @@ contract Integration_HighReservedZeroTax is ForkDeployHelper {
         });
         vm.startPrank(address(jbController));
         IERC20(tokenAddr).approve(address(hook), amount);
+        // Cap the gas so the split is only taken in and the hook skips its inline automation.
         hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
     }

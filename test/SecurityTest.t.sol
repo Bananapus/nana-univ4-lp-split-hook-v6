@@ -26,6 +26,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
         vm.expectPartialRevert(
             JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_SplitSenderNotValidControllerOrTerminal.selector
         );
+        // Deliver with intake-only gas so the hook runs intake and skips inline automation.
         hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
     }
 
@@ -57,6 +58,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
 
         vm.prank(address(controller));
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NotHookSpecifiedInContext.selector);
+        // Deliver with intake-only gas so the hook runs intake and skips inline automation.
         hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
     }
 
@@ -72,12 +74,14 @@ contract SecurityTest is LPSplitHookV4TestBase {
         // groupId=0 means payout split, not reserved tokens
         JBSplitHookContext memory context = _buildContext(PROJECT_ID, address(projectToken), amount, 0);
 
+        // A project token is never a payout group's token, so group 0 reverts naming the group and the token.
         vm.prank(address(controller));
         vm.expectRevert(
             abi.encodeWithSelector(
                 JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvalidSplitGroup.selector, 0, address(projectToken)
             )
         );
+        // Deliver with intake-only gas so the hook runs intake and skips inline automation.
         hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
     }
 
@@ -94,7 +98,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
         _accumulateAndDeploy(PROJECT_ID, 1000e18);
 
         // Step 2: Set up collectable fees on the PositionManager mock
-        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         (address token0,) = _sortForTest(address(projectToken), address(terminalToken));
 
         uint256 feeAmount = 50e18;
@@ -158,7 +162,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
         // Accumulate and deploy pool (deployPool called as owner inside helper)
         _accumulateAndDeploy(PROJECT_ID, 1000e18);
 
-        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         (address token0,) = _sortForTest(address(projectToken), address(terminalToken));
 
         uint256 feeAmount = 50e18;
@@ -275,7 +279,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
         _accumulateAndDeploy(PROJECT_ID, 1000e18);
 
         // Set up collectable fees on PositionManager
-        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         (address token0,) = _sortForTest(address(projectToken), address(terminalToken));
 
         uint256 feeAmount = 10e18;
@@ -317,7 +321,9 @@ contract SecurityTest is LPSplitHookV4TestBase {
 
         // The deploy succeeds and mints a position NFT.
         assertNotEq(
-            hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "a permissionless caller can deploy the pool"
+            hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            0,
+            "a permissionless caller can deploy the pool"
         );
     }
 
@@ -339,7 +345,7 @@ contract SecurityTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
 
         // Verify pool was deployed
-        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         assertNotEq(tokenId, 0, "Pool should have been deployed by owner");
 
         // Verify the PositionManager mint was called
@@ -352,32 +358,31 @@ contract SecurityTest is LPSplitHookV4TestBase {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 11. processSplitWith -- burns after deployment
+    // 11. processSplitWith -- accumulates after deployment
     // ─────────────────────────────────────────────────────────────────────
 
-    /// @notice After pool deployment, processSplitWith burns tokens instead of accumulating.
-    function test_ProcessSplit_BurnsAfterDeployment() public {
-        // Deploy pool (sets projectDeployed[PROJECT_ID] = true)
+    /// @notice After pool deployment, processSplitWith still accepts reserved tokens (the hook never burns them) and
+    /// the project stays deployed.
+    function test_ProcessSplit_AcceptsAfterDeployment() public {
+        // Deploy the pool, marking the project deployed.
         _accumulateAndDeploy(PROJECT_ID, 1000e18);
 
         // Verify project is in deployed state
         assertTrue(hook.isPoolDeployed(PROJECT_ID, address(terminalToken)), "projectDeployed should be true");
 
-        // Now send more tokens via processSplitWith -- should burn, not accumulate
+        // Deliver more reserved tokens through processSplitWith after deployment.
         uint256 additionalAmount = 200e18;
         projectToken.mint(address(controller), additionalAmount);
 
         vm.startPrank(address(controller));
         projectToken.approve(address(hook), additionalAmount);
         JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, additionalAmount);
+        // Deliver with intake-only gas so the hook runs intake and skips inline automation.
         hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
 
-        // accumulatedProjectTokens should NOT increase (tokens were burned, not accumulated)
-        // After _accumulateAndDeploy, the accumulated balance is consumed by deployPool,
-        // so new tokens should not add to it
-        // The key check: projectDeployed is true, so the burn path was taken
-        assertTrue(hook.isPoolDeployed(PROJECT_ID, address(terminalToken)), "projectDeployed remains true after burn");
+        // The intake succeeds and leaves the project in its deployed stage.
+        assertTrue(hook.isPoolDeployed(PROJECT_ID, address(terminalToken)), "projectDeployed remains true after intake");
     }
 
     // ─────────────────────────────────────────────────────────────────────

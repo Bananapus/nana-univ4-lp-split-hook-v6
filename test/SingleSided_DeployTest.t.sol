@@ -67,13 +67,19 @@ contract SingleSided_DeployTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
 
         // (a) A position was minted.
-        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         assertNotEq(tokenId, 0, "tokenIdOf should be nonzero after deployPool");
 
         // (b) The minted position holds ZERO terminal tokens (asks-only) and the full accumulated project-token
         // side — proving the mint really is single-sided, not just "some cash-out happened to round to zero".
         // The project-token side is the full accumulated amount but V4 rounding, which stays ledgered.
-        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), 0.5e18, 0);
+        _assertPlacedExactly({
+            projectId: PROJECT_ID,
+            projectTokenAddr: address(projectToken),
+            terminalTokenAddr: address(terminalToken),
+            projectIn: 0.5e18,
+            terminalIn: 0
+        });
         (,,,, uint256 amount0Locked, uint256 amount1Locked,) = positionManager._positions(tokenId);
         bool terminalIsToken0 = address(terminalToken) < address(projectToken);
         if (terminalIsToken0) {

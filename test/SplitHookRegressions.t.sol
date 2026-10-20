@@ -17,7 +17,8 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
 
         // Deploy a pool so we have a position to recycle
         _accumulateAndDeploy(PROJECT_ID, 100e18);
-        poolTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        // Record the deployed ask position so tests can seed fees on it.
+        poolTokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
         // Ensure PositionManager has tokens for the recycle
         projectToken.mint(address(positionManager), 50e18);
@@ -28,7 +29,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // Placeholder _getAmountForCurrency() Disables Fee Routing
+    // Fee routing during a recycle
     // ═══════════════════════════════════════════════════════════════════════
 
     /// @notice Fees collected during an `addLiquidity` recycle are routed via balance-delta tracking (same pattern
@@ -38,22 +39,27 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         // Set up collectable fees on the terminal token side
         uint256 feeAmount = 10e18;
         if (terminalTokenIsToken0) {
-            positionManager.setCollectableFees(poolTokenId, feeAmount, 0);
+            positionManager.setCollectableFees({tokenId: poolTokenId, amount0: feeAmount, amount1: 0});
         } else {
-            positionManager.setCollectableFees(poolTokenId, 0, feeAmount);
+            positionManager.setCollectableFees({tokenId: poolTokenId, amount0: 0, amount1: feeAmount});
         }
-        terminalToken.mint(address(positionManager), feeAmount);
+        // Back the collectable fees with real balance so the collect can transfer them.
+        terminalToken.mint({to: address(positionManager), amount: feeAmount});
 
         // Set up fee project terminal accounting context
-        terminal.setAccountingContext(
-            FEE_PROJECT_ID, address(terminalToken), uint32(uint160(address(terminalToken))), 18
-        );
+        terminal.setAccountingContext({
+            projectId: FEE_PROJECT_ID,
+            token: address(terminalToken),
+            currency: uint32(uint160(address(terminalToken))),
+            decimals: 18
+        });
 
+        // Snapshot the pay count so the assertion isolates payments made by the recycle.
         uint256 payCountBefore = terminal.payCallCount();
 
         // Accumulate enough for a recycle, then trigger it permissionlessly.
-        _accumulateTokens(PROJECT_ID, 1e18);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken));
+        _accumulateTokens({projectId: PROJECT_ID, amount: 1e18});
+        hook.addLiquidity({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
         // The fee project is paid exactly its cut of the collected terminal-token fees (principal is never cut).
         assertEq(terminal.payCallCount(), payCountBefore + 1, "Fees collected during the recycle should be routed");
@@ -66,22 +72,29 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         // Set up collectable fees on the terminal token side
         uint256 feeAmount = 100e18;
         if (terminalTokenIsToken0) {
-            positionManager.setCollectableFees(poolTokenId, feeAmount, 0);
+            positionManager.setCollectableFees({tokenId: poolTokenId, amount0: feeAmount, amount1: 0});
         } else {
-            positionManager.setCollectableFees(poolTokenId, 0, feeAmount);
+            positionManager.setCollectableFees({tokenId: poolTokenId, amount0: 0, amount1: feeAmount});
         }
-        terminalToken.mint(address(positionManager), feeAmount);
+        // Back the collectable fees with real balance so the collect can transfer them.
+        terminalToken.mint({to: address(positionManager), amount: feeAmount});
 
         // Set up fee project terminal
-        terminal.setAccountingContext(
-            FEE_PROJECT_ID, address(terminalToken), uint32(uint160(address(terminalToken))), 18
-        );
+        terminal.setAccountingContext({
+            projectId: FEE_PROJECT_ID,
+            token: address(terminalToken),
+            currency: uint32(uint160(address(terminalToken))),
+            decimals: 18
+        });
 
+        // Snapshot the claimable balance so the assertion isolates what the recycle adds.
         uint256 claimableBefore = hook.claimableFeeTokens(PROJECT_ID);
 
-        _accumulateTokens(PROJECT_ID, 1e18);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken));
+        // Accumulate enough for a recycle, then trigger it permissionlessly.
+        _accumulateTokens({projectId: PROJECT_ID, amount: 1e18});
+        hook.addLiquidity({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
+        // The fee project's tokens bought with the fee cut become claimable by the project.
         uint256 claimableAfter = hook.claimableFeeTokens(PROJECT_ID);
         assertGt(claimableAfter, claimableBefore, "claimableFeeTokens should increase after a recycle with fees");
     }
@@ -90,7 +103,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
     // Per-Project projectDeployed Flag Prevents Multi-Terminal-Token Pools
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice projectDeployed is now keyed by [projectId][terminalToken].
+    /// @notice projectDeployed is keyed by [projectId][terminalToken].
     ///         After deploying a pool for terminalToken, projectDeployed[projectId][terminalToken]
     ///         is true, but projectDeployed[projectId][otherToken] is false.
     function test_M2_projectDeployed_perTerminalToken() public {
@@ -128,6 +141,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         vm.startPrank(address(controller));
         projectToken.approve(address(hook), newAmount);
         JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, newAmount);
+        // Cap gas below the inline-automation floor so the split only records intake.
         hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
 
@@ -159,6 +173,7 @@ contract SplitHookRegressionsTest is LPSplitHookV4TestBase {
         vm.startPrank(address(controller));
         projectToken.approve(address(hook), amount);
         JBSplitHookContext memory context = _buildContext(freshProjectId, address(projectToken), amount, 1);
+        // Cap gas below the inline-automation floor so the split only records intake.
         hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
 

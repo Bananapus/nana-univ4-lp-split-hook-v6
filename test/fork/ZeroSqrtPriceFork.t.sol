@@ -157,6 +157,7 @@ contract ZeroSqrtPriceFork is ForkDeployHelper {
         });
         vm.startPrank(address(jbController));
         IERC20(tokenAddr).approve(address(hook), amount);
+        // Cap the gas so the split is only taken in and the hook skips its inline automation.
         hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
     }

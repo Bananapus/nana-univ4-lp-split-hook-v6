@@ -22,7 +22,7 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
 
         // Accumulate and deploy a pool for PROJECT_ID
         _accumulateAndDeploy(PROJECT_ID, 100e18);
-        poolTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        poolTokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
         // Determine token ordering for this pool
         terminalTokenIsToken0 = address(terminalToken) < address(projectToken);
@@ -71,7 +71,10 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
 
         vm.startPrank(address(controller));
         feeProjectToken.approve(address(hook), amount);
-        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(_buildContext(FEE_PROJECT_ID, address(feeProjectToken), amount, 1));
+        // Deliver with intake-only gas so the hook runs intake and skips inline automation.
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(
+            _buildContext({projectId: FEE_PROJECT_ID, token: address(feeProjectToken), amount: amount, groupId: 1})
+        );
         vm.stopPrank();
     }
 
@@ -86,7 +89,7 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
                 token: address(terminalToken), decimals: 18, currency: uint32(uint160(address(terminalToken)))
             })
         );
-        store.setSurplus(FEE_PROJECT_ID, DEFAULT_SURPLUS_PER_TOKEN);
+        store.setSurplus({projectId: FEE_PROJECT_ID, surplus: DEFAULT_SURPLUS_PER_TOKEN});
         store.setBalance(address(terminal), FEE_PROJECT_ID, address(terminalToken), 10e18);
         _addDirectoryTerminal(FEE_PROJECT_ID, address(terminal));
     }
@@ -117,19 +120,26 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
     /// is added to the project's balance in its primary terminal (raising its surplus); the bid-leg ledger is
     /// unchanged.
     function test_CollectFees_RoutesTerminalTokenFees() public {
+        // Give the position collectable terminal-token fees, funded on the PositionManager.
         uint256 feeAmount = 1000e18;
         _setTerminalTokenFees(feeAmount);
 
+        // Snapshot the terminal's call counts, the bid-leg ledger and the terminal's balance before routing.
         uint256 payCountBefore = terminal.payCallCount();
         uint256 addBalanceCountBefore = terminal.addToBalanceCallCount();
-        uint256 ledgerBefore = hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken));
+        uint256 ledgerBefore =
+            hook.accumulatedTerminalTokens({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         uint256 terminalBalanceBefore = terminalToken.balanceOf(address(terminal));
 
-        hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
+        // Collect the fees and route them.
+        hook.collectAndRouteLPFees({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
+        // One pay carries the fee project's cut and one addToBalance carries the rest.
         uint256 expectedCut = (feeAmount * FEE_PERCENT) / 10_000;
         assertEq(terminal.payCallCount(), payCountBefore + 1, "terminal.pay should have been called for the fee cut");
         assertEq(terminal.addToBalanceCallCount(), addBalanceCountBefore + 1, "the remainder is added to the balance");
+
+        // The addToBalance targets the originating project with exactly the remainder and no extras.
         assertEq(terminal.lastAddToBalanceProjectId(), PROJECT_ID, "added to the originating project");
         assertEq(terminal.lastAddToBalanceToken(), address(terminalToken), "in the terminal token");
         assertEq(terminal.lastAddToBalanceAmount(), feeAmount - expectedCut, "exactly the remainder");
@@ -137,17 +147,21 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
         assertFalse(terminal.lastAddToBalanceShouldReturnHeldFees(), "held fees are not returned");
         assertEq(bytes(terminal.lastAddToBalanceMemo()).length, 0, "empty memo");
         assertEq(terminal.lastAddToBalanceMetadata().length, 0, "empty metadata");
+
+        // Every fee token reaches the terminal, none stays in the bid-leg ledger, and no approval lingers.
         assertEq(
             terminalToken.balanceOf(address(terminal)) - terminalBalanceBefore,
             feeAmount,
             "the terminal received the cut and the remainder"
         );
         assertEq(
-            hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)),
+            hook.accumulatedTerminalTokens({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
             ledgerBefore,
             "the bid-leg ledger is unchanged"
         );
-        assertEq(terminalToken.allowance(address(hook), address(terminal)), 0, "no allowance left behind");
+        assertEq(
+            terminalToken.allowance({owner: address(hook), spender: address(terminal)}), 0, "no allowance left behind"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -158,20 +172,26 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
     ///         terminal), the whole amount is burned through the controller, lowering supply; the ask ledger is
     ///         unchanged.
     function test_CollectFees_BurnsProjectTokenFees() public {
+        // Give the position collectable project-token fees, funded on the PositionManager.
         uint256 projFeeAmount = 500e18;
         _setProjectTokenFees(projFeeAmount);
 
+        // Snapshot the burn count, the ask ledger, the supply and the hook's balance before routing.
         uint256 burnCountBefore = controller.burnCallCount();
         uint256 accumulatedBefore = hook.accumulatedProjectTokens(PROJECT_ID);
         uint256 supplyBefore = projectToken.totalSupply();
         uint256 hookBalanceBefore = projectToken.balanceOf(address(hook));
 
-        hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
+        // Collect the fees and route them.
+        hook.collectAndRouteLPFees({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
+        // One controller burn removes the whole fee from the hook's own balance.
         assertEq(controller.burnCallCount(), burnCountBefore + 1, "one burn");
         assertEq(controller.lastBurnHolder(), address(hook), "the hook burns its own tokens");
         assertEq(controller.lastBurnProjectId(), PROJECT_ID, "of the originating project");
         assertEq(controller.lastBurnAmount(), projFeeAmount, "the whole forgiven-cut fee");
+
+        // Supply falls by the fee, the collected tokens leave the hook, and the ask ledger is untouched.
         assertEq(supplyBefore - projectToken.totalSupply(), projFeeAmount, "supply fell by exactly the fee");
         assertEq(projectToken.balanceOf(address(hook)), hookBalanceBefore, "the collected fee left the hook");
         assertEq(hook.accumulatedProjectTokens(PROJECT_ID), accumulatedBefore, "the ask ledger is unchanged");
@@ -213,10 +233,10 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
     // 6. collectAndRouteLPFees reverts if pool exists but tokenId is 0
     // -----------------------------------------------------------------------
 
-    /// @notice collectAndRouteLPFees should revert when tokenIdOf is cleared.
+    /// @notice collectAndRouteLPFees should revert when askTokenIdOf is cleared.
     function test_CollectFees_RevertsIfNoTokenId() public {
-        // tokenIdOf is: mapping(uint256 => mapping(address => uint256)) at `SLOT_ASK_TOKEN_ID_OF` (see TestBaseV4 for
-        // the full hook storage layout).
+        // askTokenIdOf is: mapping(uint256 => mapping(address => uint256)) at `SLOT_ASK_TOKEN_ID_OF` (see TestBaseV4
+        // for the full hook storage layout).
         bytes32 outerSlot = keccak256(abi.encode(PROJECT_ID, SLOT_ASK_TOKEN_ID_OF));
         bytes32 slot = keccak256(abi.encode(address(terminalToken), outerSlot));
         vm.store(address(hook), slot, bytes32(0));
@@ -231,10 +251,12 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
 
     /// @notice Terminal token fees should be split: 38% paid to the fee project, 62% added to the project's balance.
     function test_RouteFees_SplitsBetweenFeeAndOriginal() public {
+        // Give the position collectable terminal-token fees, funded on the PositionManager.
         uint256 feeAmount = 1000e18;
         _setTerminalTokenFees(feeAmount);
 
-        hook.collectAndRouteLPFees(PROJECT_ID, address(terminalToken));
+        // Collect the fees and route them.
+        hook.collectAndRouteLPFees({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
         // FEE_PERCENT = 3800 => feeAmount = 1000e18 * 3800 / 10000 = 380e18
         uint256 expectedFee = (feeAmount * FEE_PERCENT) / 10_000;
@@ -247,7 +269,11 @@ contract FeeRoutingTest is LPSplitHookV4TestBase {
         // The remaining 62% is added to the project's balance; the bid-leg ledger stays empty.
         assertEq(terminal.lastAddToBalanceProjectId(), PROJECT_ID, "remainder added to the original project");
         assertEq(terminal.lastAddToBalanceAmount(), feeAmount - expectedFee, "remainder is 62% of total fees");
-        assertEq(hook.accumulatedTerminalTokens(PROJECT_ID, address(terminalToken)), 0, "nothing ledgered");
+        assertEq(
+            hook.accumulatedTerminalTokens({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            0,
+            "nothing ledgered"
+        );
     }
 
     // -----------------------------------------------------------------------

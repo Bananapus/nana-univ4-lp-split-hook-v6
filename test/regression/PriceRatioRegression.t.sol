@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.28;
 
-import {Test} from "forge-std/Test.sol";
 import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/IJBBuybackHookRegistry.sol";
-import {mulDiv, sqrt} from "@prb/math/src/Common.sol";
 
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
@@ -18,7 +16,6 @@ import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
-import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
 
 /// @notice Harness that exposes internal functions for ratio testing.
 contract PriceRatioHarness is JBUniswapV4LPSplitHook {
@@ -108,8 +105,8 @@ contract PriceRatioRegression is LPSplitHookV4TestBase {
     // Token ordering for zero-rate extreme prices
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice When issuance is zero, the extreme sqrtPrice depends on which token is token0.
-    ///         The old code hardcoded MAX_SQRT_PRICE-1 regardless.
+    /// @notice When issuance is zero, the extreme sqrtPrice depends on which token is token0, so a fixed
+    ///         MAX_SQRT_PRICE-1 for both orderings would be wrong.
     function test_H30_zeroIssuanceExtremePrice_tokenOrdering() public view {
         // In the default setup, terminalToken and projectToken have deterministic addresses.
         // Verify the tick bounds reflect the correct extreme for both orderings.

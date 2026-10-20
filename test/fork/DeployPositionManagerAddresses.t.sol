@@ -4,8 +4,8 @@ pragma solidity 0.8.28;
 import "forge-std/Test.sol";
 
 /// @notice Sanity test: each chain's PositionManager address declared in `Deploy.s.sol::_getPositionManager()`
-/// must have deployed bytecode on the live network. The pre-fix script hardcoded the mainnet PositionManager
-/// for Sepolia, Base Sepolia, and Arbitrum Sepolia, which does not exist on those testnets.
+/// must have deployed bytecode on the live network, so no chain (testnets included) points at another chain's
+/// PositionManager address.
 /// @dev Tests use `vm.try_createSelectFork` semantics via try/catch so missing RPC env vars do not fail CI.
 contract DeployPositionManagerAddressesForkTest is Test {
     address internal constant MAINNET_PM = 0xbD216513d74C8cf14cf4747E6AaA6420FF64ee9e;
@@ -24,6 +24,7 @@ contract DeployPositionManagerAddressesForkTest is Test {
             try vm.rpc(chainName, "eth_getCode", string.concat('["', vm.toString(pm), '","latest"]')) returns (
                 bytes memory code
             ) {
+                // Empty code at the address means the configured PositionManager is wrong for this chain.
                 assertGt(code.length, 0, string.concat("PositionManager has no code on ", chainName));
             } catch {
                 vm.skip(true);

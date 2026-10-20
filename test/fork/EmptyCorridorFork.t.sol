@@ -29,29 +29,39 @@ contract EmptyCorridorFork is TwoPositionForkBase {
     using StateLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;
 
+    /// @notice An unprivileged account that triggers the hook's permissionless entry points.
     address randomCaller = address(0xD00D);
+
+    /// @notice A trader that buys from and sells into the pool.
     address buyer = address(0xB0B);
 
     /// @notice With cash-out value above issuance from the start, a permissionless `deployPool` reverts and keeps the
     /// inventory ledgered.
     function test_fork_deployPool_emptyCorridor_reverts() public {
+        // Launch a project with an ERC-20, some surplus and a ledgered inventory in the hook.
         uint256 pid = _launchProject({reservedPercent: 0, weight: 1_000_000e18});
         vm.prank(multisig);
-        IJBToken pToken = jbController.deployERC20For(pid, "Inverted", "INV", bytes32(0));
-        _pay(pid, 1 ether);
-        _accumulateTokens(pid, address(pToken), 1000e18);
-        _donate(pid, 100 ether);
+        IJBToken pToken =
+            jbController.deployERC20For({projectId: pid, name: "Inverted", symbol: "INV", salt: bytes32(0)});
+        _pay({pid: pid, amount: 1 ether});
+        _accumulateTokens({pid: pid, pToken: address(pToken), amount: 1000e18});
 
-        (int24 lo, int24 hi) = _corridorOf(pid, address(pToken));
+        // A large donation lifts the cash-out value above the issuance price.
+        _donate({pid: pid, amount: 100 ether});
+
+        // The inverted economics collapse the corridor to a single tick.
+        (int24 lo, int24 hi) = _corridorOf({pid: pid, pToken: address(pToken)});
         assertEq(lo, hi, "the corridor is empty");
 
+        // A permissionless deploy refuses to seed a pool with no valid price.
         vm.expectRevert(
-            abi.encodeWithSelector(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_EmptyCorridor.selector, pid, NATIVE)
+            abi.encodeWithSelector(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_EmptyCorridor.selector, pid, _NATIVE)
         );
         vm.prank(randomCaller);
         hook.deployPool(pid);
 
-        assertFalse(hook.isPoolDeployed(pid, NATIVE), "no pool was deployed");
+        // Nothing was deployed and the inventory stays both ledgered and held.
+        assertFalse(hook.isPoolDeployed({projectId: pid, terminalToken: _NATIVE}), "no pool was deployed");
         assertEq(hook.accumulatedProjectTokens(pid), 1000e18, "the inventory stays ledgered");
         assertEq(IERC20(address(pToken)).balanceOf(address(hook)), 1000e18, "and in the hook's balance");
     }
@@ -63,33 +73,41 @@ contract EmptyCorridorFork is TwoPositionForkBase {
         // ── Normal economics: deploy an ask, let a buyer fill part of it, recycle into an ask and a bid.
         uint256 pid = _launchProject({reservedPercent: 5000, weight: 1_000_000e18});
         vm.prank(multisig);
-        IJBToken pToken = jbController.deployERC20For(pid, "Revnet Token", "RVNT", bytes32(0));
-        _pay(pid, 10 ether);
-        _accumulateTokens(pid, address(pToken), 5_000_000e18);
+        IJBToken pToken =
+            jbController.deployERC20For({projectId: pid, name: "Revnet Token", symbol: "RVNT", salt: bytes32(0)});
+        _pay({pid: pid, amount: 10 ether});
+        _accumulateTokens({pid: pid, pToken: address(pToken), amount: 5_000_000e18});
 
+        // Initialize the pool off-grid at the middle of a wide corridor so neither position sits on a bound.
         PoolKey memory key = _keyOf(address(pToken));
         {
-            (int24 lo, int24 hi) = _corridorOf(pid, address(pToken));
+            (int24 lo, int24 hi) = _corridorOf({pid: pid, pToken: address(pToken)});
             assertGt(hi - lo, 20 * hook.TICK_SPACING(), "a wide normal corridor");
-            V4_POSITION_MANAGER.initializePool(key, TickMath.getSqrtPriceAtTick(_offGrid(lo + (hi - lo) / 2)));
+            _V4_POSITION_MANAGER.initializePool(key, TickMath.getSqrtPriceAtTick(_offGrid(lo + (hi - lo) / 2)));
         }
-        _mockOracleTwapEqualsSpot(hook.oracleHook(), V4_POOL_MANAGER, key);
+
+        // Deploy the first ask at a TWAP equal to the spot so the spot-vs-TWAP guard passes.
+        _mockOracleTwapEqualsSpot({oracle: hook.oracleHook(), pm: _V4_POOL_MANAGER, key: key});
         vm.prank(randomCaller);
         hook.deployPool(pid);
 
-        BuySwapHelper swapHelper = new BuySwapHelper(V4_POOL_MANAGER);
+        // A buyer fills part of the ask, giving the hook terminal tokens for a bid.
+        BuySwapHelper swapHelper = new BuySwapHelper(_V4_POOL_MANAGER);
         vm.deal(buyer, 100 ether);
-        _buy(swapHelper, key, 1 ether);
-        _mockOracleTwapEqualsSpot(hook.oracleHook(), V4_POOL_MANAGER, key);
+        _buy({swapHelper: swapHelper, key: key, amount: 1 ether});
+
+        // Recycle into a live ask and a live bid.
+        _mockOracleTwapEqualsSpot({oracle: hook.oracleHook(), pm: _V4_POOL_MANAGER, key: key});
         vm.prank(randomCaller);
-        hook.addLiquidity(pid, NATIVE);
-        uint256 askId = hook.askTokenIdOf(pid, NATIVE);
-        uint256 bidId = hook.bidTokenIdOf(pid, NATIVE);
+        hook.addLiquidity({projectId: pid, terminalToken: _NATIVE});
+        uint256 askId = hook.askTokenIdOf({projectId: pid, terminalToken: _NATIVE});
+        uint256 bidId = hook.bidTokenIdOf({projectId: pid, terminalToken: _NATIVE});
         assertTrue(askId != 0 && bidId != 0, "both positions are live");
 
         // Trade into both positions so each carries fees to route at retirement.
-        _buy(swapHelper, key, 0.2 ether);
+        _buy({swapHelper: swapHelper, key: key, amount: 0.2 ether});
         {
+            // Sell half the buyer's tokens back so the bid earns project-token fees.
             uint256 sellAmount = IERC20(address(pToken)).balanceOf(buyer) / 2;
             vm.startPrank(buyer);
             IERC20(address(pToken)).approve(address(swapHelper), sellAmount);
@@ -99,9 +117,10 @@ contract EmptyCorridorFork is TwoPositionForkBase {
         }
 
         // ── Invert: a donation lifts the cash-out value above the issuance price.
-        _donate(pid, 100 ether);
+        _donate({pid: pid, amount: 100 ether});
         {
-            (int24 lo, int24 hi) = _corridorOf(pid, address(pToken));
+            // The corridor collapses to a single tick.
+            (int24 lo, int24 hi) = _corridorOf({pid: pid, pToken: address(pToken)});
             assertEq(lo, hi, "the donation empties the corridor");
         }
 
@@ -109,75 +128,102 @@ contract EmptyCorridorFork is TwoPositionForkBase {
         // the project instead: the ETH fees after the fee-project cut are added to its balance, and the project-token
         // fees (no cut: the fee project has no terminal for this token) are burned.
         uint256 expectedProject = hook.accumulatedProjectTokens(pid);
-        uint256 expectedTerminal = hook.accumulatedTerminalTokens(pid, NATIVE);
+        uint256 expectedTerminal = hook.accumulatedTerminalTokens({projectId: pid, terminalToken: _NATIVE});
         uint256 routedFees0;
         uint256 routedFees1;
         uint256 ethRemainder;
         uint256[2] memory ids = [askId, bidId];
         for (uint256 i; i < 2; i++) {
-            (uint256 principal0, uint256 principal1) = _principalOf(ids[i], key);
-            (uint256 fee0, uint256 fee1) = _feesOf(ids[i], key);
+            // Read what burning this position returns and what fees it carries at the live spot.
+            (uint256 principal0, uint256 principal1) = _principalOf({tokenId: ids[i], key: key});
+            (uint256 fee0, uint256 fee1) = _feesOf({tokenId: ids[i], key: key});
+
+            // Fees are routed, principal is ledgered.
             routedFees0 += fee0;
             routedFees1 += fee1;
             expectedTerminal += principal0;
             expectedProject += principal1;
+
+            // The project receives the ETH fees left after the fee-project cut.
             ethRemainder += fee0 - (fee0 * hook.feePercent()) / hook.BPS();
         }
         assertGt(routedFees0, 0, "the ask earned ETH fees");
         assertGt(routedFees1, 0, "the bid earned project-token fees");
-        uint256 projectBalanceBefore = jbTerminalStore.balanceOf(address(jbMultiTerminal), pid, NATIVE);
+
+        // Snapshot the project's terminal balance and the token supply to measure the fee routing.
+        uint256 projectBalanceBefore =
+            jbTerminalStore.balanceOf({terminal: address(jbMultiTerminal), projectId: pid, token: _NATIVE});
         uint256 supplyBefore = IERC20(address(pToken)).totalSupply();
 
-        _mockOracleTwapEqualsSpot(hook.oracleHook(), V4_POOL_MANAGER, key);
+        // A permissionless recycle into the empty corridor retires both positions.
+        _mockOracleTwapEqualsSpot({oracle: hook.oracleHook(), pm: _V4_POOL_MANAGER, key: key});
         vm.prank(randomCaller);
-        hook.addLiquidity(pid, NATIVE);
+        hook.addLiquidity({projectId: pid, terminalToken: _NATIVE});
 
-        assertEq(V4_POSITION_MANAGER.getPositionLiquidity(askId), 0, "the ask was retired");
-        assertEq(V4_POSITION_MANAGER.getPositionLiquidity(bidId), 0, "the bid was retired");
-        assertEq(hook.askTokenIdOf(pid, NATIVE), 0, "no live ask");
-        assertEq(hook.bidTokenIdOf(pid, NATIVE), 0, "no live bid");
-        assertEq(V4_POOL_MANAGER.getLiquidity(key.toId()), 0, "the pool holds no liquidity at all");
+        // Both positions are burned and cleared, and the pool holds nothing.
+        assertEq(_V4_POSITION_MANAGER.getPositionLiquidity(askId), 0, "the ask was retired");
+        assertEq(_V4_POSITION_MANAGER.getPositionLiquidity(bidId), 0, "the bid was retired");
+        assertEq(hook.askTokenIdOf({projectId: pid, terminalToken: _NATIVE}), 0, "no live ask");
+        assertEq(hook.bidTokenIdOf({projectId: pid, terminalToken: _NATIVE}), 0, "no live bid");
+        assertEq(_V4_POOL_MANAGER.getLiquidity(key.toId()), 0, "the pool holds no liquidity at all");
+
+        // Every recovered principal token is ledgered exactly.
         assertEq(hook.accumulatedProjectTokens(pid), expectedProject, "project ledger: principal");
-        assertEq(hook.accumulatedTerminalTokens(pid, NATIVE), expectedTerminal, "terminal ledger: principal");
         assertEq(
-            jbTerminalStore.balanceOf(address(jbMultiTerminal), pid, NATIVE) - projectBalanceBefore,
+            hook.accumulatedTerminalTokens({projectId: pid, terminalToken: _NATIVE}),
+            expectedTerminal,
+            "terminal ledger: principal"
+        );
+
+        // ETH fees after the cut reach the project's balance and project-token fees are burned.
+        assertEq(
+            jbTerminalStore.balanceOf({terminal: address(jbMultiTerminal), projectId: pid, token: _NATIVE})
+                - projectBalanceBefore,
             ethRemainder,
             "the ETH fee remainders were added to the project's balance"
         );
         assertEq(
             supplyBefore - IERC20(address(pToken)).totalSupply(), routedFees1, "the project-token fees were burned"
         );
+
+        // The ledgers match what the hook actually holds.
         assertEq(IERC20(address(pToken)).balanceOf(address(hook)), expectedProject, "project tokens all held");
         assertEq(address(hook).balance, expectedTerminal, "ETH all held");
 
         // With nothing left to retire, another recycle reverts rather than quoting into the empty corridor.
-        _mockOracleTwapEqualsSpot(hook.oracleHook(), V4_POOL_MANAGER, key);
+        _mockOracleTwapEqualsSpot({oracle: hook.oracleHook(), pm: _V4_POOL_MANAGER, key: key});
         vm.expectRevert(
-            abi.encodeWithSelector(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_EmptyCorridor.selector, pid, NATIVE)
+            abi.encodeWithSelector(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_EmptyCorridor.selector, pid, _NATIVE)
         );
         vm.prank(randomCaller);
-        hook.addLiquidity(pid, NATIVE);
+        hook.addLiquidity({projectId: pid, terminalToken: _NATIVE});
 
-        // ── Codex economics check: a buyer sweeping the price to the cash-out value gets no fill from the hook, so
-        // no hook quote sells project tokens below what they cash out for.
+        // ── Economics check: a buyer sweeping the price to the cash-out value gets no fill from the hook, so no
+        // hook
+        // quote sells project tokens below what they cash out for.
         {
-            uint160 cashOutSqrtPrice = _cashOutSqrtPrice(pid, address(pToken));
-            (uint160 spot,,,) = V4_POOL_MANAGER.getSlot0(key.toId());
+            // ETH is currency0, so buying project tokens lowers the price toward the cash-out value.
+            uint160 cashOutSqrtPrice = _cashOutSqrtPrice({pid: pid, pToken: address(pToken)});
+            (uint160 spot,,,) = _V4_POOL_MANAGER.getSlot0(key.toId());
             assertLt(cashOutSqrtPrice, spot, "buying toward the cash-out value moves the price down");
+
+            // Snapshot the buyer's balances, then sweep the price all the way to the cash-out value.
             uint256 tokensBefore = IERC20(address(pToken)).balanceOf(buyer);
             uint256 ethBefore = buyer.balance;
             vm.prank(buyer);
             swapHelper.swapTo{value: 10 ether}({
                 key: key, zeroForOne: true, amountSpecified: -int256(10 ether), sqrtPriceLimitX96: cashOutSqrtPrice
             });
+
+            // The sweep fills nothing: no tokens out, no ETH in, and the hook's inventory is untouched.
             assertEq(IERC20(address(pToken)).balanceOf(buyer), tokensBefore, "no project tokens below cash-out value");
             assertEq(buyer.balance, ethBefore, "the buyer paid nothing");
             assertEq(hook.accumulatedProjectTokens(pid), expectedProject, "the hook's inventory is untouched");
         }
 
         // ── Normal again: payments at the gross price pull the cash-out value back below the net issuance price.
-        _pay(pid, 300 ether);
-        (int24 newLo, int24 newHi) = _corridorOf(pid, address(pToken));
+        _pay({pid: pid, amount: 300 ether});
+        (int24 newLo, int24 newHi) = _corridorOf({pid: pid, pToken: address(pToken)});
         assertGt(newHi - newLo, 4 * hook.TICK_SPACING(), "the corridor reopened");
 
         // The empty pool lets anyone move its spot for free; the TWAP guard is what protects the recycle. Put the spot
@@ -189,22 +235,31 @@ contract EmptyCorridorFork is TwoPositionForkBase {
             amountSpecified: -int256(1e30),
             sqrtPriceLimitX96: TickMath.getSqrtPriceAtTick(_offGrid(newLo + (newHi - newLo) / 2))
         });
-        _mockOracleTwapEqualsSpot(hook.oracleHook(), V4_POOL_MANAGER, key);
+        _mockOracleTwapEqualsSpot({oracle: hook.oracleHook(), pm: _V4_POOL_MANAGER, key: key});
         vm.prank(randomCaller);
-        hook.addLiquidity(pid, NATIVE);
+        hook.addLiquidity({projectId: pid, terminalToken: _NATIVE});
 
-        askId = hook.askTokenIdOf(pid, NATIVE);
-        bidId = hook.bidTokenIdOf(pid, NATIVE);
+        // Both positions are redeployed.
+        askId = hook.askTokenIdOf({projectId: pid, terminalToken: _NATIVE});
+        bidId = hook.bidTokenIdOf({projectId: pid, terminalToken: _NATIVE});
         assertTrue(askId != 0 && bidId != 0, "both positions are redeployed");
-        (uint160 sqrtSpot,,,) = V4_POOL_MANAGER.getSlot0(key.toId());
+
+        // Each rests on its side of the spot, inside the reopened corridor.
+        (uint160 sqrtSpot,,,) = _V4_POOL_MANAGER.getSlot0(key.toId());
         (int24 askLower, int24 askUpper) = _ticksOf(askId);
         (int24 bidLower, int24 bidUpper) = _ticksOf(bidId);
         assertGe(askLower, newLo, "ask never sells above the issuance ceiling's tick");
         assertLe(TickMath.getSqrtPriceAtTick(askUpper), sqrtSpot, "ask rests below the spot");
         assertGe(TickMath.getSqrtPriceAtTick(bidLower), sqrtSpot, "bid rests above the spot");
         assertLe(bidUpper, newHi, "bid never buys below the cash-out floor's tick");
+
+        // Nearly all ledgered inventory went back into the pool.
         assertLt(hook.accumulatedProjectTokens(pid), 1e12, "project inventory redeployed");
-        assertLt(hook.accumulatedTerminalTokens(pid, NATIVE), 1e9, "terminal inventory redeployed");
+        assertLt(
+            hook.accumulatedTerminalTokens({projectId: pid, terminalToken: _NATIVE}),
+            1e9,
+            "terminal inventory redeployed"
+        );
     }
 
     /// @notice A cash-out value 0.001% above the issuance price shares its tick, so only the exact prices show the
@@ -215,13 +270,15 @@ contract EmptyCorridorFork is TwoPositionForkBase {
         // Both sit inside tick 135,930 (project tokens per ETH).
         uint256 pid = _launchProject({reservedPercent: 0, weight: 800_000e18});
         vm.prank(multisig);
-        IJBToken pToken = jbController.deployERC20For(pid, "SubTick", "SUB", bytes32(0));
-        _pay(pid, 1 ether);
-        _accumulateTokens(pid, address(pToken), 800e18);
-        _donate(pid, 0.001_01 ether);
+        IJBToken pToken =
+            jbController.deployERC20For({projectId: pid, name: "SubTick", symbol: "SUB", salt: bytes32(0)});
+        _pay({pid: pid, amount: 1 ether});
+        _accumulateTokens({pid: pid, pToken: address(pToken), amount: 800e18});
+        _donate({pid: pid, amount: 0.001_01 ether});
 
-        uint160 cashOutSqrtPrice = _cashOutSqrtPrice(pid, address(pToken));
-        uint160 issuanceSqrtPrice = _issuanceSqrtPrice(pid, address(pToken));
+        // Both exact prices fall in one tick, so only the unaligned sqrt prices show the inversion.
+        uint160 cashOutSqrtPrice = _cashOutSqrtPrice({pid: pid, pToken: address(pToken)});
+        uint160 issuanceSqrtPrice = _issuanceSqrtPrice({pid: pid, pToken: address(pToken)});
         assertEq(
             TickMath.getTickAtSqrtPrice(cashOutSqrtPrice),
             TickMath.getTickAtSqrtPrice(issuanceSqrtPrice),
@@ -229,43 +286,59 @@ contract EmptyCorridorFork is TwoPositionForkBase {
         );
         // ETH is currency0, so the pool price is project tokens per ETH: a higher cash-out value is a lower price.
         assertLt(cashOutSqrtPrice, issuanceSqrtPrice, "precondition: the cash-out value is above the issuance price");
-        (int24 lo, int24 hi) = _corridorOf(pid, address(pToken));
+
+        // The hook's corridor math detects the inversion and returns an empty corridor.
+        (int24 lo, int24 hi) = _corridorOf({pid: pid, pToken: address(pToken)});
         assertEq(lo, 0, "the corridor is empty: lower");
         assertEq(hi, 0, "the corridor is empty: upper");
 
+        // A permissionless deploy reverts before seeding the pool.
         vm.expectRevert(
-            abi.encodeWithSelector(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_EmptyCorridor.selector, pid, NATIVE)
+            abi.encodeWithSelector(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_EmptyCorridor.selector, pid, _NATIVE)
         );
         vm.prank(randomCaller);
         hook.deployPool(pid);
 
-        (uint160 spot,,,) = V4_POOL_MANAGER.getSlot0(_keyOf(address(pToken)).toId());
+        // The pool stays uninitialized and the inventory stays ledgered.
+        (uint160 spot,,,) = _V4_POOL_MANAGER.getSlot0(_keyOf(address(pToken)).toId());
         assertEq(spot, 0, "the pool was not initialized");
-        assertFalse(hook.isPoolDeployed(pid, NATIVE), "no pool was deployed");
+        assertFalse(hook.isPoolDeployed({projectId: pid, terminalToken: _NATIVE}), "no pool was deployed");
         assertEq(hook.accumulatedProjectTokens(pid), 800e18, "the inventory stays ledgered");
     }
 
     /// @notice A buyer swaps exact `amount` ETH in for project tokens through the pool.
+    /// @param swapHelper The helper that executes the swap against the PoolManager.
+    /// @param key The pool to swap in.
+    /// @param amount The exact ETH amount to swap in.
     function _buy(BuySwapHelper swapHelper, PoolKey memory key, uint256 amount) internal {
+        // An exact-input swap of ETH (currency0) for project tokens, sent by the buyer.
         vm.prank(buyer);
         // forge-lint: disable-next-line(unsafe-typecast)
         swapHelper.swap{value: amount}({key: key, zeroForOne: true, amountSpecified: -int256(amount)});
     }
 
+    /// @notice Donate `amount` ETH to a project's balance, raising its cash-out value without minting tokens.
+    /// @param pid The ID of the project to donate to.
+    /// @param amount The ETH amount to donate.
     function _donate(uint256 pid, uint256 amount) internal {
+        // `addToBalanceOf` grows the surplus while the supply stays fixed.
         jbMultiTerminal.addToBalanceOf{value: amount}({
-            projectId: pid, token: NATIVE, amount: amount, shouldReturnHeldFees: false, memo: "", metadata: ""
+            projectId: pid, token: _NATIVE, amount: amount, shouldReturnHeldFees: false, memo: "", metadata: ""
         });
     }
 
     /// @notice The raw (unaligned) cash-out price as a sqrt price, from the hook's own linked math.
-    function _cashOutSqrtPrice(uint256 pid, address pToken) internal view returns (uint160) {
+    /// @param pid The ID of the project.
+    /// @param pToken The project's ERC-20.
+    /// @return sqrtPriceX96 The cash-out price as a Q64.96 sqrt price.
+    function _cashOutSqrtPrice(uint256 pid, address pToken) internal view returns (uint160 sqrtPriceX96) {
+        // The math reads the project's current ruleset, as the hook does.
         (JBRuleset memory ruleset,) = jbController.currentRulesetOf(pid);
         return JBUniswapV4LPSplitHookMath.getCashOutRateSqrtPriceX96({
             directory: jbDirectory,
             suckerRegistry: IJBSuckerRegistry(address(0)),
             projectId: pid,
-            terminalToken: NATIVE,
+            terminalToken: _NATIVE,
             projectToken: pToken,
             controller: address(jbController),
             ruleset: ruleset
@@ -273,12 +346,16 @@ contract EmptyCorridorFork is TwoPositionForkBase {
     }
 
     /// @notice The raw (unaligned) issuance price as a sqrt price, from the hook's own linked math.
-    function _issuanceSqrtPrice(uint256 pid, address pToken) internal view returns (uint160) {
+    /// @param pid The ID of the project.
+    /// @param pToken The project's ERC-20.
+    /// @return sqrtPriceX96 The issuance price as a Q64.96 sqrt price.
+    function _issuanceSqrtPrice(uint256 pid, address pToken) internal view returns (uint160 sqrtPriceX96) {
+        // The math reads the project's current ruleset, as the hook does.
         (JBRuleset memory ruleset,) = jbController.currentRulesetOf(pid);
         return JBUniswapV4LPSplitHookMath.getIssuanceRateSqrtPriceX96({
             directory: jbDirectory,
             projectId: pid,
-            terminalToken: NATIVE,
+            terminalToken: _NATIVE,
             projectToken: pToken,
             controller: address(jbController),
             ruleset: ruleset

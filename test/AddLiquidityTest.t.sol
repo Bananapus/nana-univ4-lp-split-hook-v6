@@ -47,6 +47,16 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         _accumulateTokens(PROJECT_ID, extra);
     }
 
+    /// @notice The project-token principal the mock records for a position.
+    /// @param tokenId The position to read (an empty slot reads as zero).
+    /// @return projectSide The principal held in the project token.
+    function _projectSide(uint256 tokenId) internal view returns (uint256 projectSide) {
+        // Read the mock's recorded token0/token1 principal for the position.
+        (,,,, uint256 amount0, uint256 amount1,) = positionManager._positions(tokenId);
+        // Pick the side that holds the project token, by the pool's currency order.
+        return address(projectToken) < address(terminalToken) ? amount0 : amount1;
+    }
+
     // ─── Grow path: consolidate (burn + re-mint), never funding cash-out
     // ──────────────────────────────
 
@@ -56,7 +66,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
     function test_AddLiquidity_Consolidates_BurnsAndReMints_NoCashOut() public {
         _deployAndAccumulateMore(40e18);
 
-        uint256 activeTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 activeTokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         uint256 mintsBefore = positionManager.mintCallCount();
         uint256 positionBurnsBefore = positionManager.burnCallCount();
         uint256 tokenBurnsBefore = controller.burnCallCount();
@@ -69,7 +79,9 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         assertEq(positionManager.burnCallCount(), positionBurnsBefore + 1, "the live position must be burned");
         assertEq(positionManager.mintCallCount(), mintsBefore + 1, "a single fresh position must be minted");
         assertNotEq(
-            hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), activeTokenId, "the tracked position id must change"
+            hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            activeTokenId,
+            "the tracked position id must change"
         );
         // The hook never burns project tokens and never funds the add via a cash-out.
         assertEq(controller.burnCallCount(), tokenBurnsBefore, "addLiquidity never burns project tokens");
@@ -108,7 +120,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
     function test_AddLiquidity_RerangesByBurningAndReminting() public {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
 
-        uint256 oldTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 oldTokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
         // Drop the issuance weight ~10% so the issuance-ceiling tick drifts ~1000 ticks (> the 400-tick re-range
         // threshold) while the cash-out floor (surplus-based) stays put and the spot price stays inside the new band.
@@ -131,7 +143,7 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         );
         assertEq(positionManager.mintCallCount(), mintsBefore + 1, "a single fresh position should be minted");
         assertEq(controller.burnCallCount(), tokenBurnsBefore, "re-range never burns project tokens");
-        uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 newTokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         assertTrue(newTokenId != oldTokenId, "active position id should change on re-range");
 
         // Fees are collected from the single (new) position and routed.
@@ -215,11 +227,13 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
     /// holds exactly what it records, and nothing reaches the caller or anyone else.
     function testFuzz_AddLiquidity_NoValueLeak(uint256 extra) public {
         extra = bound(extra, 1e15, 1_000_000e18);
-        _accumulateAndDeploy(PROJECT_ID, 100e18);
+        _accumulateAndDeploy({projectId: PROJECT_ID, amount: 100e18});
+        // Align the fixed oracle's TWAP to spot so the recycle's deviation guard passes.
         oracle.setTwapTick(_spotTick());
-        _accumulateTokens(PROJECT_ID, extra);
+        _accumulateTokens({projectId: PROJECT_ID, amount: extra});
 
-        uint256 oldAsk = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        // The deployed principal plus the new accumulation is every project token in play.
+        uint256 oldAsk = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         assertEq(
             _projectSide(oldAsk) + hook.accumulatedProjectTokens(PROJECT_ID),
             100e18 + extra,
@@ -228,13 +242,15 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         // The burn returns the old ask's principal at the spot (V4 rounds it down; the rounding stays in the pool).
         (uint256 recovered0, uint256 recovered1) = _principalAtSpot(oldAsk);
         uint256 expectedProject = recovered0 + recovered1 + hook.accumulatedProjectTokens(PROJECT_ID);
+        // Snapshot supply so the final check proves no project token left the hook and the PositionManager.
         uint256 supply = projectToken.totalSupply();
 
         vm.prank(owner);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken));
+        hook.addLiquidity({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
-        uint256 newAsk = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
-        uint256 newBid = hook.bidTokenIdOf(PROJECT_ID, address(terminalToken));
+        // The recycle burns the old ask and re-mints; every project token is in a position or the ledger.
+        uint256 newAsk = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
+        uint256 newBid = hook.bidTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         assertTrue(newAsk != 0 && newAsk != oldAsk, "the ask is recycled");
         assertEq(positionManager.getPositionLiquidity(oldAsk), 0, "the old ask is burned");
         assertEq(
@@ -257,29 +273,25 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
             supply,
             "no project token reaches the caller or anyone else"
         );
+        // The caller gains nothing and no project token is burned.
         assertEq(terminalToken.balanceOf(owner), 0, "caller gains no terminal tokens");
         assertEq(controller.burnCallCount(), 0, "no burns across the lifecycle");
-    }
-
-    function _projectSide(uint256 tokenId) internal view returns (uint256) {
-        (,,,, uint256 amount0, uint256 amount1,) = positionManager._positions(tokenId);
-        return address(projectToken) < address(terminalToken) ? amount0 : amount1;
     }
 
     // ─── Access control
     // ──────────────────────────────────────────────────
 
     /// @notice `addLiquidity` is fully permissionless: a random caller (no owner permission, no weight decay) can
-    /// extend the pool. The old owner gate is gone.
+    /// extend the pool.
     function test_AddLiquidity_Permissionless_AnyCallerCanExtend() public {
         _deployAndAccumulateMore(40e18);
 
-        uint256 firstId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 firstId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         vm.prank(makeAddr("randomUser"));
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
         assertNotEq(
-            hook.askTokenIdOf(PROJECT_ID, address(terminalToken)),
+            hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
             firstId,
             "a permissionless caller consolidates the add"
         );
@@ -296,18 +308,24 @@ contract AddLiquidityTest is LPSplitHookV4TestBase {
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
     }
 
+    /// @notice With nothing new accumulated, `addLiquidity` still recycles: it burns the live ask and re-mints it from
+    /// the recovered principal, leaving only V4 rounding in the ledger.
     function test_AddLiquidity_RecyclesWithNothingAccumulated() public {
-        _accumulateAndDeploy(PROJECT_ID, 100e18); // deploy consumes the accumulation but V4 rounding
+        // The deploy places the accumulation, leaving only V4 rounding ledgered.
+        _accumulateAndDeploy({projectId: PROJECT_ID, amount: 100e18});
+        // Align the fixed oracle's TWAP to spot so the recycle's deviation guard passes.
         oracle.setTwapTick(_spotTick());
-        uint256 oldAskId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        // The unfilled ask holds only project tokens, so both principal sides sum to the recovered project amount.
+        uint256 oldAskId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         (uint256 recovered0, uint256 recovered1) = _principalAtSpot(oldAskId);
         uint256 projectIn = recovered0 + recovered1 + hook.accumulatedProjectTokens(PROJECT_ID);
 
         // With nothing new accumulated, anyone can still recycle: the live ask is burned and re-minted in full.
         vm.prank(address(0xCAFE));
-        hook.addLiquidity(PROJECT_ID, address(terminalToken));
+        hook.addLiquidity({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
-        uint256 newAskId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        // A fresh ask replaces the burned one and holds the recovered principal.
+        uint256 newAskId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         assertNotEq(newAskId, oldAskId, "the ask is re-minted");
         assertEq(positionManager.getPositionLiquidity(oldAskId), 0, "the old ask is burned");
         assertGt(positionManager.getPositionLiquidity(newAskId), 0, "the new ask holds the recovered principal");

@@ -90,6 +90,7 @@ contract UntrustedTokenFork is ForkDeployHelper {
         address controller = address(jbDirectory.controllerOf(pid));
         vm.startPrank(controller);
         IERC20(address(jbTokens.tokenOf(pid))).approve(address(hook), 100_000e18);
+        // Cap the gas so the split is only taken in and the hook skips its inline automation.
         hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
         assertEq(hook.accumulatedProjectTokens(pid), 100_000e18, "Should accumulate using canonical token");

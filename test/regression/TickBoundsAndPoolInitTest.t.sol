@@ -123,9 +123,13 @@ contract RegressionFixM4Test is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
-        // Verify deployment succeeded.
+        // Verify deployment succeeded and minted the ask position.
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "project should have a deployed pool");
-        assertGt(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "LP position should be created");
+        assertGt(
+            hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            0,
+            "LP position should be created"
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -179,8 +183,13 @@ contract RegressionFixM4Test is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
+        // The deploy records the pool and mints the ask position.
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "project should have a deployed pool");
-        assertGt(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "LP position should be created");
+        assertGt(
+            hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            0,
+            "LP position should be created"
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -279,13 +288,16 @@ contract RegressionFixL6Test is LPSplitHookV4TestBase {
     /// rounded inward to -407,400) but still inside the usable range, and a cash-out value of 900 sits far below it
     /// (tick -68,0xx aligned down to -68,200): the corridor is wide and no clamp binds.
     function test_L6_ExtremeIssuancePrice_ClampedToValidRange() public {
-        store.setSurplus(PROJECT_ID, 900e18);
-        controller.setWeight(PROJECT_ID, 1);
-        controller.setReservedPercent(PROJECT_ID, 0);
+        // A high cash-out value and a 1 wei weight with no reserved tokens push the two bounds far apart.
+        store.setSurplus({projectId: PROJECT_ID, surplus: 900e18});
+        controller.setWeight({projectId: PROJECT_ID, weight: 1});
+        controller.setReservedPercent({projectId: PROJECT_ID, reservedPercent: 0});
         assertTrue(address(terminalToken) < address(projectToken), "precondition: the project is token1");
 
-        (int24 tickLower, int24 tickUpper) =
-            testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
+        // Both bounds land inside the usable range at their inward-rounded ticks.
+        (int24 tickLower, int24 tickUpper) = testableHook.exposed_calculateTickBounds({
+            projectId: PROJECT_ID, terminalToken: address(terminalToken), projectToken: address(projectToken)
+        });
 
         assertEq(tickLower, -407_400, "tickLower");
         assertEq(tickUpper, -68_200, "tickUpper");
@@ -297,19 +309,25 @@ contract RegressionFixL6Test is LPSplitHookV4TestBase {
     /// it is MIN_SQRT_PRICE (tick -887,272), whose inward rounding lands exactly on the usable minimum -887,200. The
     /// cash-out floor (0.0005 per token) bounds the other side.
     function test_L6_SaturatedIssuanceEndpoint_ClampsToUsableRange() public {
-        controller.setWeight(PROJECT_ID, 0);
-        controller.setReservedPercent(PROJECT_ID, 0);
+        // A zero weight with no reserved tokens saturates the issuance price.
+        controller.setWeight({projectId: PROJECT_ID, weight: 0});
+        controller.setReservedPercent({projectId: PROJECT_ID, reservedPercent: 0});
+        // An address just below the terminal token makes the project token0.
         address lowProjectToken = address(uint160(address(terminalToken)) - 1);
         assertTrue(address(terminalToken) < address(projectToken), "precondition: the project is token1");
 
-        (int24 tickLower, int24 tickUpper) =
-            testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), lowProjectToken);
+        // Project as token0: the saturated issuance bound clamps to the usable maximum.
+        (int24 tickLower, int24 tickUpper) = testableHook.exposed_calculateTickBounds({
+            projectId: PROJECT_ID, terminalToken: address(terminalToken), projectToken: lowProjectToken
+        });
         assertEq(tickLower, -76_000, "project token0: the cash-out floor");
         assertEq(tickUpper, _maxUsableTick(), "project token0: clamped to the usable maximum");
         assertEq(tickUpper, 887_000, "project token0: the usable maximum");
 
-        (tickLower, tickUpper) =
-            testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
+        // Project as token1: the saturated issuance bound rounds inward onto the usable minimum.
+        (tickLower, tickUpper) = testableHook.exposed_calculateTickBounds({
+            projectId: PROJECT_ID, terminalToken: address(terminalToken), projectToken: address(projectToken)
+        });
         assertEq(tickLower, _minUsableTick(), "project token1: the usable minimum");
         assertEq(tickLower, -887_200, "project token1: the usable minimum");
         assertEq(tickUpper, 76_000, "project token1: the cash-out floor");
@@ -326,23 +344,29 @@ contract RegressionFixL6Test is LPSplitHookV4TestBase {
         // The issuance price is 1e36 / weight terminal-token wei per 1e18 project tokens.
         // Intentionally divide first: the issuance price per token, then 99% of it.
         // forge-lint: disable-next-line(divide-before-multiply)
-        store.setSurplus(PROJECT_ID, (1e36 / uint256(type(uint88).max)) * 99 / 100);
-        controller.setWeight(PROJECT_ID, type(uint88).max);
-        controller.setReservedPercent(PROJECT_ID, 0);
+        store.setSurplus({projectId: PROJECT_ID, surplus: (1e36 / uint256(type(uint88).max)) * 99 / 100});
+        controller.setWeight({projectId: PROJECT_ID, weight: type(uint88).max});
+        controller.setReservedPercent({projectId: PROJECT_ID, reservedPercent: 0});
 
-        (int24 tickLower, int24 tickUpper) =
-            testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
+        // No aligned spacing fits between the bounds, so the corridor is the empty (0, 0) band.
+        (int24 tickLower, int24 tickUpper) = testableHook.exposed_calculateTickBounds({
+            projectId: PROJECT_ID, terminalToken: address(terminalToken), projectToken: address(projectToken)
+        });
         assertEq(tickLower, 0, "empty corridor lower");
         assertEq(tickUpper, 0, "empty corridor upper");
 
-        _accumulateTokens(PROJECT_ID, 1e18);
+        // The deploy refuses the empty corridor and leaves the reserved tokens ledgered.
+        _accumulateTokens({projectId: PROJECT_ID, amount: 1e18});
         vm.expectRevert(
             abi.encodeWithSelector(
                 JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_EmptyCorridor.selector, PROJECT_ID, address(terminalToken)
             )
         );
         hook.deployPool(PROJECT_ID);
-        assertFalse(hook.isPoolDeployed(PROJECT_ID, address(terminalToken)), "the pool is not deployed");
+        assertFalse(
+            hook.isPoolDeployed({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            "the pool is not deployed"
+        );
         assertEq(hook.accumulatedProjectTokens(PROJECT_ID), 1e18, "the reserved tokens stay ledgered");
     }
 
@@ -355,7 +379,7 @@ contract RegressionFixL6Test is LPSplitHookV4TestBase {
     function test_L6_NormalTicks_ValidBounds() public {
         // With moderate surplus and default weight, cashout and issuance ticks are well-separated (cash-out value
         // 0.0005 vs issuance price 1/900, about 39 spacings).
-        store.setSurplus(PROJECT_ID, DEFAULT_SURPLUS_PER_TOKEN);
+        store.setSurplus({projectId: PROJECT_ID, surplus: DEFAULT_SURPLUS_PER_TOKEN});
 
         (int24 tickLower, int24 tickUpper) =
             testableHook.exposed_calculateTickBounds(PROJECT_ID, address(terminalToken), address(projectToken));
@@ -363,7 +387,7 @@ contract RegressionFixL6Test is LPSplitHookV4TestBase {
         int24 minUsable = _minUsableTick();
         int24 maxUsable = _maxUsableTick();
 
-        // Verify ticks are within valid range (always true post-fix).
+        // Verify ticks are within the valid range the clamp guarantees.
         assertGe(tickLower, minUsable, "tickLower must be >= minUsable");
         assertLe(tickUpper, maxUsable, "tickUpper must be <= maxUsable");
         assertLt(tickLower, tickUpper, "tickLower must be < tickUpper");

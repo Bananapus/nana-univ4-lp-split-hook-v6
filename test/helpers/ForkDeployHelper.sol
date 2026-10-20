@@ -52,9 +52,9 @@ import {MockGeomeanOracle} from "../mock/MockGeomeanOracle.sol";
 abstract contract ForkDeployHelper is Test {
     /// @notice Gas cap that covers intake but sits below the hook's inline-automation attempt floor
     /// (`_AUTOMATION_GAS_BUDGET` + `_AUTOMATION_GAS_RESERVE`), so accumulate helpers keep their
-    /// accumulate-only semantics: intake completes and automation skips, exactly like a distribution that arrives
-    /// without enough gas for inline automation. Tests that want inline automation call `processSplitWith` with full
-    /// gas themselves.
+    /// accumulate-only semantics.
+    /// @dev Intake completes and automation skips, exactly like a distribution that arrives without enough gas for
+    /// inline automation. Tests that want inline automation call `processSplitWith` with full gas themselves.
     uint256 internal constant INTAKE_ONLY_GAS = 300_000;
 
     // ─── Canonical addresses
@@ -147,6 +147,9 @@ abstract contract ForkDeployHelper is Test {
     /// spot-vs-TWAP guard passes deterministically without seeding 30 minutes of real observation history.
     /// @dev Call immediately before a guarded `addLiquidity`. The real oracle still runs its V4
     /// callbacks during pool init/swaps; only the TWAP read is mocked.
+    /// @param oracle The oracle hook whose `observe` is mocked.
+    /// @param pm The pool manager to read the spot tick from.
+    /// @param key The pool whose spot the TWAP matches.
     function _mockOracleTwapEqualsSpot(IHooks oracle, IPoolManager pm, PoolKey memory key) internal {
         (uint160 sqrtPriceX96,,,) = pm.getSlot0(key.toId());
         int24 spot = TickMath.getTickAtSqrtPrice(sqrtPriceX96);

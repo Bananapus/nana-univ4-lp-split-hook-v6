@@ -37,9 +37,14 @@ contract RegressionRegressionsTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
+        // The pool keeps the pre-set in-corridor price and the ask position still mints.
         bytes32 poolId = keccak256(abi.encode(key));
         assertEq(positionManager.poolSqrtPrice(poolId), attackerSqrtPrice, "hook should not accept attacker price");
-        assertGt(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "LP position should still mint");
+        assertGt(
+            hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            0,
+            "LP position should still mint"
+        );
     }
 
     function test_regression_permissionlessDeployCanLockWrongTerminalToken() public {
@@ -73,13 +78,14 @@ contract RegressionRegressionsTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
 
         assertTrue(hook.hasDeployedPool(PROJECT_ID), "deployment should succeed");
+        // Only the auto-selected terminal token gets an ask position.
         assertGt(
-            hook.askTokenIdOf(PROJECT_ID, address(terminalToken)),
+            hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
             0,
             "auto-select should deploy the highest-value terminal token"
         );
         assertEq(
-            hook.askTokenIdOf(PROJECT_ID, address(secondTerminalToken)),
+            hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(secondTerminalToken)}),
             0,
             "attacker's low-value token should NOT be deployed"
         );

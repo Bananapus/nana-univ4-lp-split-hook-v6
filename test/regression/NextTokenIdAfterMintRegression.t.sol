@@ -24,7 +24,7 @@ contract NextTokenIdAfterMintRegression is TwoPositionFixture {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
-        uint256 storedTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 storedTokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         uint256 nextIdAfter = positionManager.nextTokenId();
 
         // The mint assigned ID 1 then incremented to 2.
@@ -48,7 +48,7 @@ contract NextTokenIdAfterMintRegression is TwoPositionFixture {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
-        uint256 storedTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 storedTokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         assertEq(storedTokenId, 6, "tokenIdOf should be 6 (the minted position)");
         assertEq(storedTokenId, positionManager.lastMintTokenId(), "should match mock's tracking");
         assertEq(positionManager.nextTokenId(), 7, "nextTokenId should have incremented to 7");
@@ -121,40 +121,104 @@ contract NextTokenIdAfterMintRegression is TwoPositionFixture {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
-        uint256 storedTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 storedTokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         assertEq(storedTokenId, 1000, "should store position ID 1000");
         assertEq(positionManager.nextTokenId(), 1001, "nextTokenId should be 1001");
         assertEq(storedTokenId, positionManager.lastMintTokenId(), "should match mock tracking");
     }
 
-    // ─── Recycle helpers ───
+    // ─── Test: Recycle stores the freshly minted ask AND bid IDs ───
 
-    /// @notice Simulate buyers filling part of the live ask (moving the spot into the ask's range and leaving
-    /// terminal tokens as its principal) and a new reserved distribution, so the next recycle re-mints BOTH an ask and
-    /// a bid. The seed price sits one spacing inside the cash-out floor, where the bid range is empty, so the spot has
-    /// to move before a bid can exist.
-    function _prepareTwoSidedRecycle() internal {
-        uint256 askId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
-        (PoolKey memory key, int24 askLower, int24 askUpper,,,,) = positionManager._positions(askId);
-        int24 spotTick = (askLower + askUpper) / 2 / key.tickSpacing * key.tickSpacing;
-        bytes32 stateSlot = keccak256(abi.encodePacked(PoolId.unwrap(key.toId()), bytes32(uint256(6))));
-        // forge-lint: disable-next-line(unsafe-typecast)
-        bytes32 packed = bytes32(
-            (uint256(key.fee) << 208) | (uint256(uint24(spotTick)) << 160)
-                | uint256(TickMath.getSqrtPriceAtTick(spotTick))
+    /// @notice A recycle stores the IDs of the ask and the bid it just minted, after a deploy that minted only an ask.
+    function test_recycle_storesFreshAskAndBidTokenIds() public {
+        _accumulateAndDeploy({projectId: PROJECT_ID, amount: 100e18});
+
+        // The deploy mints only the ask, as position 1, because the hook holds no terminal tokens for a bid.
+        uint256 firstAskId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
+        assertEq(firstAskId, 1, "first position should be ID 1");
+        assertEq(
+            hook.bidTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            0,
+            "no bid without terminal tokens"
         );
-        poolManager.writeSlot(stateSlot, packed);
 
-        // The ask now holds exactly what its liquidity holds at the new spot (terminal tokens below it).
-        _markToSpot(askId);
-        _accumulateTokens(PROJECT_ID, 10e18);
+        // Fill part of the ask and add a distribution, then recycle into an ask and a bid.
+        _prepareTwoSidedRecycle();
+        hook.addLiquidity({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
+
+        // Both stored IDs are the recycle's fresh mints; no bid existed before.
+        _assertFreshAskAndBid({oldAskId: firstAskId, oldBidId: 0, label: "recycle"});
     }
+
+    // ─── Test: Recycle with pre-bumped nextTokenId ───
+
+    /// @notice A recycle stores the IDs it just minted even when other mints moved nextTokenId after the deploy.
+    function test_recycle_afterPriorMints_storesFreshTokenIds() public {
+        _accumulateAndDeploy({projectId: PROJECT_ID, amount: 100e18});
+
+        // The deploy's ask, which the recycle retires.
+        uint256 firstAskId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
+
+        // Simulate external mints between deploy and recycle.
+        uint256 currentNext = positionManager.nextTokenId();
+        vm.store(address(positionManager), bytes32(uint256(0)), bytes32(currentNext + 10));
+
+        // Fill part of the ask and add a distribution, then recycle into an ask and a bid.
+        _prepareTwoSidedRecycle();
+        hook.addLiquidity({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
+
+        // Both stored IDs are fresh mints past the 10 external ones.
+        _assertFreshAskAndBid({oldAskId: firstAskId, oldBidId: 0, label: "recycle after external mints"});
+        assertGt(
+            hook.bidTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            firstAskId + 10,
+            "new IDs account for the 10 external mints"
+        );
+    }
+
+    // ─── Test: Invariant — stored IDs always track the fresh mints across multiple operations ───
+
+    /// @notice Across a deploy and two recycles, with an external nextTokenId bump between them, the stored ask and
+    ///         bid IDs always point at the positions the latest operation minted.
+    function test_invariant_tokenIds_alwaysMatchFreshMints() public {
+        // Deploy: the stored ask is the last mint.
+        _accumulateTokens({projectId: PROJECT_ID, amount: 200e18});
+        vm.prank(owner);
+        hook.deployPool(PROJECT_ID);
+        assertEq(
+            hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            positionManager.lastMintTokenId(),
+            "invariant: deploy"
+        );
+
+        // Recycle 1: the deploy's positions are retired and replaced.
+        uint256 oldAsk = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
+        uint256 oldBid = hook.bidTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
+        _prepareTwoSidedRecycle();
+        hook.addLiquidity({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
+        _assertFreshAskAndBid({oldAskId: oldAsk, oldBidId: oldBid, label: "invariant: recycle 1"});
+
+        // Bump nextTokenId externally
+        vm.store(address(positionManager), bytes32(uint256(0)), bytes32(positionManager.nextTokenId() + 5));
+
+        // Recycle 2: both live positions are retired and replaced.
+        oldAsk = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
+        oldBid = hook.bidTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
+        _prepareTwoSidedRecycle();
+        hook.addLiquidity({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
+        _assertFreshAskAndBid({oldAskId: oldAsk, oldBidId: oldBid, label: "invariant: recycle 2 after external bump"});
+    }
+
+    // ─── Helpers ───
 
     /// @notice Assert the stored ask and bid IDs are the two positions the last recycle minted, that each holds its
     /// own side, and that neither reuses a retired ID.
+    /// @param oldAskId The ask ID the recycle retired.
+    /// @param oldBidId The bid ID the recycle retired, or 0 when there was no bid.
+    /// @param label The prefix for every assertion message.
     function _assertFreshAskAndBid(uint256 oldAskId, uint256 oldBidId, string memory label) internal view {
-        uint256 askId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
-        uint256 bidId = hook.bidTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 askId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
+        uint256 bidId = hook.bidTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         uint256 nextId = positionManager.nextTokenId();
 
         // The recycle minted exactly the ask and the bid, as the two most recent positions.
@@ -178,71 +242,28 @@ contract NextTokenIdAfterMintRegression is TwoPositionFixture {
         assertEq(terminalIsToken0 ? bid1 : bid0, 0, string.concat(label, ": bid holds no project tokens"));
     }
 
-    // ─── Test: Recycle stores the freshly minted ask AND bid IDs ───
+    /// @notice Simulate buyers filling part of the live ask (moving the spot into the ask's range and leaving
+    /// terminal tokens as its principal) and a new reserved distribution, so the next recycle re-mints BOTH an ask and
+    /// a bid. The seed price sits one spacing inside the cash-out floor, where the bid range is empty, so the spot has
+    /// to move before a bid can exist.
+    function _prepareTwoSidedRecycle() internal {
+        // Pick the spacing-aligned tick at the middle of the live ask's range as the new spot.
+        uint256 askId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
+        (PoolKey memory key, int24 askLower, int24 askUpper,,,,) = positionManager._positions(askId);
+        int24 spotTick = (askLower + askUpper) / 2 / key.tickSpacing * key.tickSpacing;
 
-    function test_recycle_storesFreshAskAndBidTokenIds() public {
-        _accumulateAndDeploy(PROJECT_ID, 100e18);
-
-        uint256 firstAskId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
-        assertEq(firstAskId, 1, "first position should be ID 1");
-        assertEq(hook.bidTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "no bid without terminal tokens");
-
-        _prepareTwoSidedRecycle();
-        hook.addLiquidity(PROJECT_ID, address(terminalToken));
-
-        _assertFreshAskAndBid(firstAskId, 0, "recycle");
-    }
-
-    // ─── Test: Recycle with pre-bumped nextTokenId ───
-
-    function test_recycle_afterPriorMints_storesFreshTokenIds() public {
-        _accumulateAndDeploy(PROJECT_ID, 100e18);
-
-        uint256 firstAskId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
-
-        // Simulate external mints between deploy and recycle.
-        uint256 currentNext = positionManager.nextTokenId();
-        vm.store(address(positionManager), bytes32(uint256(0)), bytes32(currentNext + 10));
-
-        _prepareTwoSidedRecycle();
-        hook.addLiquidity(PROJECT_ID, address(terminalToken));
-
-        _assertFreshAskAndBid(firstAskId, 0, "recycle after external mints");
-        assertGt(
-            hook.bidTokenIdOf(PROJECT_ID, address(terminalToken)),
-            firstAskId + 10,
-            "new IDs account for the 10 external mints"
+        // Overwrite the pool's packed slot0 (fee, tick, sqrt price) in the pool state mapping at slot 6.
+        bytes32 stateSlot = keccak256(abi.encodePacked(PoolId.unwrap(key.toId()), bytes32(uint256(6))));
+        // forge-lint: disable-next-line(unsafe-typecast)
+        bytes32 packed = bytes32(
+            (uint256(key.fee) << 208) | (uint256(uint24(spotTick)) << 160)
+                | uint256(TickMath.getSqrtPriceAtTick(spotTick))
         );
-    }
+        poolManager.writeSlot({slot: stateSlot, value: packed});
 
-    // ─── Test: Invariant — stored IDs always track the fresh mints across multiple operations ───
-
-    function test_invariant_tokenIds_alwaysMatchFreshMints() public {
-        // Deploy
-        _accumulateTokens(PROJECT_ID, 200e18);
-        vm.prank(owner);
-        hook.deployPool(PROJECT_ID);
-        assertEq(
-            hook.askTokenIdOf(PROJECT_ID, address(terminalToken)),
-            positionManager.lastMintTokenId(),
-            "invariant: deploy"
-        );
-
-        // Recycle 1
-        uint256 oldAsk = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
-        uint256 oldBid = hook.bidTokenIdOf(PROJECT_ID, address(terminalToken));
-        _prepareTwoSidedRecycle();
-        hook.addLiquidity(PROJECT_ID, address(terminalToken));
-        _assertFreshAskAndBid(oldAsk, oldBid, "invariant: recycle 1");
-
-        // Bump nextTokenId externally
-        vm.store(address(positionManager), bytes32(uint256(0)), bytes32(positionManager.nextTokenId() + 5));
-
-        // Recycle 2: both live positions are retired and replaced.
-        oldAsk = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
-        oldBid = hook.bidTokenIdOf(PROJECT_ID, address(terminalToken));
-        _prepareTwoSidedRecycle();
-        hook.addLiquidity(PROJECT_ID, address(terminalToken));
-        _assertFreshAskAndBid(oldAsk, oldBid, "invariant: recycle 2 after external bump");
+        // Mark the ask's principal to what its liquidity holds at the moved spot (terminal tokens below it).
+        _markToSpot(askId);
+        // A new reserved distribution gives the recycle project tokens to re-mint the ask with.
+        _accumulateTokens({projectId: PROJECT_ID, amount: 10e18});
     }
 }

@@ -39,20 +39,6 @@ contract HighestValueSelectionHarness is JBUniswapV4LPSplitHook {
 }
 
 contract StoreBackedCashOutTerminal {
-    /// @dev Matches IJBTerminal.currentSurplusOf: this terminal's own surplus, as its store reports it.
-    function currentSurplusOf(
-        uint256 projectId,
-        address[] calldata,
-        uint256 decimals,
-        uint256 currency
-    )
-        external
-        view
-        returns (uint256)
-    {
-        return MockJBTerminalStore(STORE_ADDRESS).currentTotalSurplusOf(projectId, decimals, currency);
-    }
-
     address public immutable ACCEPTED_TOKEN;
     address public immutable STORE_ADDRESS;
 
@@ -76,6 +62,26 @@ contract StoreBackedCashOutTerminal {
         contexts[0] =
         // forge-lint: disable-next-line(unsafe-typecast)
         JBAccountingContext({token: ACCEPTED_TOKEN, decimals: 18, currency: uint32(uint160(ACCEPTED_TOKEN))});
+    }
+
+    /// @notice The project's surplus held in this terminal, as its store reports it.
+    /// @dev Matches IJBTerminal.currentSurplusOf so the hook can read this terminal's surplus.
+    /// @param projectId The ID of the project to read the surplus of.
+    /// @param decimals The number of decimals to express the surplus with.
+    /// @param currency The currency to express the surplus in.
+    /// @return surplus The surplus the store reports for the project.
+    function currentSurplusOf(
+        uint256 projectId,
+        address[] calldata,
+        uint256 decimals,
+        uint256 currency
+    )
+        external
+        view
+        returns (uint256 surplus)
+    {
+        // The mock store reports one surplus figure per project, whatever the decimals and currency.
+        return MockJBTerminalStore(STORE_ADDRESS).currentTotalSurplusOf(projectId, decimals, currency);
     }
 
     function cashOutTokensOf(
@@ -160,6 +166,11 @@ contract NonPrimaryBalanceSelectionDoSTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
-        assertNotEq(hook.askTokenIdOf(PROJECT_ID, address(tokenB)), 0, "deploy should use the selected primary token");
+        // The ask position is minted for the selected primary token.
+        assertNotEq(
+            hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(tokenB)}),
+            0,
+            "deploy should use the selected primary token"
+        );
     }
 }

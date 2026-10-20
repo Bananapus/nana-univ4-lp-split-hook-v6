@@ -2,32 +2,20 @@
 pragma solidity 0.8.28;
 
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
-import {IJBBuybackHookRegistry} from "@bananapus/buyback-hook-v6/src/interfaces/IJBBuybackHookRegistry.sol";
 import {JBUniswapV4LPSplitHook} from "../../src/JBUniswapV4LPSplitHook.sol";
-import {JBUniswapV4LPSplitHookMath} from "../../src/libraries/JBUniswapV4LPSplitHookMath.sol";
-import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
-import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
-import {IJBPermissions} from "@bananapus/core-v6/src/interfaces/IJBPermissions.sol";
-import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookContext.sol";
 import {JBSplit} from "@bananapus/core-v6/src/structs/JBSplit.sol";
 import {IJBSplitHook} from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
-import {IAllowanceTransfer} from "@uniswap/permit2/src/interfaces/IAllowanceTransfer.sol";
-import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
-import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
-import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
-import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
-import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
 /// @notice Tests the credit-only split regression.
 contract LPSplitRegressionFixes is LPSplitHookV4TestBase {
-    // A new project ID with no ERC-20 token set (for test).
+    // A project ID with no ERC-20 token set, so its splits take the credits path.
     uint256 constant NO_TOKEN_PROJECT_ID = 99;
 
     function setUp() public override {
         super.setUp();
 
-        // Set up project 99 with a controller but NO ERC-20 token (for ).
+        // Set up project 99 with a controller but NO ERC-20 token.
         _setDirectoryController(NO_TOKEN_PROJECT_ID, address(controller));
         controller.setWeight(NO_TOKEN_PROJECT_ID, DEFAULT_WEIGHT);
         controller.setFirstWeight(NO_TOKEN_PROJECT_ID, DEFAULT_WEIGHT);
@@ -71,7 +59,7 @@ contract LPSplitRegressionFixes is LPSplitHookV4TestBase {
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InsufficientBalance.selector);
         hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
 
-        // Neither ledger may have been written (revert happened before any accounting).
+        // Neither ledger is written, because the revert happens before any accounting.
         assertEq(hook.accumulatedProjectTokens(NO_TOKEN_PROJECT_ID), 0, "accumulator must remain zero after revert");
         assertEq(hook.accumulatedProjectCredits(NO_TOKEN_PROJECT_ID), 0, "credit ledger must remain zero after revert");
     }

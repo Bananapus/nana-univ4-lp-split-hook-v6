@@ -28,7 +28,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
-        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         assertNotEq(tokenId, 0, "tokenIdOf should be nonzero after deployPool");
     }
 
@@ -46,11 +46,17 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
 
         assertEq(terminal.cashOutCallCount(), 0, "deployPool must never call cashOutTokensOf");
         // The full accumulated balance funds the ask; only V4 rounding stays ledgered.
-        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), 100e18, 0);
+        _assertPlacedExactly({
+            projectId: PROJECT_ID,
+            projectTokenAddr: address(projectToken),
+            terminalTokenAddr: address(terminalToken),
+            projectIn: 100e18,
+            terminalIn: 0
+        });
     }
 
-    /// @notice A nonzero cash-out tax rate no longer affects `deployPool`: the deploy path carries no funding
-    /// cash-out at all (single-sided asks-only), so there is no cash-out-derived floor to net fees from.
+    /// @notice A nonzero cash-out tax rate does not affect `deployPool`: the deploy path carries no funding cash-out at
+    /// all (single-sided asks only), so there is no cash-out-derived floor to net fees from.
     function test_DeployPool_NonzeroCashOutTax_NetsDerivedMinReturn() public {
         controller.setCashOutTaxRate(PROJECT_ID, 5000);
         _accumulateTokens(PROJECT_ID, 100e18);
@@ -59,7 +65,11 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
 
         assertEq(terminal.cashOutCallCount(), 0, "a nonzero cash-out tax rate must not trigger a deploy cash-out");
-        assertNotEq(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "the single-sided position should mint");
+        assertNotEq(
+            hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            0,
+            "the single-sided position should mint"
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -87,7 +97,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
-        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         assertNotEq(tokenId, 0, "tokenIdOf should be nonzero after deployPool");
     }
 
@@ -103,7 +113,13 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
 
         // The ledger keeps only what V4 rounding left unplaced.
-        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), 100e18, 0);
+        _assertPlacedExactly({
+            projectId: PROJECT_ID,
+            projectTokenAddr: address(projectToken),
+            terminalTokenAddr: address(terminalToken),
+            projectIn: 100e18,
+            terminalIn: 0
+        });
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -196,7 +212,8 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
 
         vm.startPrank(address(controller));
         projectToken.approve(address(hook), amount);
-        JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, amount);
+        JBSplitHookContext memory context = _buildReservedContext({projectId: PROJECT_ID, amount: amount});
+        // Deliver with intake-only gas so the hook runs intake and skips inline automation.
         hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
 
@@ -206,7 +223,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         );
 
         // Pool should NOT exist (no auto-deploy)
-        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         assertEq(tokenId, 0, "tokenIdOf should remain 0 -- no auto-deploy");
     }
 
@@ -229,7 +246,8 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
 
         vm.startPrank(address(controller));
         projectToken.approve(address(hook), newAmount);
-        JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, newAmount);
+        JBSplitHookContext memory context = _buildReservedContext({projectId: PROJECT_ID, amount: newAmount});
+        // Deliver with intake-only gas so the hook runs intake and skips inline automation.
         hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
 
@@ -250,22 +268,32 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
     ///         cleared to 0 at the time of deployment. Still no burn.
     function test_ProcessSplit_AccumulatesAfterDeploy_EvenFromZero() public {
         // Deploy pool with some tokens: the ledger keeps only what V4 rounding left unplaced.
-        _accumulateAndDeploy(PROJECT_ID, 100e18);
-        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), 100e18, 0);
-        uint256 accumulatedAfterDeploy = hook.accumulatedProjectTokens(PROJECT_ID);
+        _accumulateAndDeploy({projectId: PROJECT_ID, amount: 100e18});
+        _assertPlacedExactly({
+            projectId: PROJECT_ID,
+            projectTokenAddr: address(projectToken),
+            terminalTokenAddr: address(terminalToken),
+            projectIn: 100e18,
+            terminalIn: 0
+        });
 
+        // Snapshot the post-deploy ledger and burn count to measure the next intake against.
+        uint256 accumulatedAfterDeploy = hook.accumulatedProjectTokens(PROJECT_ID);
         uint256 burnCountAfterDeploy = controller.burnCallCount();
 
         // Send new tokens and process — should accumulate, not burn.
         uint256 newAmount = 10e18;
-        projectToken.mint(address(controller), newAmount);
+        projectToken.mint({to: address(controller), amount: newAmount});
 
+        // The controller approves and delivers the new split.
         vm.startPrank(address(controller));
-        projectToken.approve(address(hook), newAmount);
-        JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, newAmount);
+        projectToken.approve({spender: address(hook), amount: newAmount});
+        JBSplitHookContext memory context = _buildReservedContext({projectId: PROJECT_ID, amount: newAmount});
+        // Deliver with intake-only gas so the hook runs intake and skips inline automation.
         hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
 
+        // Nothing burns and the delivery lands on top of the rounding left in the ledger.
         assertEq(controller.burnCallCount(), burnCountAfterDeploy, "no burn should occur post-deploy");
         assertEq(
             hook.accumulatedProjectTokens(PROJECT_ID),
@@ -281,13 +309,16 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
     /// @notice When V4's per-tick cap lets the ask place only part of the inventory (here 80% of its liquidity),
     ///         the leftover project tokens are carried forward into the accumulation ledger (never burned).
     function test_DeployPool_CarriesLeftoversForward() public {
-        _accumulateTokens(PROJECT_ID, 100e18);
+        // Accumulate inventory, then leave per-tick room for only 80% of the ask the deploy would mint.
+        _accumulateTokens({projectId: PROJECT_ID, amount: 100e18});
         uint128 room = _capNextAsk({deploy: true, bps: 8000});
 
+        // Deploy into the capped range.
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
-        uint256 askId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        // The ask holds exactly the room the cap left; its cost at spot is what left the ledger.
+        uint256 askId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         assertEq(positionManager.getPositionLiquidity(askId), room, "the ask is capped at the per-tick room");
         (uint256 cost0, uint256 cost1) = _mintCostAtSpot(askId);
 
@@ -296,6 +327,8 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         assertGt(
             hook.accumulatedProjectTokens(PROJECT_ID), 0, "leftover project tokens should be carried into accumulation"
         );
+
+        // The ledger keeps precisely the inventory the capped ask did not cost.
         assertEq(
             hook.accumulatedProjectTokens(PROJECT_ID),
             100e18 - (cost0 + cost1),
@@ -303,8 +336,11 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         );
     }
 
+    /// @notice A deploy whose ask places only part of the inventory still clears every ERC-20 and Permit2 allowance
+    ///         it granted, so no leftover approval can be spent later.
     function test_DeployPool_PartialMintClearsPermit2Approvals() public {
-        _accumulateTokens(PROJECT_ID, 100e18);
+        // Accumulate inventory, then cap the ask at 80% of its liquidity so the mint is partial.
+        _accumulateTokens({projectId: PROJECT_ID, amount: 100e18});
         _capNextAsk({deploy: true, bps: 8000});
 
         address permit2 = address(hook.PERMIT2());
@@ -347,7 +383,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         _accumulateAndDeploy(PROJECT_ID, 100e18);
 
         // Record tokenId and mint count after first deploy
-        uint256 firstTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 firstTokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         uint256 mintCountAfterDeploy = positionManager.mintCallCount();
         uint256 burnCountAfterDeploy = controller.burnCallCount();
         uint256 accumulatedAfterDeploy = hook.accumulatedProjectTokens(PROJECT_ID);
@@ -358,12 +394,13 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
 
         vm.startPrank(address(controller));
         projectToken.approve(address(hook), newAmount);
-        JBSplitHookContext memory context = _buildReservedContext(PROJECT_ID, newAmount);
+        JBSplitHookContext memory context = _buildReservedContext({projectId: PROJECT_ID, amount: newAmount});
+        // Deliver with intake-only gas so the hook runs intake and skips inline automation.
         hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
 
         // tokenId should remain the same (no second pool created)
-        uint256 tokenIdAfter = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenIdAfter = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         assertEq(tokenIdAfter, firstTokenId, "tokenId should not change after second processSplitWith");
 
         // PositionManager.mint should NOT have been called again
@@ -396,7 +433,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         hook.deployPool(PROJECT_ID);
 
         assertNotEq(
-            hook.askTokenIdOf(PROJECT_ID, address(terminalToken)),
+            hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
             0,
             "a permissionless caller must be able to seed the pool"
         );
@@ -419,7 +456,7 @@ contract DeploymentStageTest is LPSplitHookV4TestBase {
         vm.prank(operator);
         hook.deployPool(PROJECT_ID);
 
-        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         assertNotEq(tokenId, 0, "tokenIdOf should be nonzero after deployPool by permitted operator");
     }
 }

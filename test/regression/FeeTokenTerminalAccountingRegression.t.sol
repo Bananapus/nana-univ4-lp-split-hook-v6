@@ -6,11 +6,6 @@ import {MockERC20} from "../mock/MockERC20.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 
 contract PullingTerminal {
-    /// @dev Matches IJBTerminal.currentSurplusOf: this terminal holds no surplus for any project.
-    function currentSurplusOf(uint256, address[] calldata, uint256, uint256) external pure returns (uint256) {
-        return 0;
-    }
-
     address public storeAddress;
     mapping(uint256 projectId => mapping(address token => JBAccountingContext)) public contexts;
     mapping(uint256 projectId => JBAccountingContext[]) public contextsList;
@@ -47,6 +42,14 @@ contract PullingTerminal {
 
     function accountingContextsOf(uint256 projectId) external view returns (JBAccountingContext[] memory) {
         return contextsList[projectId];
+    }
+
+    /// @notice The project's surplus held in this terminal, which is always zero.
+    /// @dev Matches IJBTerminal.currentSurplusOf so the hook can read this terminal's surplus.
+    /// @return surplus The surplus, always zero because this terminal holds no surplus for any project.
+    function currentSurplusOf(uint256, address[] calldata, uint256, uint256) external pure returns (uint256 surplus) {
+        // This terminal holds no surplus for any project.
+        return 0;
     }
 
     function pay(
@@ -148,13 +151,17 @@ contract FeeTokenTerminalAccountingRegression is LPSplitHookV4TestBase {
 
         vm.startPrank(address(controller));
         projectToken.approve(address(hook), 100e18);
-        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(_buildContext(PROJECT_ID, address(projectToken), 100e18, 1));
+        // Cap the gas below the inline-automation floor so the split is only accumulated.
+        hook.processSplitWith{gas: INTAKE_ONLY_GAS}(
+            _buildContext({projectId: PROJECT_ID, token: address(projectToken), amount: 100e18, groupId: 1})
+        );
         vm.stopPrank();
 
         vm.prank(owner);
         hook.deployPool(PROJECT_ID);
 
-        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(feeProjectToken));
+        // The ask position carries the LP fees this test collects.
+        uint256 tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(feeProjectToken)});
         bool terminalIsToken0 = address(feeProjectToken) < address(projectToken);
         uint256 terminalFeeAmount = 100e18;
 

@@ -195,7 +195,8 @@ contract RegressionRegression is LPSplitHookV4TestBase {
     function test_regression_claimFeeTokens_pausedCreditsDoNotBlockERC20Claims() public {
         _accumulateAndDeploy(PROJECT_ID, 1000e18);
 
-        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        // The ask position carries the LP fees this test collects.
+        uint256 tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
         // Phase 1: accumulate credits (fee project has no ERC-20).
         jbTokens.setToken(FEE_PROJECT_ID, address(0));
@@ -253,7 +254,8 @@ contract RegressionRegression is LPSplitHookV4TestBase {
         burning.setBaseCurrency(FEE_PROJECT_ID, 1);
         burning.setProjectToken(PROJECT_ID, projectToken);
         burning.setProjectToken(FEE_PROJECT_ID, feeProjectToken);
-        store.setSurplus(FEE_PROJECT_ID, DEFAULT_SURPLUS_PER_TOKEN);
+        // Give the fee project the default cash-out value per token.
+        store.setSurplus({projectId: FEE_PROJECT_ID, surplus: DEFAULT_SURPLUS_PER_TOKEN});
 
         _setDirectoryController(PROJECT_ID, address(burning));
         _setDirectoryController(FEE_PROJECT_ID, address(burning));
@@ -285,7 +287,8 @@ contract RegressionRegression is LPSplitHookV4TestBase {
             new MintThenReenterFeeTerminal(hook, feeProjectToken, FEE_PROJECT_ID, address(terminalToken));
         _setDirectoryTerminal(FEE_PROJECT_ID, address(terminalToken), address(feeTerminal));
 
-        uint256 tokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        // The ask position carries the LP fees this test collects.
+        uint256 tokenId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         positionManager.setCollectableFees(tokenId, 100e18, 100e18);
         projectToken.mint(address(positionManager), 100e18);
         terminalToken.mint(address(positionManager), 100e18);
@@ -336,6 +339,7 @@ contract RegressionRegression is LPSplitHookV4TestBase {
             })
         });
 
+        // Cap the gas below the inline-automation floor so the split is only accumulated.
         hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
     }

@@ -13,7 +13,7 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
-/// @notice `deployPool` and `addLiquidity` are fully permissionless — the weight-decay owner gate is gone. The only
+/// @notice `deployPool` and `addLiquidity` are fully permissionless, with no owner or weight-decay gate. The only
 /// gate is economic: the hook offers project tokens as asks only between the spot and the project's issuance-price
 /// (ceiling) tick, so once the spot reaches the ceiling the asks have nowhere left to sit. Seeding/extending then
 /// deploys a bid-only position from the project's own terminal, or reverts `NoDeployableLiquidityAtSpot` when there is
@@ -66,40 +66,55 @@ contract SingleSided_PermissionlessGateTest is LPSplitHookV4TestBase {
 
     /// @notice A complete stranger (no owner permission, no weight decay) can seed the pool permissionlessly.
     function test_Deploy_Permissionless_StrangerCanSeed() public {
+        // Give the project a wide corridor and some inventory to seed.
         _setWideTaxedCurve(PROJECT_ID);
-        _accumulateTokens(PROJECT_ID, 1e18);
+        _accumulateTokens({projectId: PROJECT_ID, amount: 1e18});
 
-        // The old owner-gate would revert `JBPermissioned_Unauthorized` here (weight is undecayed). It's gone.
+        // A stranger with no permission deploys while the weight is still undecayed.
         vm.prank(STRANGER);
         hook.deployPool(PROJECT_ID);
 
+        // The deploy mints the ask.
         assertNotEq(
-            hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "a stranger must be able to seed the pool"
+            hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            0,
+            "a stranger must be able to seed the pool"
         );
     }
 
     /// @notice A stranger can extend an existing pool permissionlessly while a live corridor remains.
     function test_AddLiquidity_Permissionless_StrangerCanExtend() public {
+        // A stranger seeds the pool from a wide corridor.
         _setWideTaxedCurve(PROJECT_ID);
-        _accumulateTokens(PROJECT_ID, 1e18);
+        _accumulateTokens({projectId: PROJECT_ID, amount: 1e18});
         vm.prank(STRANGER);
         hook.deployPool(PROJECT_ID);
-        uint256 firstId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        uint256 firstId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
         // Accumulate more and extend as a stranger; the burn returns exactly the ask's principal at the spot.
-        _accumulateTokens(PROJECT_ID, 0.3e18);
+        _accumulateTokens({projectId: PROJECT_ID, amount: 0.3e18});
         (uint256 recovered0, uint256 recovered1) = _principalAtSpot(firstId);
         uint256 projectIn = recovered0 + recovered1 + hook.accumulatedProjectTokens(PROJECT_ID);
 
+        // The stranger recycles the ask with the new inventory.
         vm.prank(STRANGER);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken));
+        hook.addLiquidity({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
 
-        uint256 secondId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
+        // The recycle burns the first ask and mints a fresh one.
+        uint256 secondId = hook.askTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
         assertNotEq(secondId, 0, "a stranger must be able to extend the pool");
         assertNotEq(secondId, firstId, "the extend consolidates into a fresh position");
 
         // The fresh ask (plus V4 rounding left in the ledger) holds the recovered principal and the new tokens.
-        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), projectIn, 0);
+        _assertPlacedExactly({
+            projectId: PROJECT_ID,
+            projectTokenAddr: address(projectToken),
+            terminalTokenAddr: address(terminalToken),
+            projectIn: projectIn,
+            terminalIn: 0
+        });
+
+        // Every one of the 1.3e18 delivered tokens sits in the pool's reserves or the ledger.
         _assertPoolAndLedgerHold(1.3e18);
     }
 
@@ -113,25 +128,36 @@ contract SingleSided_PermissionlessGateTest is LPSplitHookV4TestBase {
         // A non-inverted corridor: the cash-out floor sits genuinely below the issuance ceiling.
         _setWideTaxedCurve(PROJECT_ID);
         (int24 lower, int24 upper) = _corridor();
+
+        // Pre-initialize the pool at the spacing-aligned middle of the corridor.
         int24 midTick = ((lower + (upper - lower) / 2) / hook.TICK_SPACING()) * hook.TICK_SPACING();
-        positionManager.initializePool(_key(), TickMath.getSqrtPriceAtTick(midTick));
-        _accumulateTokens(PROJECT_ID, 1e18);
+        positionManager.initializePool({key: _key(), sqrtPriceX96: TickMath.getSqrtPriceAtTick(midTick)});
+
+        // A stranger seeds an asks-only pool, so the project holds no bid.
+        _accumulateTokens({projectId: PROJECT_ID, amount: 1e18});
         vm.prank(STRANGER);
         hook.deployPool(PROJECT_ID);
-        assertEq(hook.bidTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "precondition: nothing to bid with");
-        _accumulateTokens(PROJECT_ID, 0.3e18);
+        assertEq(
+            hook.bidTokenIdOf({projectId: PROJECT_ID, terminalToken: address(terminalToken)}),
+            0,
+            "precondition: nothing to bid with"
+        );
+
+        // More project tokens arrive for the next recycle.
+        _accumulateTokens({projectId: PROJECT_ID, amount: 0.3e18});
 
         // Issuance cheapens 200x: the issuance ceiling crosses the unchanged spot. Ordering-aware: the ceiling is the
         // corridor's UPPER tick when the project is token0 and its LOWER tick when it is token1.
-        controller.setWeight(PROJECT_ID, DEFAULT_WEIGHT * 200);
+        controller.setWeight({projectId: PROJECT_ID, weight: DEFAULT_WEIGHT * 200});
         (lower, upper) = _corridor();
         bool projectIsToken0 = address(projectToken) < address(terminalToken);
         if (projectIsToken0) assertLe(upper, midTick, "precondition: the ceiling is at or below the spot");
         else assertGe(lower, midTick, "precondition: the ceiling is at or above the spot");
         assertLt(lower, upper, "precondition: the corridor is still well formed");
 
+        // With no corridor for asks and no terminal for bids, the recycle has nothing to deploy.
         vm.prank(STRANGER);
         vm.expectPartialRevert(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot.selector);
-        hook.addLiquidity(PROJECT_ID, address(terminalToken));
+        hook.addLiquidity({projectId: PROJECT_ID, terminalToken: address(terminalToken)});
     }
 }

@@ -91,8 +91,13 @@ contract MockJBDirectory {
         _terminalsList[projectId].push(terminal);
     }
 
-    /// @dev Matches JBDirectory.isTerminalOf: whether `terminal` is in the project's terminal list.
-    function isTerminalOf(uint256 projectId, address terminal) external view returns (bool) {
+    /// @notice Whether `terminal` is in the project's terminal list.
+    /// @dev Matches JBDirectory.isTerminalOf.
+    /// @param projectId The ID of the project.
+    /// @param terminal The terminal to look for.
+    /// @return isTerminal Whether the project lists the terminal.
+    function isTerminalOf(uint256 projectId, address terminal) external view returns (bool isTerminal) {
+        // Scan the project's terminal list for a match.
         address[] storage terminals = _terminalsList[projectId];
         for (uint256 i; i < terminals.length; i++) {
             if (terminals[i] == terminal) return true;
@@ -170,13 +175,16 @@ contract MockJBController {
     uint256 public burnCallCount;
     /// @notice When set, `burnTokensOf` reverts, modeling a controller that rejects burns. Off by default.
     bool public revertOnBurn;
-
-    function setRevertOnBurn(bool value) external {
-        revertOnBurn = value;
-    }
     uint256 public lastBurnProjectId;
     uint256 public lastBurnAmount;
     address public lastBurnHolder;
+
+    /// @notice Toggle whether `burnTokensOf` reverts.
+    /// @param value Whether burns revert.
+    function setRevertOnBurn(bool value) external {
+        // Record the toggle `burnTokensOf` checks.
+        revertOnBurn = value;
+    }
 
     // Track transferCreditsFrom calls for verification
     uint256 public transferCreditsCallCount;
@@ -319,6 +327,10 @@ contract MockJBController {
         });
     }
 
+    /// @notice Records a burn and burns the holder's tokens through the tokens contract, when one is set.
+    /// @param holder The holder whose tokens are burned.
+    /// @param projectId The ID of the project whose tokens are burned.
+    /// @param amount The number of tokens to burn.
     function burnTokensOf(
         address holder,
         uint256 projectId,
@@ -327,6 +339,7 @@ contract MockJBController {
     )
         external
     {
+        // A controller that rejects burns reverts before recording anything.
         require(!revertOnBurn, "BURN_PAUSED");
         burnCallCount++;
         lastBurnProjectId = projectId;
@@ -344,12 +357,21 @@ contract MockJBController {
     /// project-configured controller that misroutes a claim.
     address public claimRedirect;
 
+    /// @notice Set the address claims are redirected to, or zero to deliver them as requested.
+    /// @param redirect The address claims deliver to.
     function setClaimRedirect(address redirect) external {
+        // Record the redirect `claimTokensFor` applies.
         claimRedirect = redirect;
     }
 
+    /// @notice Claims a holder's credits as ERC-20 tokens through the tokens contract.
+    /// @param holder The holder whose credits are claimed.
+    /// @param projectId The ID of the project whose credits are claimed.
+    /// @param tokenCount The number of credits to claim.
+    /// @param beneficiary The requested recipient of the ERC-20 tokens.
     function claimTokensFor(address holder, uint256 projectId, uint256 tokenCount, address beneficiary) external {
         MockJBTokens tokens = MockJBTokens(tokensContract);
+        // A configured redirect overrides the requested beneficiary.
         if (claimRedirect != address(0)) beneficiary = claimRedirect;
         tokens.claimTokensFor({holder: holder, projectId: projectId, count: tokenCount, beneficiary: beneficiary});
     }
@@ -435,7 +457,12 @@ contract MockJBMultiTerminal {
         return storeAddress;
     }
 
-    /// @dev Matches IJBTerminal.currentSurplusOf: this terminal's own surplus, as its store reports it.
+    /// @notice This terminal's own surplus for a project, as its store reports it.
+    /// @dev Matches IJBTerminal.currentSurplusOf. The token list is ignored.
+    /// @param projectId The ID of the project.
+    /// @param decimals The decimals to express the surplus in.
+    /// @param currency The currency to express the surplus in.
+    /// @return surplus The project's surplus, or 0 without a store.
     function currentSurplusOf(
         uint256 projectId,
         address[] calldata,
@@ -445,9 +472,12 @@ contract MockJBMultiTerminal {
     )
         external
         view
-        returns (uint256)
+        returns (uint256 surplus)
     {
+        // Without a store there is no surplus to report.
         if (storeAddress == address(0)) return 0;
+
+        // The store's surplus getter has unnamed parameters, so the call stays positional.
         return MockJBTerminalStore(storeAddress).currentTotalSurplusOf(projectId, decimals, currency);
     }
 
@@ -567,19 +597,42 @@ contract MockJBMultiTerminal {
     /// the token). Off by default.
     bool public revertOnAddToBalance;
 
+    /// @notice Toggle whether `addToBalanceOf` reverts.
+    /// @param value Whether deposits revert.
     function setRevertOnAddToBalance(bool value) external {
+        // Record the toggle `addToBalanceOf` checks.
         revertOnAddToBalance = value;
     }
 
-    // The last `addToBalanceOf` call's arguments.
+    /// @notice The project ID the last `addToBalanceOf` call passed.
     uint256 public lastAddToBalanceProjectId;
+
+    /// @notice The token the last `addToBalanceOf` call passed.
     address public lastAddToBalanceToken;
+
+    /// @notice The amount the last `addToBalanceOf` call passed.
     uint256 public lastAddToBalanceAmount;
+
+    /// @notice The native value the last `addToBalanceOf` call sent.
     uint256 public lastAddToBalanceValue;
+
+    /// @notice The `shouldReturnHeldFees` flag the last `addToBalanceOf` call passed.
     bool public lastAddToBalanceShouldReturnHeldFees;
+
+    /// @notice The memo the last `addToBalanceOf` call passed.
     string public lastAddToBalanceMemo;
+
+    /// @notice The metadata the last `addToBalanceOf` call passed.
     bytes public lastAddToBalanceMetadata;
 
+    /// @notice Records a deposit and pulls its ERC-20 amount from the caller.
+    /// @dev Virtual so test terminals can override the deposit behavior.
+    /// @param projectId The ID of the project receiving the deposit.
+    /// @param token The token deposited.
+    /// @param amount The amount deposited.
+    /// @param shouldReturnHeldFees Whether held fees should be returned.
+    /// @param memo The deposit's memo.
+    /// @param metadata The deposit's metadata.
     function addToBalanceOf(
         uint256 projectId,
         address token,
@@ -592,7 +645,10 @@ contract MockJBMultiTerminal {
         payable
         virtual
     {
+        // A terminal that rejects deposits reverts before recording anything.
         require(!revertOnAddToBalance, "ADD_TO_BALANCE_REJECTED");
+
+        // Record the call so tests can check what the hook sent.
         addToBalanceCallCount++;
         lastAddToBalanceProjectId = projectId;
         lastAddToBalanceToken = token;

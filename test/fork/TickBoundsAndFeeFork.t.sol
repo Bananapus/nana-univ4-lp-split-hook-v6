@@ -191,7 +191,8 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
         vm.prank(multisig);
         hook.deployPool(projectId);
         assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "Pool should be deployed");
-        uint256 tokenId = hook.askTokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+        // The pool deploy minted the project's ask, stored under this pair.
+        uint256 tokenId = hook.askTokenIdOf({projectId: projectId, terminalToken: JBConstants.NATIVE_TOKEN});
         assertTrue(tokenId != 0, "Position NFT should exist");
         uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         assertTrue(posLiq > 0, "Position should have liquidity");
@@ -224,7 +225,8 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
                 hook.isPoolDeployed(pid, JBConstants.NATIVE_TOKEN),
                 string.concat("Pool not deployed for taxRate ", vm.toString(uint256(taxRates[i])))
             );
-            uint256 tokenId = hook.askTokenIdOf(pid, JBConstants.NATIVE_TOKEN);
+            // The pool deploy minted the project's ask, stored under this pair.
+            uint256 tokenId = hook.askTokenIdOf({projectId: pid, terminalToken: JBConstants.NATIVE_TOKEN});
             uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
             assertTrue(posLiq > 0, string.concat("Zero liquidity for taxRate ", vm.toString(uint256(taxRates[i]))));
             PoolKey memory key = hook.poolKeyOf(pid, JBConstants.NATIVE_TOKEN);
@@ -339,7 +341,8 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
         SwapHelper swapHelper = new SwapHelper(V4_POOL_MANAGER);
         IERC20(address(projectToken)).approve(address(swapHelper), type(uint256).max);
         bool projIsToken0 = Currency.unwrap(key.currency0) == address(projectToken);
-        uint256 tokenId = hook.askTokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+        // The pool deploy minted the project's ask, stored under this pair.
+        uint256 tokenId = hook.askTokenIdOf({projectId: projectId, terminalToken: JBConstants.NATIVE_TOKEN});
         uint128 seedLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         uint256 buyAmountIn = _crossingBuyAmount(projectId, seedLiq);
         vm.deal(address(this), buyAmountIn + 1000 ether);
@@ -373,54 +376,80 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
     /// change that shifts the corridor, more reserved tokens, then a permissionless `addLiquidity` recycle: both
     /// positions re-mint and the pool still trades.
     function test_fork_ethPool_recycleAfterWeightChange() public {
-        _accumulateTokens(projectId, address(projectToken), 100_000e18);
+        // Seed the hook with inventory and deploy the pool with its first ask.
+        _accumulateTokens({pid: projectId, tokenAddr: address(projectToken), amount: 100_000e18});
         vm.prank(multisig);
         hook.deployPool(projectId);
-        assertTrue(hook.isPoolDeployed(projectId, JBConstants.NATIVE_TOKEN), "Pool should be deployed");
-        PoolKey memory key = hook.poolKeyOf(projectId, JBConstants.NATIVE_TOKEN);
+        assertTrue(
+            hook.isPoolDeployed({projectId: projectId, terminalToken: JBConstants.NATIVE_TOKEN}),
+            "Pool should be deployed"
+        );
+
+        // Set up a swap helper that can trade the project token in this pool.
+        PoolKey memory key = hook.poolKeyOf({projectId: projectId, terminalToken: JBConstants.NATIVE_TOKEN});
         PoolId poolId = key.toId();
         SwapHelper swapHelper = new SwapHelper(V4_POOL_MANAGER);
         IERC20(address(projectToken)).approve(address(swapHelper), type(uint256).max);
         bool projIsToken0 = Currency.unwrap(key.currency0) == address(projectToken);
-        uint256 oldTokenId = hook.askTokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+
+        // Record the first ask and the starting tick so the recycle can be compared against them.
+        uint256 oldTokenId = hook.askTokenIdOf({projectId: projectId, terminalToken: JBConstants.NATIVE_TOKEN});
         uint128 oldLiq = V4_POSITION_MANAGER.getPositionLiquidity(oldTokenId);
         (, int24 tickBefore,,) = V4_POOL_MANAGER.getSlot0(poolId);
         emit log_named_int("  Tick before swaps", tickBefore);
 
         // A real buy (give ETH, receive project token) pushes spot into the single-sided ask band and leaves it
-        // holding real ETH, then a real sell moves price back — organic two-way trading around the position.
-        uint256 buyAmountIn = _crossingBuyAmount(projectId, oldLiq);
+        // holding real ETH, then a real sell moves price back: organic two-way trading around the position.
+        uint256 buyAmountIn = _crossingBuyAmount({pid: projectId, liquidity: oldLiq});
         vm.deal(address(this), buyAmountIn + 1000 ether);
         uint256 projBeforeBuy = IERC20(address(projectToken)).balanceOf(address(this));
-        swapHelper.swap{value: projIsToken0 ? 0 : buyAmountIn}(key, !projIsToken0, -int256(buyAmountIn));
+        swapHelper.swap{value: projIsToken0 ? 0 : buyAmountIn}({
+            key: key, zeroForOne: !projIsToken0, amountSpecified: -int256(buyAmountIn)
+        });
         uint256 projReceived = IERC20(address(projectToken)).balanceOf(address(this)) - projBeforeBuy;
-        swapHelper.swap(key, projIsToken0, -int256(projReceived / 2));
+        swapHelper.swap({key: key, zeroForOne: projIsToken0, amountSpecified: -int256(projReceived / 2)});
+
+        // Log where the trades left the price.
         (, int24 tickAfterSwaps,,) = V4_POOL_MANAGER.getSlot0(poolId);
         emit log_named_int("  Tick after swaps", tickAfterSwaps);
         emit log_named_uint("  Old position liquidity", oldLiq);
 
         // Move the economic corridor with a real ruleset weight change (a genuine rate change, not incidental
         // trading).
-        _queueHalvedWeightRuleset(projectId, 5000);
-        _accumulateTokens(projectId, address(projectToken), 10_000e18);
+        _queueHalvedWeightRuleset({pid: projectId, cashOutTaxRate: 5000});
 
-        _mockOracleTwapEqualsSpot(
-            hook.oracleHook(), V4_POOL_MANAGER, hook.poolKeyOf(projectId, JBConstants.NATIVE_TOKEN)
-        );
+        // More reserved tokens arrive, so the recycle has fresh inventory for the ask.
+        _accumulateTokens({pid: projectId, tokenAddr: address(projectToken), amount: 10_000e18});
+
+        // Pin the TWAP to the spot so the hook's spot-vs-TWAP guard passes.
+        _mockOracleTwapEqualsSpot({
+            oracle: hook.oracleHook(),
+            pm: V4_POOL_MANAGER,
+            key: hook.poolKeyOf({projectId: projectId, terminalToken: JBConstants.NATIVE_TOKEN})
+        });
+
         // Permissionless: any non-owner stranger may recycle.
         vm.prank(address(0xB0BB1E));
         hook.addLiquidity({projectId: projectId, terminalToken: JBConstants.NATIVE_TOKEN});
-        uint256 newTokenId = hook.askTokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+
+        // The recycle minted a fresh ask that holds liquidity.
+        uint256 newTokenId = hook.askTokenIdOf({projectId: projectId, terminalToken: JBConstants.NATIVE_TOKEN});
         assertTrue(newTokenId != oldTokenId, "Ask token ID should change after recycle");
         uint128 newLiq = V4_POSITION_MANAGER.getPositionLiquidity(newTokenId);
         assertTrue(newLiq > 0, "New ask should have liquidity after recycle");
-        uint256 bidTokenId = hook.bidTokenIdOf(projectId, JBConstants.NATIVE_TOKEN);
+
+        // The ETH the trades left in the ask re-minted as a bid with liquidity.
+        uint256 bidTokenId = hook.bidTokenIdOf({projectId: projectId, terminalToken: JBConstants.NATIVE_TOKEN});
         assertTrue(V4_POSITION_MANAGER.getPositionLiquidity(bidTokenId) > 0, "Bid should hold the traded ETH");
         emit log_named_uint("  New position liquidity", newLiq);
+
+        // A sell after the recycle still executes against the re-minted positions.
         uint256 projBefore = IERC20(address(projectToken)).balanceOf(address(this));
-        swapHelper.swap(key, projIsToken0, -int256(1000e18));
+        swapHelper.swap({key: key, zeroForOne: projIsToken0, amountSpecified: -int256(1000e18)});
         uint256 projAfter = IERC20(address(projectToken)).balanceOf(address(this));
         assertTrue(projAfter < projBefore, "Should still be able to swap after recycle");
+
+        // Log the final price.
         (, int24 tickFinal,,) = V4_POOL_MANAGER.getSlot0(poolId);
         emit log_named_int("  Tick after recycle swap", tickFinal);
     }
@@ -439,7 +468,8 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
         );
         PoolKey memory key = hook.poolKeyOf(extremeProjectId, JBConstants.NATIVE_TOKEN);
         PoolId poolId = key.toId();
-        uint256 tokenId = hook.askTokenIdOf(extremeProjectId, JBConstants.NATIVE_TOKEN);
+        // The pool deploy minted the project's ask, stored under this pair.
+        uint256 tokenId = hook.askTokenIdOf({projectId: extremeProjectId, terminalToken: JBConstants.NATIVE_TOKEN});
         uint128 posLiq = V4_POSITION_MANAGER.getPositionLiquidity(tokenId);
         assertTrue(posLiq > 0, "Position should have liquidity at 95% tax rate");
         (uint160 sqrtPriceX96, int24 currentTick,,) = V4_POOL_MANAGER.getSlot0(poolId);
@@ -477,23 +507,33 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
     /// tick bounds/liquidity — big enough to leave real terminal-token principal behind, small enough not to send
     /// spot to the tick-space extreme (there's no interposing liquidity beyond this one position to absorb an
     /// oversized swap).
+    /// @param pid The ID of the project whose native-ETH ask band is crossed.
+    /// @param liquidity The ask position's liquidity.
+    /// @return buyAmountIn The ETH amount to buy with.
     function _crossingBuyAmount(uint256 pid, uint128 liquidity) internal view returns (uint256 buyAmountIn) {
-        (, PositionInfo info) =
-            V4_POSITION_MANAGER.getPoolAndPositionInfo(hook.askTokenIdOf(pid, JBConstants.NATIVE_TOKEN));
+        // Read the ask's live tick range from the PositionManager.
+        (, PositionInfo info) = V4_POSITION_MANAGER.getPoolAndPositionInfo(
+            hook.askTokenIdOf({projectId: pid, terminalToken: JBConstants.NATIVE_TOKEN})
+        );
         int24 tickLower = info.tickLower();
         int24 tickUpper = info.tickUpper();
+
+        // The token0 (ETH) amount that moves the price across the whole range, rounded up as an add would.
         uint256 costToFullyCross = SqrtPriceMath.getAmount0Delta({
             sqrtPriceAX96: TickMath.getSqrtPriceAtTick(tickLower),
             sqrtPriceBX96: TickMath.getSqrtPriceAtTick(tickUpper),
             liquidity: liquidity,
             roundUp: true
         });
+        // Buy 90% of that so the spot stays inside the band.
         buyAmountIn = (costToFullyCross * 90) / 100;
     }
 
     /// @notice Queue a real ruleset with a halved weight, effective immediately (the base ruleset's `duration` is
     /// 0, so `JBRulesets.deriveStartFrom` starts the next cycle at `mustStartAtOrAfter` == `block.timestamp`). Used
     /// to genuinely shift the project's issuance/cash-out corridor.
+    /// @param pid The ID of the project to queue the ruleset for.
+    /// @param cashOutTaxRate The cash-out tax rate for the queued ruleset.
     function _queueHalvedWeightRuleset(uint256 pid, uint16 cashOutTaxRate) internal {
         JBRulesetMetadata memory metadata = JBRulesetMetadata({
             reservedPercent: 1000,
@@ -600,6 +640,7 @@ contract TickBoundsAndFeeForkTest is ForkDeployHelper {
         });
         vm.startPrank(address(jbController));
         IERC20(tokenAddr).approve(address(hook), amount);
+        // Cap the gas below the automation floor so the hook records the intake and skips inline automation.
         hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
     }

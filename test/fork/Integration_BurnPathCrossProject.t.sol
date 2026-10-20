@@ -109,6 +109,7 @@ contract Integration_BurnPathCrossProject is ForkDeployHelper {
         });
         vm.startPrank(address(jbController));
         IERC20(address(pTokenA)).approve(address(hook), burnAmount);
+        // Cap the gas so the split is only taken in and the hook skips its inline automation.
         hook.processSplitWith{gas: INTAKE_ONLY_GAS}(burnCtx);
         vm.stopPrank();
         // Post-deploy inflow for A accumulates (never burned); B's accumulation is untouched (cross-project isolation).
@@ -118,7 +119,8 @@ contract Integration_BurnPathCrossProject is ForkDeployHelper {
         vm.prank(multisig);
         hook.deployPool(pidB);
         assertTrue(hook.isPoolDeployed(pidB, JBConstants.NATIVE_TOKEN), "B deployed");
-        uint256 bTokenId = hook.askTokenIdOf(pidB, JBConstants.NATIVE_TOKEN);
+        // Read the ask position that the deploy minted.
+        uint256 bTokenId = hook.askTokenIdOf({projectId: pidB, terminalToken: JBConstants.NATIVE_TOKEN});
         uint128 bLiq = V4_POSITION_MANAGER.getPositionLiquidity(bTokenId);
         assertTrue(bLiq > 0, "B has liquidity");
         // B's accumulation is consumed by its deploy; only an unpaired remainder is carried forward (never burned).
@@ -201,6 +203,7 @@ contract Integration_BurnPathCrossProject is ForkDeployHelper {
         });
         vm.startPrank(address(jbController));
         IERC20(tokenAddr).approve(address(hook), amount);
+        // Cap the gas so the split is only taken in and the hook skips its inline automation.
         hook.processSplitWith{gas: INTAKE_ONLY_GAS}(context);
         vm.stopPrank();
     }

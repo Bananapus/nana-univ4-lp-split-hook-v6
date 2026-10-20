@@ -83,6 +83,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// outright.
     error JBUniswapV4LPSplitHook_AmountExceedsUint128(uint256 amount);
 
+    /// @notice Thrown when a project's corridor is empty and the hook holds no live position to retire: the cash-out
+    /// value per token reaches the issuance price, or no pair of distinct aligned ticks fits between them, so no
+    /// quotable range is both at or above the cash-out value and at or below the issuance price.
+    error JBUniswapV4LPSplitHook_EmptyCorridor(uint256 projectId, address terminalToken);
+
     /// @notice Thrown when a pre-initialized pool's price sits at or past the CASH-OUT FLOOR side of the project's
     /// economic tick range.
     /// @dev This prevents frontrunning attacks where an attacker initializes the pool at an extreme price and the
@@ -120,11 +125,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @notice Thrown when the terminal token supplied for an operation is not the one this clone's pool is paired
     /// against.
     error JBUniswapV4LPSplitHook_InvalidTerminalToken(uint256 projectId, address terminalToken);
-
-    /// @notice Thrown when a project's corridor is empty and the hook holds no live position to retire: the cash-out
-    /// value per token reaches the issuance price, or no pair of distinct aligned ticks fits between them, so no
-    /// quotable range is both at or above the cash-out value and at or below the issuance price.
-    error JBUniswapV4LPSplitHook_EmptyCorridor(uint256 projectId, address terminalToken);
 
     /// @notice Thrown when the pool's live spot leaves nothing for the hook to deploy: no aligned ask range between the
     /// spot and the issuance ceiling (or no project tokens to fill one), AND no terminal tokens to offer as bids
@@ -166,15 +166,16 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @notice Thrown when a temporary Permit2 allowance granted for an operation is not fully consumed by it.
     error JBUniswapV4LPSplitHook_TemporaryAllowanceNotConsumed(address token, address spender, uint256 allowance);
 
-    /// @notice Thrown when the oracle TWAP cannot be read (e.g. the pool oracle has not warmed up yet), so the pool
-    /// price cannot be validated and liquidity must not be added.
-    error JBUniswapV4LPSplitHook_TwapUnavailable(uint256 projectId, address terminalToken);
-
     /// @notice Thrown when sending `amount` of `token` (to a terminal, a fee claimant, or a mint) debited this hook by
     /// more than `amount`.
     error JBUniswapV4LPSplitHook_TransferNotExact(address token, uint256 amount);
 
-    /// @notice Thrown when the best-effort fee-cut payment helper is called by anyone other than this contract itself.
+    /// @notice Thrown when the oracle TWAP cannot be read (e.g. the pool oracle has not warmed up yet), so the pool
+    /// price cannot be validated and liquidity must not be added.
+    error JBUniswapV4LPSplitHook_TwapUnavailable(uint256 projectId, address terminalToken);
+
+    /// @notice Thrown when a self-call target (`burnFeeRemainder`, `executeAutomationFor`, `sendToTerminal`) is called
+    /// by anyone other than this contract itself, so only the hook's own best-effort paths can reach them.
     error JBUniswapV4LPSplitHook_Unauthorized();
 
     /// @notice Thrown when the token backing a project's unclaimed fee balance changes, so the prior balance can no
@@ -225,9 +226,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @notice The slippage floor, out of `BPS`, applied to a burned position's contract-derived principal read.
     /// @dev When retiring a position, the hook computes the position's current token amounts from its on-chain
     /// liquidity and the live pool price, then requires the BURN to return at least this fraction of that read. The
-    /// floor is always
-    /// contract-derived — callers never supply burn minimums — so a sandwiched spot cannot make the hook accept an
-    /// arbitrarily bad unwind.
+    /// floor is always contract-derived (callers never supply burn minimums), so a sandwiched spot cannot make the hook
+    /// accept an arbitrarily bad unwind.
     uint256 internal constant _BURN_SLIPPAGE_BPS = 9500;
 
     /// @notice Deadline window (in seconds) for PositionManager and Permit2 operations.
@@ -354,9 +354,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @custom:param projectId The ID of the project to check deployment status for.
     mapping(uint256 projectId => bool hasDeployedPool) public hasDeployedPool;
 
-    /// @notice The ruleset weight recorded when the hook first starts accumulating project tokens for each project.
-    /// @dev Snapshotted on first accumulation as an accumulation-era reference. `deployPool` and `addLiquidity` are
-    /// permissionless and gated only by economic + oracle-TWAP guards, not by this weight.
+    /// @notice The ruleset weight recorded at each project's first successful deploy or recycle.
+    /// @dev Snapshotted once, by the first `deployPool`/`addLiquidity` run (intake does not read rulesets), as a
+    /// processing-era reference. Both entry points are permissionless and gated only by the economic and oracle-TWAP
+    /// guards, not by this weight.
     /// @custom:param projectId The ID of the project to get the initial accumulation-era ruleset weight of.
     mapping(uint256 projectId => uint256 weight) public initialWeightOf;
 
@@ -411,6 +412,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     // ---------------------------- constructor -------------------------- //
     //*********************************************************************//
 
+    /// @notice Deploy the implementation that every clone delegates to, wiring the chain-same Juicebox contracts.
+    /// @dev Chain-specific Uniswap V4 wiring and the fee config are set per clone through `initialize`.
     /// @param directory JBDirectory address.
     /// @param permissions JBPermissions address.
     /// @param tokens JBTokens address.
@@ -429,6 +432,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     )
         JBPermissioned(permissions)
     {
+        // Store the Core wiring; the projects registry is read from the directory so the two always agree.
         DIRECTORY = directory;
         PERMIT2 = permit2;
         PROJECTS = IJBDirectory(directory).PROJECTS();
@@ -436,69 +440,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         TOKENS = tokens;
     }
 
-    /// @notice Initialize per-instance config + chain-specific Uniswap V4 addresses on a clone. Callable once.
-    /// @dev The implementation contract can be initialized by anyone, but this is harmless — each clone gets its own
-    /// storage, so the implementation's state is never used. In normal production use, the deployer factory's
-    /// `deployHookFor` atomically clones + initializes in the same transaction, so the call site for `initialize`
-    /// is uncontested.
-    /// @param initialFeeProjectId Project ID to receive LP fees.
-    /// @param initialFeePercent Percentage of LP fees to route to fee project, out of `BPS` (e.g., 3800 = 38%).
-    /// @param newPoolManager The Uniswap V4 PoolManager on this chain.
-    /// @param newPositionManager The Uniswap V4 PositionManager on this chain.
-    /// @param newOracleHook The Uniswap V4 oracle hook deployed against `newPoolManager` on this chain.
-    /// @param newBuybackHook The buyback-hook registry to configure for this clone. May be the zero address.
-    function initialize(
-        uint256 initialFeeProjectId,
-        uint256 initialFeePercent,
-        IPoolManager newPoolManager,
-        IPositionManager newPositionManager,
-        IHooks newOracleHook,
-        IJBBuybackHookRegistry newBuybackHook
-    )
-        external
-    {
-        // poolManager doubles as the "already initialized" sentinel: every legitimate initialize sets it non-zero.
-        // Reject a zero poolManager up front so callers cannot accidentally leave the sentinel uninitialized and
-        // re-enter `initialize` with different fee settings on the same clone.
-        // Reject a second initialization: a non-zero `poolManager` means this clone was already configured.
-        if (address(poolManager) != address(0)) revert JBUniswapV4LPSplitHook_AlreadyInitialized();
-        // Reject a zero `poolManager` up front so the "already initialized" sentinel is never left unset, which would
-        // let `initialize` be re-entered with different fee settings on the same clone.
-        if (address(newPoolManager) == address(0)) revert JBUniswapV4LPSplitHook_AlreadyInitialized();
-
-        // Fee percent is a fraction of `BPS` (10000 = 100%); a value above that is nonsensical and would over-route.
-        if (initialFeePercent > BPS) {
-            revert JBUniswapV4LPSplitHook_InvalidFeePercent({feePercent: initialFeePercent, maxFeePercent: BPS});
-        }
-
-        // If fees are configured, a valid fee project must be specified — otherwise fee tokens get stuck
-        // because primaryTerminalOf(0, token) returns address(0).
-        if (initialFeePercent > 0 && initialFeeProjectId == 0) {
-            revert JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject({
-                feePercent: initialFeePercent, feeProjectId: initialFeeProjectId
-            });
-        }
-
-        // Validate the configured fee project actually exists (has a controller) so routed fees have a real
-        // destination; a non-existent fee project would silently strand every fee collection.
-        if (initialFeeProjectId != 0) {
-            address feeController = _controllerOf(initialFeeProjectId);
-            if (feeController == address(0)) {
-                revert JBUniswapV4LPSplitHook_InvalidProjectId({
-                    projectId: initialFeeProjectId, controller: feeController, projectToken: address(0)
-                });
-            }
-        }
-
-        // Persist the per-clone fee config and chain-specific Uniswap V4 wiring. These are write-once (the sentinel
-        // check above guarantees this body runs at most once per clone), so they are effectively immutable thereafter.
-        feeProjectId = initialFeeProjectId;
-        feePercent = initialFeePercent;
-        poolManager = newPoolManager;
-        positionManager = newPositionManager;
-        oracleHook = newOracleHook;
-        buybackHook = newBuybackHook;
-    }
+    //*********************************************************************//
+    // ------------------------- receive / fallback ---------------------- //
+    //*********************************************************************//
 
     /// @notice Accept ETH transfers (needed for V4 TAKE operations that return native ETH, and native-ETH terminal
     /// interactions). Native payouts arrive through `processSplitWith`, not here.
@@ -516,7 +460,55 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param projectId The ID of the project whose accumulated tokens should be added as liquidity.
     /// @param terminalToken The terminal token paired with the project token in the deployed pool.
     function addLiquidity(uint256 projectId, address terminalToken) external nonReentrant {
+        // The shared executor holds the logic; this entry point only adds the reentrancy lock.
         _addLiquidity({projectId: projectId, terminalToken: terminalToken});
+    }
+
+    /// @notice Burn `count` of this hook's project ERC-20 through the project's controller, lowering the project's
+    /// supply. Callable only via this contract's own best-effort `_routeCollectedFees` so its revert can be caught and
+    /// the remainder kept in the ask ledger instead.
+    /// @dev The hook burns its own tokens (`holder == msg.sender`), so the controller needs no permission grant. Core
+    /// burns a holder's credits BEFORE its ERC-20, so the hook first claims its own credits of this project into the
+    /// ERC-20 and adds them to the ask ledger (`_claimHookCreditsFor`, the same step a recycle runs); credits sent to
+    /// the hook from outside therefore cannot divert the burn. Fee-credit claims the hook owes (only when this project
+    /// is a fee project with claims from before it tokenized) stay credits, and the burn would consume them first, so
+    /// the burn is accepted only when exactly `count` ERC-20 left the hook and its credit balance is unchanged;
+    /// anything else reverts (undoing the claim) and is forgiven by the caller.
+    /// @dev This target is intentionally NOT `nonReentrant`: it is reached through an internal `this.` self-call while
+    /// the surrounding entry point still holds the reentrancy lock, so guarding it would self-revert. A genuine
+    /// reentrant call into any guarded entry point during the burn is still rejected by that outer lock, and the
+    /// `msg.sender == address(this)` gate blocks any direct external call.
+    /// @param projectId The ID of the project whose tokens to burn.
+    /// @param projectToken The project's ERC-20, whose hook balance must fall by exactly `count`.
+    /// @param count The number of project tokens to burn.
+    function burnFeeRemainder(uint256 projectId, address projectToken, uint256 count) external {
+        // Only the hook's own `_routeCollectedFees` self-call may burn its tokens.
+        if (msg.sender != address(this)) revert JBUniswapV4LPSplitHook_Unauthorized();
+
+        // A missing controller (no code) reverts the call, which the caller forgives like any other failure.
+        address controller = _controllerOf(projectId);
+
+        // Clear the hook's own credits out of the way of Core's credits-first burn.
+        accumulatedProjectTokens[projectId] += _claimHookCreditsFor({projectId: projectId, controller: controller});
+
+        // Snapshot both balances the burn may touch, so the check below can prove exactly what it took.
+        uint256 creditsBefore = IJBTokens(TOKENS).creditBalanceOf({holder: address(this), projectId: projectId});
+        uint256 balanceBefore = IERC20(projectToken).balanceOf(address(this));
+
+        // Burn the remainder from the hook's own holdings through the project's controller.
+        IJBController(controller).burnTokensOf({
+            holder: address(this), projectId: projectId, tokenCount: count, memo: ""
+        });
+
+        // A balance that rose instead of falling underflows and reverts, which is forgiven the same way.
+        if (
+            IJBTokens(TOKENS).creditBalanceOf({holder: address(this), projectId: projectId}) != creditsBefore
+                // The check is exact on purpose: any debit other than `count` must revert.
+                // forge-lint: disable-next-line(incorrect-strict-equality)
+                || balanceBefore - IERC20(projectToken).balanceOf(address(this)) != count
+        ) {
+            revert JBUniswapV4LPSplitHook_FeeBurnNotExact({projectId: projectId, count: count});
+        }
     }
 
     /// @notice Claims accumulated fee proceeds for `projectId` and sends them to `beneficiary`.
@@ -538,7 +530,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             _claimFeeTokens({projectId: projectId, beneficiary: beneficiary, tokenAmount: tokenAmount});
         }
 
-        // Then claim any fee-project credits accrued while the fee project had no ERC-20 (best-effort; see `_dev`).
+        // Then claim any fee-project credits accrued while the fee project had no ERC-20 (best-effort; see the @dev
+        // above).
         uint256 creditAmount = claimableFeeCredits[projectId];
         if (creditAmount > 0) {
             _claimFeeCredits({projectId: projectId, beneficiary: beneficiary, creditAmount: creditAmount});
@@ -554,6 +547,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param terminalToken The terminal token paired with the project token in the pool.
     // forge-lint: disable-next-line(mixed-case-function)
     function collectAndRouteLPFees(uint256 projectId, address terminalToken) external nonReentrant {
+        // The project's two live positions for this pairing (zero for a side with none).
         uint256 askTokenId = askTokenIdOf[projectId][terminalToken];
         uint256 bidTokenId = bidTokenIdOf[projectId][terminalToken];
 
@@ -568,6 +562,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         address projectToken = _tokenOf(projectId);
         PoolKey memory key = poolKeysOf[projectId][terminalToken];
 
+        // Collect and route each live position's fees; the positions themselves stay in place.
         if (askTokenId != 0) {
             _collectAndRouteFees({
                 projectId: projectId,
@@ -594,7 +589,92 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// already-initialized pool, the oracle-TWAP deviation guard.
     /// @param projectId The ID of the project whose accumulated tokens should be deployed as LP.
     function deployPool(uint256 projectId) external nonReentrant {
+        // The shared executor holds the logic; this entry point only adds the reentrancy lock.
         _deployPool(projectId);
+    }
+
+    /// @notice Execute an inline automation attempt for a project: deploy the pool if none exists yet, otherwise add
+    /// the accumulated inventory to the deployed pool's position. Callable only via this contract's own best-effort
+    /// `_attemptAutomation` so a revert anywhere in the flow can be caught and forgiven while the parent frame's
+    /// accepted inventory stays intact.
+    /// @dev This target is intentionally NOT `nonReentrant`: it is reached through an internal `this.` self-call
+    /// while `processSplitWith` still holds the reentrancy lock, so guarding it would self-revert. A genuine
+    /// reentrant call into any guarded entry point during the attempt is still rejected by that outer lock, and the
+    /// `msg.sender == address(this)` gate blocks any direct external call.
+    /// @param projectId The ID of the project to attempt automation for.
+    function executeAutomationFor(uint256 projectId) external {
+        // Only the hook's own `_attemptAutomation` self-call may run an attempt.
+        if (msg.sender != address(this)) revert JBUniswapV4LPSplitHook_Unauthorized();
+
+        // A deployed project recycles on its recorded pairing; an undeployed one deploys its first pool.
+        if (hasDeployedPool[projectId]) {
+            _addLiquidity({projectId: projectId, terminalToken: deployedTerminalTokenOf[projectId]});
+        } else {
+            _deployPool(projectId);
+        }
+    }
+
+    /// @notice Initialize per-instance config + chain-specific Uniswap V4 addresses on a clone. Callable once.
+    /// @dev The implementation contract can be initialized by anyone, but this is harmless — each clone gets its own
+    /// storage, so the implementation's state is never used. In normal production use, the deployer factory's
+    /// `deployHookFor` atomically clones + initializes in the same transaction, so the call site for `initialize`
+    /// is uncontested.
+    /// @param initialFeeProjectId Project ID to receive LP fees.
+    /// @param initialFeePercent Percentage of LP fees to route to fee project, out of `BPS` (e.g., 3800 = 38%).
+    /// @param newPoolManager The Uniswap V4 PoolManager on this chain.
+    /// @param newPositionManager The Uniswap V4 PositionManager on this chain.
+    /// @param newOracleHook The Uniswap V4 oracle hook deployed against `newPoolManager` on this chain.
+    /// @param newBuybackHook The buyback-hook registry to configure for this clone. May be the zero address.
+    function initialize(
+        uint256 initialFeeProjectId,
+        uint256 initialFeePercent,
+        IPoolManager newPoolManager,
+        IPositionManager newPositionManager,
+        IHooks newOracleHook,
+        IJBBuybackHookRegistry newBuybackHook
+    )
+        external
+    {
+        // `poolManager` doubles as the "already initialized" sentinel: every legitimate initialize sets it non-zero, so
+        // a non-zero value means this clone was already configured.
+        if (address(poolManager) != address(0)) revert JBUniswapV4LPSplitHook_AlreadyInitialized();
+        // Reject a zero `poolManager` up front so the "already initialized" sentinel is never left unset, which would
+        // let `initialize` be re-entered with different fee settings on the same clone.
+        if (address(newPoolManager) == address(0)) revert JBUniswapV4LPSplitHook_AlreadyInitialized();
+
+        // Fee percent is a fraction of `BPS` (10000 = 100%); a value above that is nonsensical and would over-route.
+        if (initialFeePercent > BPS) {
+            revert JBUniswapV4LPSplitHook_InvalidFeePercent({feePercent: initialFeePercent, maxFeePercent: BPS});
+        }
+
+        // If fees are configured, a valid fee project must be specified — otherwise fee tokens get stuck
+        // because primaryTerminalOf(0, token) returns address(0).
+        if (initialFeePercent > 0 && initialFeeProjectId == 0) {
+            revert JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject({
+                feePercent: initialFeePercent, feeProjectId: initialFeeProjectId
+            });
+        }
+
+        // Validate the configured fee project actually exists (has a controller) so routed fees have a real
+        // destination; a non-existent fee project would silently strand every fee collection.
+        if (initialFeeProjectId != 0) {
+            // A project without a controller does not exist (or cannot receive payments).
+            address feeController = _controllerOf(initialFeeProjectId);
+            if (feeController == address(0)) {
+                revert JBUniswapV4LPSplitHook_InvalidProjectId({
+                    projectId: initialFeeProjectId, controller: feeController, projectToken: address(0)
+                });
+            }
+        }
+
+        // Persist the per-clone fee config and chain-specific Uniswap V4 wiring. These are write-once (the sentinel
+        // check above guarantees this body runs at most once per clone), so they are effectively immutable thereafter.
+        feeProjectId = initialFeeProjectId;
+        feePercent = initialFeePercent;
+        poolManager = newPoolManager;
+        positionManager = newPositionManager;
+        oracleHook = newOracleHook;
+        buybackHook = newBuybackHook;
     }
 
     /// @notice Called by the Juicebox controller when reserved tokens are distributed to this hook's split, or by one
@@ -609,7 +689,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// before the ledger write; a revert makes Core return the allocation to the project. Once intake has accounted
     /// the allocation, nothing in this frame reverts: automation runs behind a gas-bounded self-call whose failure is
     /// reported through `LiquidityAutomationFailed` (selector only, revert data is never copied unbounded).
+    /// @param context The split hook context Core built for the distribution or payout.
     function processSplitWith(JBSplitHookContext calldata context) external payable nonReentrant {
+        // The split must name this hook, so a split routed elsewhere cannot be accounted here.
         if (address(context.split.hook) != address(this)) {
             revert JBUniswapV4LPSplitHook_NotHookSpecifiedInContext({
                 expectedHook: address(this), actualHook: address(context.split.hook)
@@ -626,6 +708,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // value should ever accompany them.
         if (msg.value != 0) revert JBUniswapV4LPSplitHook_UnexpectedMsgValue({value: msg.value});
 
+        // Reserved tokens come only from the project's own controller, which must exist.
         address controller = _controllerOf(context.projectId);
         if (controller == address(0)) {
             revert JBUniswapV4LPSplitHook_InvalidProjectId({
@@ -656,6 +739,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 revert JBUniswapV4LPSplitHook_InsufficientBalance({available: creditBalance, required: required});
             }
 
+            // Ledger the delivered credits; intake is complete and no automation can run yet.
             accumulatedProjectCredits[context.projectId] += context.amount;
             return;
         }
@@ -672,8 +756,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // Accumulate the received project tokens. This is the hook's only sink for reserved-token inflow, both before
         // AND after pool deployment — the hook never burns reserved tokens. Pre-deployment, `deployPool` consumes the
         // accumulation; post-deployment, `addLiquidity` does. Burning is a protocol-layer split-routing decision (route
-        // a split to
-        // {projectId:0, hook:0, beneficiary:0xdead}), not this hook's job.
+        // a split to {projectId:0, hook:0, beneficiary:0xdead}), not this hook's job.
         _accumulateTokens({projectId: context.projectId, amount: received});
 
         // Intake is complete: the allocation is durably represented in the ledger. Everything below is best-effort
@@ -684,16 +767,72 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
     }
 
-    //*********************************************************************//
-    // ------------------------- external views -------------------------- //
-    //*********************************************************************//
+    /// @notice Send `amount` of `token` to `terminal` for `projectId`: `pay` it (the fee-project cut, minting
+    /// fee-project tokens to this hook) or `addToBalanceOf` it (an LP-fee remainder returned to the project's own
+    /// treasury). Callable only via this contract's own best-effort self-calls so its revert (from the terminal or the
+    /// ERC-20 allowance-consumption check) can be caught and forgiven.
+    /// @dev This target is intentionally NOT `nonReentrant`: it is reached through an internal `this.` self-call while
+    /// the surrounding entry point still holds the reentrancy lock, so guarding it would self-revert. A genuine
+    /// reentrant call into any guarded entry point during the terminal call is still rejected by that outer lock, and
+    /// the `msg.sender == address(this)` gate blocks any direct external call.
+    /// @param terminal The terminal to send to. A terminal with no code reverts the call.
+    /// @param projectId The project to pay or add to the balance of.
+    /// @param token The token to send (native sentinel or ERC-20).
+    /// @param amount The amount to send.
+    /// @param shouldPay Whether to `pay` (minting project tokens to this hook) rather than `addToBalanceOf`.
+    /// @return beneficiaryTokenCount The token/credit count the terminal reports minting to this hook (0 when adding to
+    /// balance).
+    function sendToTerminal(
+        address terminal,
+        uint256 projectId,
+        address token,
+        uint256 amount,
+        bool shouldPay
+    )
+        external
+        returns (uint256 beneficiaryTokenCount)
+    {
+        // Only the hook's own fee-routing self-calls may send its balances to a terminal.
+        if (msg.sender != address(this)) revert JBUniswapV4LPSplitHook_Unauthorized();
 
-    /// @notice Whether this contract implements a given interface (ERC-165).
-    /// @param interfaceId The ERC-165 interface identifier to check.
-    /// @return supported True if `interfaceId` is the hook or split-hook interface.
-    function supportsInterface(bytes4 interfaceId) public pure override returns (bool supported) {
-        // Advertise both the hook's own interface and the split-hook interface the controller calls into.
-        return interfaceId == type(IJBUniswapV4LPSplitHook).interfaceId || interfaceId == type(IJBSplitHook).interfaceId;
+        // Native ETH is forwarded as value; ERC-20 is pulled by the terminal via an exact-use approval that must be
+        // fully consumed (a leftover allowance is live spend authority and reverts — caught upstream as a forgive).
+        bool isNative = _isNativeToken(token);
+        uint256 value = isNative ? amount : 0;
+        uint256 balanceBefore = _getTerminalTokenBalance(token);
+        if (!isNative) IERC20(token).forceApprove({spender: terminal, value: amount});
+
+        if (shouldPay) {
+            // Self-call only, to the directory's primary terminal; the debit is measured on purpose.
+            // forge-lint: disable-start(arbitrary-send-eth,reentrancy-balance)
+            beneficiaryTokenCount = IJBMultiTerminal(terminal).pay{value: value}({
+                projectId: projectId,
+                token: token,
+                amount: amount,
+                beneficiary: address(this),
+                minReturnedTokens: 0,
+                memo: "LP Fee",
+                metadata: ""
+            });
+            // forge-lint: disable-end(arbitrary-send-eth,reentrancy-balance)
+        } else {
+            // Self-call only, to the directory's primary terminal; the debit is measured on purpose.
+            // forge-lint: disable-start(arbitrary-send-eth,reentrancy-balance)
+            IJBMultiTerminal(terminal).addToBalanceOf{value: value}({
+                projectId: projectId, token: token, amount: amount, shouldReturnHeldFees: false, memo: "", metadata: ""
+            });
+            // forge-lint: disable-end(arbitrary-send-eth,reentrancy-balance)
+        }
+
+        // The terminal must have spent the whole exact-use approval, leaving no live spend authority.
+        if (!isNative) _requireTemporaryAllowanceConsumed({token: token, spender: terminal});
+
+        // A token that charges the sender on top of the transfer would debit more than `amount` and underback the
+        // other ledgers; revert so the caller's catch keeps the whole amount ledgered instead.
+        uint256 balanceAfter = _getTerminalTokenBalance(token);
+        if (balanceBefore > balanceAfter && balanceBefore - balanceAfter > amount) {
+            revert JBUniswapV4LPSplitHook_TransferNotExact({token: token, amount: amount});
+        }
     }
 
     //*********************************************************************//
@@ -714,7 +853,16 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param terminalToken The terminal token paired with the project token.
     /// @return key The stored pool key (zero-valued if no pool has been deployed for the pair).
     function poolKeyOf(uint256 projectId, address terminalToken) public view returns (PoolKey memory key) {
+        // Read the key stored at deployment.
         return poolKeysOf[projectId][terminalToken];
+    }
+
+    /// @notice Whether this contract implements a given interface (ERC-165).
+    /// @param interfaceId The ERC-165 interface identifier to check.
+    /// @return supported True if `interfaceId` is the hook or split-hook interface.
+    function supportsInterface(bytes4 interfaceId) public pure override returns (bool supported) {
+        // Advertise both the hook's own interface and the split-hook interface the controller calls into.
+        return interfaceId == type(IJBUniswapV4LPSplitHook).interfaceId || interfaceId == type(IJBSplitHook).interfaceId;
     }
 
     //*********************************************************************//
@@ -765,12 +913,14 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             });
         }
 
+        // What actually arrived, measured per token kind below.
         uint256 received = 0;
         if (_isNativeToken(context.token)) {
             // Native ETH arrives as exactly the payout's value.
             if (msg.value != context.amount) revert JBUniswapV4LPSplitHook_UnexpectedMsgValue({value: msg.value});
             received = msg.value;
         } else {
+            // An ERC-20 payout carries no native value.
             if (msg.value != 0) revert JBUniswapV4LPSplitHook_UnexpectedMsgValue({value: msg.value});
             if (context.amount > 0) {
                 // Pull the whole offered allowance; the balance delta handles fee-on-transfer tokens.
@@ -780,6 +930,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             }
         }
 
+        // The bid's ledger grows by exactly what was received.
         accumulatedTerminalTokens[context.projectId][context.token] += received;
 
         // Emitted under the nonReentrant lock, after the directory check and the token pull.
@@ -819,8 +970,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // forge-lint: disable-next-line(unused-return)
         (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
 
-        // Record the ruleset weight as a processing-era reference on the first successful attempt, now that intake
-        // no longer reads rulesets.
+        // Record the ruleset weight once, at the first successful deploy or recycle, as a processing-era reference.
         if (initialWeightOf[projectId] == 0) initialWeightOf[projectId] = ruleset.weight;
 
         // Recycling is allowed at any time, with or without new tokens, so idle ledgered inventory and a moved corridor
@@ -843,6 +993,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // the live spot, so a sandwiched/JIT-skewed spot would re-center both positions around a manipulated price.
         int24 twapTick = _requireSpotNearTwap({projectId: projectId, terminalToken: terminalToken, key: key});
 
+        // Burn and re-mint both positions, anchored to the validated TWAP.
         _recycle({
             projectId: projectId,
             projectToken: projectToken,
@@ -924,9 +1075,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @notice Take a best-effort protocol fee cut of `amount` (in `feeToken`) for `projectId` by paying it to the
     /// configured fee project, and return the non-cut remainder. Symmetric across the terminal-token and project-token
     /// sides. The cut is forgiven — the full `amount` is returned — when there is no cut to take, when the fee
-    /// project
-    /// has no terminal accepting `feeToken`, or when the fee terminal's `pay` reverts; a forgiven cut never blocks the
-    /// surrounding fee collection.
+    /// project has no terminal accepting `feeToken`, or when the fee terminal's `pay` reverts; a forgiven cut never
+    /// blocks the surrounding fee collection.
     /// @dev Fee routing uses zero slippage (minReturnedTokens = 0) by design: slippage protection is the fee project's
     /// responsibility (via its own data hook / buyback hook), not this contract's. The reentrancy-safe reserve dance
     /// (pre-increment `_totalOutstandingFeeTokenClaims`/`_inflightFeeRoutingCount` before the external pay, reconcile
@@ -943,6 +1093,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         internal
         returns (uint256 remainder)
     {
+        // The cut is `feePercent` of the amount (rounded down); a zero cut skips the terminal lookup entirely.
         uint256 cut = (amount * feePercent) / BPS;
         address feeTerminal = cut == 0 ? address(0) : _primaryTerminalOf({projectId: feeProjectId, token: feeToken});
 
@@ -985,6 +1136,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             _inflightFeeRoutingCount[feeProjectToken] += 1;
         }
 
+        // The fee-project tokens (or credits) the pay mints to this hook.
         uint256 received = 0;
         // Pay the cut best-effort. The pay (plus its ERC-20 approve + allowance-consumption check) runs inside an
         // external self-call so a revert on ANY of them is caught here and forgiven rather than bubbling up and
@@ -1027,6 +1179,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 }
             }
 
+            // The project keeps everything but the paid cut.
             remainder = amount - cut;
         } catch {
             // Forgive the cut: fully roll back the pre-incremented reserve and return the whole amount as the
@@ -1069,7 +1222,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         returns (bool success, bytes4 reasonSelector)
     {
         assembly ("memory-safe") {
+            // Call this contract with no value and no returndata copy, so a large revert payload costs nothing here.
             success := call(gasLimit, address(), 0, add(data, 0x20), mload(data), 0, 0)
+            // On failure, keep only a selector, and only when the revert data is long enough to hold one.
             if iszero(success) {
                 if gt(returndatasize(), 3) {
                     // Scratch space: zero the word, lay the selector into its top bytes, and read it back.
@@ -1114,81 +1269,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         _modifyLiquidities({unlockData: abi.encode(burnActions, burnParams), value: 0});
     }
 
-    /// @notice Burn `count` of this hook's project ERC-20 through the project's controller, lowering the project's
-    /// supply. Callable only via this contract's own best-effort `_routeCollectedFees` so its revert can be caught and
-    /// the remainder kept in the ask ledger instead.
-    /// @dev The hook burns its own tokens (`holder == msg.sender`), so the controller needs no permission grant. Core
-    /// burns a holder's credits BEFORE its ERC-20, so the hook first claims its own credits of this project into the
-    /// ERC-20 and adds them to the ask ledger (`_claimHookCreditsFor`, the same step a recycle runs); credits sent to
-    /// the hook from outside therefore cannot divert the burn. Fee-credit claims the hook owes (only when this project
-    /// is a fee project with claims from before it tokenized) stay credits, and the burn would consume them first, so
-    /// the burn is accepted only when exactly `count` ERC-20 left the hook and its credit balance is unchanged;
-    /// anything else reverts (undoing the claim) and is forgiven by the caller.
-    /// @dev This target is intentionally NOT `nonReentrant`: it is reached through an internal `this.` self-call while
-    /// the surrounding entry point still holds the reentrancy lock, so guarding it would self-revert. A genuine
-    /// reentrant call into any guarded entry point during the burn is still rejected by that outer lock, and the
-    /// `msg.sender == address(this)` gate blocks any direct external call.
-    /// @param projectId The ID of the project whose tokens to burn.
-    /// @param projectToken The project's ERC-20, whose hook balance must fall by exactly `count`.
-    /// @param count The number of project tokens to burn.
-    function burnFeeRemainder(uint256 projectId, address projectToken, uint256 count) external {
-        if (msg.sender != address(this)) revert JBUniswapV4LPSplitHook_Unauthorized();
-
-        // A missing controller (no code) reverts the call, which the caller forgives like any other failure.
-        address controller = _controllerOf(projectId);
-
-        // Clear the hook's own credits out of the way of Core's credits-first burn.
-        accumulatedProjectTokens[projectId] += _claimHookCreditsFor({projectId: projectId, controller: controller});
-
-        uint256 creditsBefore = IJBTokens(TOKENS).creditBalanceOf({holder: address(this), projectId: projectId});
-        uint256 balanceBefore = IERC20(projectToken).balanceOf(address(this));
-
-        IJBController(controller).burnTokensOf({
-            holder: address(this), projectId: projectId, tokenCount: count, memo: ""
-        });
-
-        // A balance that rose instead of falling underflows and reverts, which is forgiven the same way.
-        if (
-            IJBTokens(TOKENS).creditBalanceOf({holder: address(this), projectId: projectId}) != creditsBefore
-                // The check is exact on purpose: any debit other than `count` must revert.
-                // forge-lint: disable-next-line(incorrect-strict-equality)
-                || balanceBefore - IERC20(projectToken).balanceOf(address(this)) != count
-        ) {
-            revert JBUniswapV4LPSplitHook_FeeBurnNotExact({projectId: projectId, count: count});
-        }
-    }
-
-    /// @notice The contract-derived burn slippage floor for `tokenId`: `_BURN_SLIPPAGE_BPS`/`BPS` of the position's
-    /// principal computed from its on-chain liquidity and range at the live pool price. Returned in (currency0,
-    /// currency1) order to match `BURN_POSITION`. Callers never supply burn minimums.
-    /// @param tokenId The position NFT token ID to be burned.
-    /// @param key The pool key identifying the Uniswap V4 pool.
-    /// @return min0 The minimum currency0 the burn must return.
-    /// @return min1 The minimum currency1 the burn must return.
-    function _burnSlippageFloor(uint256 tokenId, PoolKey memory key)
-        internal
-        view
-        returns (uint128 min0, uint128 min1)
-    {
-        uint128 liquidity = positionManager.getPositionLiquidity(tokenId);
-        if (liquidity == 0) return (0, 0);
-
-        // Only the position's range is needed; the caller already has the pool key.
-        // forge-lint: disable-next-line(unused-return)
-        (, PositionInfo info) = positionManager.getPoolAndPositionInfo(tokenId);
-        (uint256 amount0, uint256 amount1) = _positionPrincipal({
-            sqrtPriceX96: _getSqrtPriceX96(key),
-            tickLower: info.tickLower(),
-            tickUpper: info.tickUpper(),
-            liquidity: liquidity
-        });
-
-        // Position principal is bounded by pooled token balances, so the discounted floor normally fits in uint128;
-        // reject the pathological case rather than let a wraparound shrink the floor and accept a bad unwind.
-        min0 = _toUint128((amount0 * _BURN_SLIPPAGE_BPS) / BPS);
-        min1 = _toUint128((amount1 * _BURN_SLIPPAGE_BPS) / BPS);
-    }
-
     /// @notice Carry leftover tokens after an LP add forward. Project-token leftovers return to the accumulation ledger
     /// and terminal-token leftovers return to the terminal ledger, both becoming this project's liquidity on the next
     /// mint.
@@ -1215,6 +1295,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     )
         internal
     {
+        // What the mints took from the hook, per token: the balance drop since the caller's snapshot.
         uint256 postProjBal = IERC20(projectToken).balanceOf(address(this));
         uint256 postTermBal = _getTerminalTokenBalance(terminalToken);
         uint256 projConsumed = projBalBefore > postProjBal ? projBalBefore - postProjBal : 0;
@@ -1229,9 +1310,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             revert JBUniswapV4LPSplitHook_TransferNotExact({token: terminalToken, amount: intendedTerminalAmount});
         }
 
+        // What the mints were offered but did not take.
         uint256 projLeftover = intendedProjectAmount > projConsumed ? intendedProjectAmount - projConsumed : 0;
         uint256 termLeftover = intendedTerminalAmount > termConsumed ? intendedTerminalAmount - termConsumed : 0;
 
+        // Return the leftovers to the ledgers, on top of anything already there.
         if (projLeftover > 0) accumulatedProjectTokens[projectId] += projLeftover;
         if (termLeftover > 0) accumulatedTerminalTokens[projectId][terminalToken] += termLeftover;
     }
@@ -1309,10 +1392,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param controller The project's controller.
     /// @return creditCount The ERC-20 project tokens this hook received for its claimed credits.
     function _claimHookCreditsFor(uint256 projectId, address controller) internal returns (uint256 creditCount) {
+        // Every credit the hook holds for the project, less the fee-credit claims it owes to beneficiaries.
         uint256 held = IJBTokens(TOKENS).creditBalanceOf({holder: address(this), projectId: projectId});
         uint256 owed = _totalOutstandingFeeCreditClaims[projectId];
         creditCount = held > owed ? held - owed : 0;
 
+        // The credit ledger is folded into the claim below (or was empty), so it clears either way.
         accumulatedProjectCredits[projectId] = 0;
         if (creditCount == 0) return 0;
 
@@ -1326,6 +1411,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             holder: address(this), projectId: projectId, tokenCount: creditCount, beneficiary: address(this)
         });
         // forge-lint: disable-end(reentrancy-no-eth)
+        // Report the measured ERC-20 delta, never the requested count.
         return projectToken.balanceOf(address(this)) - balanceBefore;
     }
 
@@ -1383,8 +1469,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint256 feeAmount0 = _currencyBalance(key.currency0) - bal0Before;
         uint256 feeAmount1 = _currencyBalance(key.currency1) - bal1Before;
 
-        // Carry the project-token side back to the accumulation ledger and route the terminal-token side. The carry
-        // (a state write) happens before the external terminal route, so a reentrant collect/add sees consistent state.
+        // Route both sides: a fee-project cut on each, then the project-token remainder burned and the terminal-token
+        // remainder added to the project's balance, each kept in its ledger when its route fails.
         _routeCollectedFees({
             projectId: projectId,
             projectToken: projectToken,
@@ -1413,6 +1499,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         internal
         returns (PoolKey memory key, bool wasAlreadyInitialized)
     {
+        // Express both tokens as V4 currencies (the native sentinel becomes address(0)).
         Currency terminalCurrency = _toCurrency(terminalToken);
         Currency projectCurrency = Currency.wrap(projectToken);
 
@@ -1421,11 +1508,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             ? (terminalCurrency, projectCurrency)
             : (projectCurrency, terminalCurrency);
 
+        // The hook's fixed fee tier and spacing, with the oracle hook that serves the TWAP.
         key = PoolKey({
             currency0: currency0, currency1: currency1, fee: POOL_FEE, tickSpacing: TICK_SPACING, hooks: oracleHook
         });
 
-        // Compute initial price at geometric mean of [cashOutRate, issuanceRate]
+        // The seed price for a pool this hook initializes: one tick spacing inside the cash-out floor.
         uint160 sqrtPriceX96 = JBUniswapV4LPSplitHookMath.computeInitialSqrtPrice({
             directory: IJBDirectory(DIRECTORY),
             suckerRegistry: SUCKER_REGISTRY,
@@ -1492,18 +1580,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         poolKeysOf[projectId][terminalToken] = key;
     }
 
-    /// @notice The native ETH or ERC-20 balance this contract holds for a given Uniswap V4 currency.
-    /// @param currency The Uniswap V4 currency (address(0) for native ETH) to read.
-    /// @return balance This hook's balance of `currency`.
-    function _currencyBalance(Currency currency) internal view returns (uint256 balance) {
-        // Uniswap V4 represents native ETH as the zero-address currency; read the ether balance for it.
-        if (currency.isAddressZero()) {
-            return address(this).balance;
-        }
-        // Otherwise read the ERC-20 balance held by this hook.
-        return IERC20(Currency.unwrap(currency)).balanceOf(address(this));
-    }
-
     /// @notice Create the Uniswap V4 pool and mint the initial LP position from the project's accumulated reserved
     /// tokens (and any accounted credits, normalized into the project's ERC-20). Shared executor behind the
     /// permissionless `deployPool` entry point and the best-effort inline automation self-call.
@@ -1517,8 +1593,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // forge-lint: disable-next-line(unused-return)
         (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
 
-        // Record the ruleset weight as a processing-era reference on the first successful attempt, now that intake
-        // no longer reads rulesets.
+        // Record the ruleset weight once, at the first successful deploy or recycle, as a processing-era reference.
         if (initialWeightOf[projectId] == 0) initialWeightOf[projectId] = ruleset.weight;
 
         // Auto-select the terminal token with the highest ETH-denominated value.
@@ -1526,6 +1601,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             directory: IJBDirectory(DIRECTORY), projectId: projectId, controller: controller
         });
 
+        // A project deploys one pool, ever: the same pairing is already done, and a different one is unsupported.
         if (hasDeployedPool[projectId]) {
             if (deployedTerminalTokenOf[projectId] == terminalToken) {
                 revert JBUniswapV4LPSplitHook_PoolAlreadyDeployed({
@@ -1537,6 +1613,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             });
         }
 
+        // The project's ERC-20, the asset the ask is minted in.
         address projectToken = _tokenOf(projectId);
 
         // Credits cannot be paired as LP — deployment waits until the project has an ERC-20 to normalize them into.
@@ -1546,6 +1623,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             });
         }
 
+        // The ledgered project tokens the first ask is minted from.
         uint256 projectTokenBalance = accumulatedProjectTokens[projectId];
 
         // Accounted credits count as deployable inventory: `_recycle` normalizes them into the ERC-20
@@ -1562,6 +1640,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             revert JBUniswapV4LPSplitHook_InsufficientBalance({available: spendable, required: projectTokenBalance});
         }
 
+        // The selected token must have a primary terminal, which later receives the terminal-side LP fees.
         address terminal = _primaryTerminalOf({projectId: projectId, token: terminalToken});
         if (terminal == address(0)) {
             revert JBUniswapV4LPSplitHook_InvalidTerminalToken({projectId: projectId, terminalToken: terminalToken});
@@ -1571,6 +1650,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // post-deploy inflows route to addLiquidity rather than re-entering this one-shot deploy path.
         hasDeployedPool[projectId] = true;
 
+        // Create (or accept) the pool and mint the first positions.
         _deployPoolAndAddLiquidity({
             projectId: projectId,
             projectToken: projectToken,
@@ -1609,6 +1689,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     )
         internal
     {
+        // Initialize the pool at the seed price, or validate and accept a price someone else already set.
         (PoolKey memory key, bool wasAlreadyInitialized) = _createAndInitializePool({
             projectId: projectId,
             projectToken: projectToken,
@@ -1637,27 +1718,16 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         });
     }
 
-    /// @notice Execute an inline automation attempt for a project: deploy the pool if none exists yet, otherwise add
-    /// the accumulated inventory to the deployed pool's position. Callable only via this contract's own best-effort
-    /// `_attemptAutomation` so a revert anywhere in the flow can be caught and forgiven while the parent frame's
-    /// accepted inventory stays intact.
-    /// @dev This target is intentionally NOT `nonReentrant`: it is reached through an internal `this.` self-call
-    /// while `processSplitWith` still holds the reentrancy lock, so guarding it would self-revert. A genuine
-    /// reentrant call into any guarded entry point during the attempt is still rejected by that outer lock, and the
-    /// `msg.sender == address(this)` gate blocks any direct external call.
-    /// @param projectId The ID of the project to attempt automation for.
-    function executeAutomationFor(uint256 projectId) external {
-        if (msg.sender != address(this)) revert JBUniswapV4LPSplitHook_Unauthorized();
-
-        if (hasDeployedPool[projectId]) {
-            _addLiquidity({projectId: projectId, terminalToken: deployedTerminalTokenOf[projectId]});
-        } else {
-            _deployPool(projectId);
-        }
-    }
-
     /// @notice Mint a new concentrated-liquidity position via the Uniswap V4 PositionManager, settling both currencies
     /// and sweeping any unconsumed dust back to this contract.
+    /// @dev The amounts are settle caps: the PositionManager pulls only what `liquidity` needs, and the caller measures
+    /// what actually left the hook.
+    /// @param key The pool key identifying the Uniswap V4 pool.
+    /// @param tickLower The lower tick of the position.
+    /// @param tickUpper The upper tick of the position.
+    /// @param liquidity The liquidity to mint.
+    /// @param amount0 The most currency0 the mint may pull.
+    /// @param amount1 The most currency1 the mint may pull.
     function _mintPosition(
         PoolKey memory key,
         int24 tickLower,
@@ -1668,10 +1738,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     )
         internal
     {
-        // Transfer ERC20 tokens to PositionManager (it will pull them during settle)
+        // The pool's two token addresses (address(0) for native ETH).
         address token0 = Currency.unwrap(key.currency0);
         address token1 = Currency.unwrap(key.currency1);
 
+        // Native ETH settles as call value; an ERC-20 side gets a Permit2 allowance the PositionManager pulls through.
         uint256 ethValue = 0;
 
         if (token0 == address(0)) {
@@ -1688,6 +1759,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             _approveViaPermit2({token: token1, amount: amount1});
         }
 
+        // Mint, settle each currency, then sweep each currency's unused cap back to the hook.
         // Actions are opcode constants below 0x20, so they fit uint8.
         // forge-lint: disable-start(unsafe-typecast)
         bytes memory actions = abi.encodePacked(
@@ -1699,7 +1771,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         );
         // forge-lint: disable-end(unsafe-typecast)
 
+        // One encoded parameter set per action, in action order.
         bytes[] memory params = new bytes[](5);
+        // MINT_POSITION params: (key, tickLower, tickUpper, liquidity, amount0Max, amount1Max, owner, hookData).
         params[0] = abi.encode(
             key,
             tickLower,
@@ -1720,6 +1794,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // SWEEP leftover currency1 back to this contract
         params[4] = abi.encode(key.currency1, address(this));
 
+        // Execute the mint batch, forwarding any native settle value.
         _modifyLiquidities({unlockData: abi.encode(actions, params), value: ethValue});
 
         // Drop Permit2 allowance for currency0 after PositionManager has pulled what it needs.
@@ -1748,8 +1823,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         internal
         returns (uint256 tokenId)
     {
-        // An empty or inverted range (the spot or anchor sits past this side's corridor end) or nothing to deploy:
-        // skip.
+        // Skip an empty or inverted range (the spot or anchor sits past this side's corridor end), or nothing to
+        // deploy.
         if (tickLower >= tickUpper || (amount0 == 0 && amount1 == 0)) return 0;
 
         // The liquidity the amount buys over this range, capped at the pool's per-tick capacity: what does not fit
@@ -1813,8 +1888,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         pure
         returns (uint256 amount0, uint256 amount1)
     {
+        // The range's bounds as sqrt prices.
         uint160 sqrtA = TickMath.getSqrtPriceAtTick(tickLower);
         uint160 sqrtB = TickMath.getSqrtPriceAtTick(tickUpper);
+        // At or below the range the position is all token0; inside it, token0 above the spot and token1 below; at or
+        // above it, all token1.
         if (sqrtPriceX96 <= sqrtA) {
             amount0 = SqrtPriceMath.getAmount0Delta({
                 sqrtPriceAX96: sqrtA, sqrtPriceBX96: sqrtB, liquidity: liquidity, roundUp: false
@@ -1871,6 +1949,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     )
         internal
     {
+        // The pool, and whether there is anything live to retire (which decides how an empty corridor ends).
         PoolKey memory key = poolKeysOf[projectId][terminalToken];
         bool hadPositions = askTokenIdOf[projectId][terminalToken] != 0 || bidTokenIdOf[projectId][terminalToken] != 0;
 
@@ -1889,6 +1968,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             tokenId: bidTokenIdOf[projectId][terminalToken],
             key: key
         });
+        // Both positions are burned, so no live id remains until the mints below record new ones.
         delete askTokenIdOf[projectId][terminalToken];
         delete bidTokenIdOf[projectId][terminalToken];
 
@@ -1933,8 +2013,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // Keep both ranges on the far side of the anchor as well as the spot. The anchor is the TWAP the caller
         // validated (within `_MAX_TWAP_DEVIATION_TICKS` of the spot). Widening the gap to cover both means a spot
         // nudged away from the TWAP cannot drag either position across it: the token0 range starts at or above both,
-        // the
-        // token1 range ends at or below both, so the hook's quotes stay anchored to the time-averaged price.
+        // the token1 range ends at or below both, so the hook's quotes stay anchored to the time-averaged price.
         {
             int24 anchorCeil = JBLPSplitHookHelpers.alignTickToSpacingCeil({tick: anchorTick, spacing: TICK_SPACING});
             int24 anchorFloor = JBLPSplitHookHelpers.alignTickToSpacing({tick: anchorTick, spacing: TICK_SPACING});
@@ -2002,63 +2081,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         });
     }
 
-    /// @notice Revert if the pool's spot price has deviated from the oracle TWAP by more than
-    /// `_MAX_TWAP_DEVIATION_TICKS`, or if the TWAP cannot be read. Prevents a JIT/sandwich attacker from skewing the
-    /// add ratio by moving the pool price right before the add.
-    /// @dev The TWAP is the arithmetic mean tick over the last `_TWAP_WINDOW` from the oracle hook's cumulative tick
-    /// counter: `(cumulative now - cumulative then) / window`. Moving it takes holding the spot away for much of the
-    /// window, which a single-transaction sandwich cannot do.
-    /// @param projectId The ID of the project (for the revert data).
-    /// @param terminalToken The pool's terminal token (for the revert data).
-    /// @param key The pool key to read the oracle and spot for.
-    /// @return twapTick The validated TWAP tick, which also anchors the recycle's ranges.
-    function _requireSpotNearTwap(
-        uint256 projectId,
-        address terminalToken,
-        PoolKey memory key
-    )
-        internal
-        view
-        returns (int24 twapTick)
-    {
-        uint32[] memory secondsAgos = new uint32[](2);
-        secondsAgos[0] = _TWAP_WINDOW;
-        secondsAgos[1] = 0;
-
-        int56[] memory tickCumulatives;
-        // The oracle reverts when it has not accrued enough history yet. In that case the spot price cannot be
-        // validated, so refuse the add (tokens keep accumulating safely; retry once the oracle warms up). Never fall
-        // back to spot — that is exactly the value being validated.
-        try IGeomeanOracle(address(oracleHook)).observe({key: key, secondsAgos: secondsAgos}) returns (
-            int56[] memory cumulatives, uint160[] memory
-        ) {
-            tickCumulatives = cumulatives;
-        } catch {
-            revert JBUniswapV4LPSplitHook_TwapUnavailable({projectId: projectId, terminalToken: terminalToken});
-        }
-
-        if (tickCumulatives.length < 2) {
-            revert JBUniswapV4LPSplitHook_TwapUnavailable({projectId: projectId, terminalToken: terminalToken});
-        }
-
-        // Arithmetic-mean tick over the window, rounding toward negative infinity (canonical V3 TWAP computation).
-        // `_TWAP_WINDOW` is a small positive constant (1800), so the cast to a signed window cannot truncate.
-        // forge-lint: disable-next-line(unsafe-typecast)
-        int56 window = int56(uint56(_TWAP_WINDOW));
-        int56 tickCumulativesDelta = tickCumulatives[1] - tickCumulatives[0];
-        // The mean of in-range cumulative ticks is itself a valid tick, well within int24.
-        // forge-lint: disable-next-line(unsafe-typecast)
-        twapTick = int24(tickCumulativesDelta / window);
-        if (tickCumulativesDelta < 0 && (tickCumulativesDelta % window != 0)) twapTick--;
-
-        int24 spotTick = TickMath.getTickAtSqrtPrice(_getSqrtPriceX96(key));
-        if (_absTickDiff({a: spotTick, b: twapTick}) > _MAX_TWAP_DEVIATION_TICKS) {
-            revert JBUniswapV4LPSplitHook_PriceDeviationTooHigh({
-                spotTick: spotTick, twapTick: twapTick, maxDeviationTicks: _MAX_TWAP_DEVIATION_TICKS
-            });
-        }
-    }
-
     /// @notice Collect and route a position's fees, then burn it and credit its recovered principal to the project's
     /// ledgers. No-op for a zero token ID.
     /// @dev Fees are routed first so the fee-project cut applies to trading fees only, never to principal.
@@ -2076,18 +2098,23 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     )
         internal
     {
+        // No live position on this side: nothing to retire.
         if (tokenId == 0) return;
 
+        // Route the fees first, so the burn below returns principal only.
         _collectAndRouteFees({
             projectId: projectId, projectToken: projectToken, terminalToken: terminalToken, tokenId: tokenId, key: key
         });
 
+        // The contract-derived burn minimums, and balance snapshots to measure what the burn returns.
         (uint128 min0, uint128 min1) = _burnSlippageFloor({tokenId: tokenId, key: key});
         uint256 projBalBefore = IERC20(projectToken).balanceOf(address(this));
         uint256 termBalBefore = _getTerminalTokenBalance(terminalToken);
 
+        // Burn the position under those minimums.
         _burnExistingPosition({tokenId: tokenId, key: key, decreaseAmount0Min: min0, decreaseAmount1Min: min1});
 
+        // Credit the measured principal to the ledgers, for the re-mint.
         accumulatedProjectTokens[projectId] += IERC20(projectToken).balanceOf(address(this)) - projBalBefore;
         accumulatedTerminalTokens[projectId][terminalToken] += _getTerminalTokenBalance(terminalToken) - termBalBefore;
     }
@@ -2116,8 +2143,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     )
         internal
     {
+        // Nothing collected: nothing to route.
         if (amount0 == 0 && amount1 == 0) return;
 
+        // Map the pool's currency0/currency1 amounts onto the terminal-token and project-token sides.
         Currency terminalCurrency = _toCurrency(terminalToken);
         (address token0,) = _sortTokens({tokenA: projectToken, tokenB: Currency.unwrap(terminalCurrency)});
 
@@ -2164,72 +2193,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
     }
 
-    /// @notice Send `amount` of `token` to `terminal` for `projectId`: `pay` it (the fee-project cut, minting
-    /// fee-project tokens to this hook) or `addToBalanceOf` it (an LP-fee remainder returned to the project's own
-    /// treasury). Callable only via this contract's own best-effort self-calls so its revert (from the terminal or the
-    /// ERC-20 allowance-consumption check) can be caught and forgiven.
-    /// @dev This target is intentionally NOT `nonReentrant`: it is reached through an internal `this.` self-call while
-    /// the surrounding entry point still holds the reentrancy lock, so guarding it would self-revert. A genuine
-    /// reentrant call into any guarded entry point during the terminal call is still rejected by that outer lock, and
-    /// the `msg.sender == address(this)` gate blocks any direct external call.
-    /// @param terminal The terminal to send to. A terminal with no code reverts the call.
-    /// @param projectId The project to pay or add to the balance of.
-    /// @param token The token to send (native sentinel or ERC-20).
-    /// @param amount The amount to send.
-    /// @param shouldPay Whether to `pay` (minting project tokens to this hook) rather than `addToBalanceOf`.
-    /// @return beneficiaryTokenCount The token/credit count the terminal reports minting to this hook (0 when adding to
-    /// balance).
-    function sendToTerminal(
-        address terminal,
-        uint256 projectId,
-        address token,
-        uint256 amount,
-        bool shouldPay
-    )
-        external
-        returns (uint256 beneficiaryTokenCount)
-    {
-        if (msg.sender != address(this)) revert JBUniswapV4LPSplitHook_Unauthorized();
-
-        // Native ETH is forwarded as value; ERC-20 is pulled by the terminal via an exact-use approval that must be
-        // fully consumed (a leftover allowance is live spend authority and reverts — caught upstream as a forgive).
-        bool isNative = _isNativeToken(token);
-        uint256 value = isNative ? amount : 0;
-        uint256 balanceBefore = _getTerminalTokenBalance(token);
-        if (!isNative) IERC20(token).forceApprove({spender: terminal, value: amount});
-
-        if (shouldPay) {
-            // Self-call only, to the directory's primary terminal; the debit is measured on purpose.
-            // forge-lint: disable-start(arbitrary-send-eth,reentrancy-balance)
-            beneficiaryTokenCount = IJBMultiTerminal(terminal).pay{value: value}({
-                projectId: projectId,
-                token: token,
-                amount: amount,
-                beneficiary: address(this),
-                minReturnedTokens: 0,
-                memo: "LP Fee",
-                metadata: ""
-            });
-            // forge-lint: disable-end(arbitrary-send-eth,reentrancy-balance)
-        } else {
-            // Self-call only, to the directory's primary terminal; the debit is measured on purpose.
-            // forge-lint: disable-start(arbitrary-send-eth,reentrancy-balance)
-            IJBMultiTerminal(terminal).addToBalanceOf{value: value}({
-                projectId: projectId, token: token, amount: amount, shouldReturnHeldFees: false, memo: "", metadata: ""
-            });
-            // forge-lint: disable-end(arbitrary-send-eth,reentrancy-balance)
-        }
-
-        if (!isNative) _requireTemporaryAllowanceConsumed({token: token, spender: terminal});
-
-        // A token that charges the sender on top of the transfer would debit more than `amount` and underback the
-        // other ledgers; revert so the caller's catch keeps the whole amount ledgered instead.
-        uint256 balanceAfter = _getTerminalTokenBalance(token);
-        if (balanceBefore > balanceAfter && balanceBefore - balanceAfter > amount) {
-            revert JBUniswapV4LPSplitHook_TransferNotExact({token: token, amount: amount});
-        }
-    }
-
     /// @notice Sort two token addresses into the canonical Uniswap V4 ordering (lower address = token0).
     /// @param tokenA One token address.
     /// @param tokenB The other token address.
@@ -2254,6 +2217,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param value The amount to narrow.
     /// @return narrowed The amount as a `uint128`.
     function _toUint128(uint256 value) internal pure returns (uint128 narrowed) {
+        // Reject a value that does not fit rather than truncating it.
         if (value > type(uint128).max) revert JBUniswapV4LPSplitHook_AmountExceedsUint128({amount: value});
         // The bound check above guarantees `value` fits `uint128`, so the narrowing cast cannot truncate.
         // forge-lint: disable-next-line(unsafe-typecast)
@@ -2264,12 +2228,57 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     // -------------------------- internal views ------------------------- //
     //*********************************************************************//
 
+    /// @notice The contract-derived burn slippage floor for `tokenId`: `_BURN_SLIPPAGE_BPS`/`BPS` of the position's
+    /// principal computed from its on-chain liquidity and range at the live pool price. Returned in (currency0,
+    /// currency1) order to match `BURN_POSITION`. Callers never supply burn minimums.
+    /// @param tokenId The position NFT token ID to be burned.
+    /// @param key The pool key identifying the Uniswap V4 pool.
+    /// @return min0 The minimum currency0 the burn must return.
+    /// @return min1 The minimum currency1 the burn must return.
+    function _burnSlippageFloor(uint256 tokenId, PoolKey memory key)
+        internal
+        view
+        returns (uint128 min0, uint128 min1)
+    {
+        // A position with no liquidity returns nothing, so its floor is zero.
+        uint128 liquidity = positionManager.getPositionLiquidity(tokenId);
+        if (liquidity == 0) return (0, 0);
+
+        // Only the position's range is needed; the caller already has the pool key.
+        // forge-lint: disable-next-line(unused-return)
+        (, PositionInfo info) = positionManager.getPoolAndPositionInfo(tokenId);
+        // The principal the position holds at the live price.
+        (uint256 amount0, uint256 amount1) = _positionPrincipal({
+            sqrtPriceX96: _getSqrtPriceX96(key),
+            tickLower: info.tickLower(),
+            tickUpper: info.tickUpper(),
+            liquidity: liquidity
+        });
+
+        // Position principal is bounded by pooled token balances, so the discounted floor normally fits in uint128;
+        // reject the pathological case rather than let a wraparound shrink the floor and accept a bad unwind.
+        min0 = _toUint128((amount0 * _BURN_SLIPPAGE_BPS) / BPS);
+        min1 = _toUint128((amount1 * _BURN_SLIPPAGE_BPS) / BPS);
+    }
+
     /// @notice Look up the controller address for a project.
     /// @param projectId The ID of the project.
     /// @return controller The project's current controller (address(0) if none is set).
     function _controllerOf(uint256 projectId) internal view returns (address controller) {
         // The directory is the canonical source of a project's active controller.
         return address(IJBDirectory(DIRECTORY).controllerOf(projectId));
+    }
+
+    /// @notice The native ETH or ERC-20 balance this contract holds for a given Uniswap V4 currency.
+    /// @param currency The Uniswap V4 currency (address(0) for native ETH) to read.
+    /// @return balance This hook's balance of `currency`.
+    function _currencyBalance(Currency currency) internal view returns (uint256 balance) {
+        // Uniswap V4 represents native ETH as the zero-address currency; read the ether balance for it.
+        if (currency.isAddressZero()) {
+            return address(this).balance;
+        }
+        // Otherwise read the ERC-20 balance held by this hook.
+        return IERC20(Currency.unwrap(currency)).balanceOf(address(this));
     }
 
     /// @notice Look up the current spot sqrt price of a pool.
@@ -2294,6 +2303,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param terminalToken The terminal token to check.
     /// @return isNative True if `terminalToken` represents native ETH.
     function _isNativeToken(address terminalToken) internal pure returns (bool isNative) {
+        // Delegate to the shared pure library so every path recognizes the native sentinel identically.
         return JBLPSplitHookHelpers.isNativeToken(terminalToken);
     }
 
@@ -2301,6 +2311,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @dev Read immediately after a MINT to recover the just-minted id as `_nextTokenId() - 1`.
     /// @return tokenId The position manager's next-to-be-assigned NFT token id.
     function _nextTokenId() internal view returns (uint256 tokenId) {
+        // The PositionManager assigns ids sequentially.
         return positionManager.nextTokenId();
     }
 
@@ -2308,6 +2319,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param projectId The ID of the project.
     /// @return owner The project's current owner (used as the permission account for `SET_BUYBACK_POOL` gates).
     function _ownerOf(uint256 projectId) internal view returns (address owner) {
+        // The projects registry is the canonical source of ownership.
         return PROJECTS.ownerOf(projectId);
     }
 
@@ -2316,7 +2328,68 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param token The token whose primary terminal to resolve.
     /// @return terminal The project's primary terminal for `token` (address(0) if none is set).
     function _primaryTerminalOf(uint256 projectId, address token) internal view returns (address terminal) {
+        // The directory resolves the terminal the project designates for this token.
         return address(IJBDirectory(DIRECTORY).primaryTerminalOf({projectId: projectId, token: token}));
+    }
+
+    /// @notice Revert if the pool's spot price has deviated from the oracle TWAP by more than
+    /// `_MAX_TWAP_DEVIATION_TICKS`, or if the TWAP cannot be read. Prevents a JIT/sandwich attacker from skewing the
+    /// add ratio by moving the pool price right before the add.
+    /// @dev The TWAP is the arithmetic mean tick over the last `_TWAP_WINDOW` from the oracle hook's cumulative tick
+    /// counter: `(cumulative now - cumulative then) / window`. Moving it takes holding the spot away for much of the
+    /// window, which a single-transaction sandwich cannot do.
+    /// @param projectId The ID of the project (for the revert data).
+    /// @param terminalToken The pool's terminal token (for the revert data).
+    /// @param key The pool key to read the oracle and spot for.
+    /// @return twapTick The validated TWAP tick, which also anchors the recycle's ranges.
+    function _requireSpotNearTwap(
+        uint256 projectId,
+        address terminalToken,
+        PoolKey memory key
+    )
+        internal
+        view
+        returns (int24 twapTick)
+    {
+        // Observe the cumulative tick at the window's start and now.
+        uint32[] memory secondsAgos = new uint32[](2);
+        secondsAgos[0] = _TWAP_WINDOW;
+        secondsAgos[1] = 0;
+
+        int56[] memory tickCumulatives;
+        // The oracle reverts when it has not accrued enough history yet. In that case the spot price cannot be
+        // validated, so refuse the add (tokens keep accumulating safely; retry once the oracle warms up). Never fall
+        // back to spot — that is exactly the value being validated.
+        try IGeomeanOracle(address(oracleHook)).observe({key: key, secondsAgos: secondsAgos}) returns (
+            int56[] memory cumulatives, uint160[] memory
+        ) {
+            tickCumulatives = cumulatives;
+        } catch {
+            revert JBUniswapV4LPSplitHook_TwapUnavailable({projectId: projectId, terminalToken: terminalToken});
+        }
+
+        // A malformed observation (fewer than the two points asked for) cannot yield a TWAP either.
+        if (tickCumulatives.length < 2) {
+            revert JBUniswapV4LPSplitHook_TwapUnavailable({projectId: projectId, terminalToken: terminalToken});
+        }
+
+        // Arithmetic-mean tick over the window, rounding toward negative infinity (canonical V3 TWAP computation).
+        // `_TWAP_WINDOW` is a small positive constant (1800), so the cast to a signed window cannot truncate.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        int56 window = int56(uint56(_TWAP_WINDOW));
+        int56 tickCumulativesDelta = tickCumulatives[1] - tickCumulatives[0];
+        // The mean of in-range cumulative ticks is itself a valid tick, well within int24.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        twapTick = int24(tickCumulativesDelta / window);
+        if (tickCumulativesDelta < 0 && (tickCumulativesDelta % window != 0)) twapTick--;
+
+        // Reject a spot further from the TWAP than the allowed deviation.
+        int24 spotTick = TickMath.getTickAtSqrtPrice(_getSqrtPriceX96(key));
+        if (_absTickDiff({a: spotTick, b: twapTick}) > _MAX_TWAP_DEVIATION_TICKS) {
+            revert JBUniswapV4LPSplitHook_PriceDeviationTooHigh({
+                spotTick: spotTick, twapTick: twapTick, maxDeviationTicks: _MAX_TWAP_DEVIATION_TICKS
+            });
+        }
     }
 
     /// @notice Revert if `spender` still has any temporary ERC-20 allowance from this hook.
@@ -2338,6 +2411,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param projectId The ID of the project.
     /// @return token The project's deployed ERC-20 (address(0) if the project is credits-only with no ERC-20).
     function _tokenOf(uint256 projectId) internal view returns (address token) {
+        // The JBTokens registry is the canonical source of a project's ERC-20.
         return address(IJBTokens(TOKENS).tokenOf(projectId));
     }
 
