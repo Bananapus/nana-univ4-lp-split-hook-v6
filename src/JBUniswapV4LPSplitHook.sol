@@ -109,10 +109,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// against.
     error JBUniswapV4LPSplitHook_InvalidTerminalToken(uint256 projectId, address terminalToken);
 
-    /// @notice Thrown when a project's cash-out value per token exceeds its issuance price and the hook holds no live
-    /// position to retire: no price is both at or above the cash-out value and at or below the issuance price, so there
-    /// is nothing safe to quote.
-    error JBUniswapV4LPSplitHook_InvertedCorridor(uint256 projectId, address terminalToken);
+    /// @notice Thrown when a project's corridor is empty and the hook holds no live position to retire: the cash-out
+    /// value per token reaches the issuance price, or the band between them is narrower than one tick spacing, so no
+    /// quotable price is both at or above the cash-out value and at or below the issuance price.
+    error JBUniswapV4LPSplitHook_EmptyCorridor(uint256 projectId, address terminalToken);
 
     /// @notice Thrown when the pool's live spot leaves nothing for the hook to deploy: no aligned ask range between the
     /// spot and the issuance ceiling (or no project tokens to fill one), AND no terminal tokens to offer as bids
@@ -1224,7 +1224,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             controller: controller,
             ruleset: ruleset
         });
-
         // If the pool was already initialized (e.g. by an attacker or another deployer), validate that
         // the existing price falls within the project's economic tick range before accepting it.
         // This prevents frontrunning attacks where an attacker initializes the pool at an extreme
@@ -1232,6 +1231,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // position at a manipulated price).
         uint160 existingSqrtPriceX96 = _getSqrtPriceX96(key);
         wasAlreadyInitialized = existingSqrtPriceX96 != 0;
+        // An empty corridor (a zero seed) has no price that respects both bounds, so there is no pool to seed or
+        // accept.
+        if (sqrtPriceX96 == 0) {
+            revert JBUniswapV4LPSplitHook_EmptyCorridor({projectId: projectId, terminalToken: terminalToken});
+        }
         if (existingSqrtPriceX96 != 0) {
             // Compute the project's economic tick bounds (cashout floor to issuance ceiling).
             (int24 tickLower, int24 tickUpper) = JBUniswapV4LPSplitHookMath.calculateTickBounds({
@@ -1243,10 +1247,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 controller: controller,
                 ruleset: ruleset
             });
-            // An empty corridor means inverted economics: there is no band to check the price against.
-            if (tickLower == tickUpper) {
-                revert JBUniswapV4LPSplitHook_InvertedCorridor({projectId: projectId, terminalToken: terminalToken});
-            }
 
             // Reject an existing price at or beyond the CASH-OUT FLOOR side of the band, where an LP sited at the
             // extreme would sell the project's tokens into a manipulated price. The ISSUANCE-CEILING side is accepted:
@@ -1716,12 +1716,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             ruleset: ruleset
         });
 
-        // An empty corridor means the cash-out value exceeds the issuance price: any ask would sell below the cash-out
-        // value and any bid would buy above the issuance price. Keep everything ledgered until the corridor reopens;
-        // retiring the live positions is the point, so only a recycle with nothing to retire reverts.
+        // An empty corridor leaves no aligned price between the cash-out value and the issuance price: any ask would
+        // sell below the cash-out value or any bid would buy above the issuance price. Keep everything ledgered until
+        // the corridor reopens; retiring the live positions is the point, so only a recycle with nothing to retire
+        // reverts.
         if (corridorLower == corridorUpper) {
             if (!hadPositions) {
-                revert JBUniswapV4LPSplitHook_InvertedCorridor({projectId: projectId, terminalToken: terminalToken});
+                revert JBUniswapV4LPSplitHook_EmptyCorridor({projectId: projectId, terminalToken: terminalToken});
             }
             return;
         }
