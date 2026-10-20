@@ -81,6 +81,8 @@ contract JBUniswapV4LPSplitHookDeployer is IJBUniswapV4LPSplitHookDeployer {
     /// @param addressRegistry A registry which stores references to contracts and their deployers.
     /// @param newHookImplementation The chain-same `JBUniswapV4LPSplitHook` implementation clones should use.
     /// @param deployer The address authorized to call `setChainSpecificConstants` exactly once.
+    // A zero deployer leaves the factory unconfigured, so every deploy reverts NotConfigured.
+    // forge-lint: disable-next-line(missing-zero-check)
     constructor(IJBAddressRegistry addressRegistry, JBUniswapV4LPSplitHook newHookImplementation, address deployer) {
         ADDRESS_REGISTRY = addressRegistry;
         _DEPLOYER = deployer;
@@ -128,6 +130,8 @@ contract JBUniswapV4LPSplitHookDeployer is IJBUniswapV4LPSplitHookDeployer {
             newBuybackHook: buybackHook
         });
 
+        // Only the fresh clone's initialize precedes it, and that makes view reads only.
+        // forge-lint: disable-next-line(reentrancy-events)
         emit HookDeployed({feeProjectId: feeProjectId, feePercent: feePercent, hook: hook, caller: msg.sender});
 
         // Increment the nonce. Both CREATE and CREATE2 opcodes increment the deployer's EVM nonce,

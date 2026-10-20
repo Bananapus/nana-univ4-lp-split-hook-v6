@@ -417,8 +417,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param permit2 The Permit2 utility.
     /// @param suckerRegistry The sucker registry for cross-chain surplus/supply queries.
     constructor(
+        // A zero directory reverts below: the `PROJECTS()` read needs code there.
+        // forge-lint: disable-next-line(missing-zero-check)
         address directory,
         IJBPermissions permissions,
+        // Core wiring from the deploy script; a zero value makes every TOKENS read revert and receives nothing.
+        // forge-lint: disable-next-line(missing-zero-check)
         address tokens,
         IAllowanceTransfer permit2,
         IJBSuckerRegistry suckerRegistry
@@ -658,7 +662,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         // Pull the allocated tokens from the controller via the granted allowance.
         // Use balance delta to handle fee-on-transfer tokens correctly.
-        uint256 received;
+        uint256 received = 0;
         if (context.amount > 0) {
             uint256 balanceBefore = IERC20(projectToken).balanceOf(address(this));
             IERC20(projectToken).safeTransferFrom({from: msg.sender, to: address(this), value: context.amount});
@@ -761,7 +765,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             });
         }
 
-        uint256 received;
+        uint256 received = 0;
         if (_isNativeToken(context.token)) {
             // Native ETH arrives as exactly the payout's value.
             if (msg.value != context.amount) revert JBUniswapV4LPSplitHook_UnexpectedMsgValue({value: msg.value});
@@ -778,9 +782,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         accumulatedTerminalTokens[context.projectId][context.token] += received;
 
+        // Emitted under the nonReentrant lock, after the directory check and the token pull.
+        // forge-lint: disable-start(reentrancy-events)
         emit PayoutAccepted({
             projectId: context.projectId, terminalToken: context.token, amount: received, caller: msg.sender
         });
+        // forge-lint: disable-end(reentrancy-events)
 
         // Intake is complete; the attempt below cannot revert this frame.
         _attemptAutomation(context.projectId);
@@ -808,6 +815,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         // Fetch the controller and current ruleset once; both feed the corridor math.
         address controller = _controllerOf(projectId);
+        // Only the ruleset is needed; its metadata is packed into it.
+        // forge-lint: disable-next-line(unused-return)
         (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
 
         // Record the ruleset weight as a processing-era reference on the first successful attempt, now that intake
@@ -843,6 +852,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             anchorTick: twapTick
         });
 
+        // Emitted under the nonReentrant lock (`addLiquidity`, or `processSplitWith` via the self-call).
+        // forge-lint: disable-start(reentrancy-events)
         emit LiquidityAdded({
             projectId: projectId,
             terminalToken: terminalToken,
@@ -850,6 +861,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             bidTokenId: bidTokenIdOf[projectId][terminalToken],
             caller: msg.sender
         });
+        // forge-lint: disable-end(reentrancy-events)
     }
 
     /// @notice Grant the PositionManager a time-limited Permit2 allowance so it can pull tokens during SETTLE.
@@ -867,6 +879,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
         // Layer 2: authorize the PositionManager to pull `amount` from the hook via Permit2, expiring shortly so a
         // leftover approval cannot be exploited later.
+        // Canonical Permit2 under the nonReentrant lock; balances are re-measured after the mint.
+        // forge-lint: disable-start(reentrancy-balance,reentrancy-no-eth)
         PERMIT2.approve({
             token: token,
             spender: address(positionManager),
@@ -877,6 +891,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             // forge-lint: disable-next-line(unsafe-typecast)
             expiration: uint48(block.timestamp + _DEADLINE_SECONDS)
         });
+        // forge-lint: disable-end(reentrancy-balance,reentrancy-no-eth)
     }
 
     /// @notice Best-effort attempt to convert a project's freshly accepted inventory into liquidity inline: deploy
@@ -900,6 +915,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         });
 
         if (!success) {
+            // Reports the bounded self-call's failure, under `processSplitWith`'s lock.
+            // forge-lint: disable-next-line(reentrancy-events)
             emit LiquidityAutomationFailed({projectId: projectId, reasonSelector: reasonSelector, caller: msg.sender});
         }
     }
@@ -932,6 +949,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // Forgive when there is nothing to cut or no fee terminal accepts `feeToken`: the whole amount is the
         // remainder.
         if (feeTerminal == address(0)) {
+            // Only a view directory read precedes it; every path runs under the nonReentrant lock.
+            // forge-lint: disable-start(reentrancy-events)
             emit LPFeesRouted({
                 projectId: projectId,
                 token: feeToken,
@@ -941,6 +960,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 feeTokensMinted: 0,
                 caller: msg.sender
             });
+            // forge-lint: disable-end(reentrancy-events)
             return amount;
         }
 
@@ -958,18 +978,20 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
 
         // Pre-increment with `cut` as a conservative estimate; reconciled to the actual received amount after the pay.
-        uint256 feeProjectTokenBalanceBefore;
+        uint256 feeProjectTokenBalanceBefore = 0;
         if (feeProjectToken != address(0)) {
             feeProjectTokenBalanceBefore = IERC20(feeProjectToken).balanceOf(address(this));
             _totalOutstandingFeeTokenClaims[feeProjectToken] += cut;
             _inflightFeeRoutingCount[feeProjectToken] += 1;
         }
 
-        uint256 received;
+        uint256 received = 0;
         // Pay the cut best-effort. The pay (plus its ERC-20 approve + allowance-consumption check) runs inside an
         // external self-call so a revert on ANY of them is caught here and forgiven rather than bubbling up and
         // blocking the collection. The self-call target is unguarded (so the surrounding `nonReentrant` guard is not
         // self-tripped) and restricted to `address(this)`.
+        // The reserve is pre-incremented before the pay and reconciled after, under the nonReentrant lock.
+        // forge-lint: disable-start(reentrancy-no-eth)
         try this.sendToTerminal({
             terminal: feeTerminal, projectId: feeProjectId, token: feeToken, amount: cut, shouldPay: true
         }) returns (
@@ -1016,7 +1038,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             cut = 0;
             remainder = amount;
         }
+        // forge-lint: disable-end(reentrancy-no-eth)
 
+        // Reports the reconciled cut; every path runs under the nonReentrant lock.
+        // forge-lint: disable-start(reentrancy-events)
         emit LPFeesRouted({
             projectId: projectId,
             token: feeToken,
@@ -1026,6 +1051,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             feeTokensMinted: received,
             caller: msg.sender
         });
+        // forge-lint: disable-end(reentrancy-events)
     }
 
     /// @notice Call this contract itself with a bounded gas budget, capturing at most the revert selector.
@@ -1073,6 +1099,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     {
         // BURN_POSITION removes all remaining liquidity and destroys the NFT.
         // TAKE_PAIR transfers the recovered token0 and token1 to this contract.
+        // Actions are opcode constants below 0x20, so they fit uint8.
+        // forge-lint: disable-next-line(unsafe-typecast)
         bytes memory burnActions = abi.encodePacked(uint8(Actions.BURN_POSITION), uint8(Actions.TAKE_PAIR));
 
         bytes[] memory burnParams = new bytes[](2);
@@ -1122,8 +1150,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // A balance that rose instead of falling underflows and reverts, which is forgiven the same way.
         if (
             IJBTokens(TOKENS).creditBalanceOf({holder: address(this), projectId: projectId}) != creditsBefore
+                // The check is exact on purpose: any debit other than `count` must revert.
+                // forge-lint: disable-next-line(incorrect-strict-equality)
                 || balanceBefore - IERC20(projectToken).balanceOf(address(this)) != count
-        ) revert JBUniswapV4LPSplitHook_FeeBurnNotExact({projectId: projectId, count: count});
+        ) {
+            revert JBUniswapV4LPSplitHook_FeeBurnNotExact({projectId: projectId, count: count});
+        }
     }
 
     /// @notice The contract-derived burn slippage floor for `tokenId`: `_BURN_SLIPPAGE_BPS`/`BPS` of the position's
@@ -1141,6 +1173,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint128 liquidity = positionManager.getPositionLiquidity(tokenId);
         if (liquidity == 0) return (0, 0);
 
+        // Only the position's range is needed; the caller already has the pool key.
+        // forge-lint: disable-next-line(unused-return)
         (, PositionInfo info) = positionManager.getPoolAndPositionInfo(tokenId);
         (uint256 amount0, uint256 amount1) = _positionPrincipal({
             sqrtPriceX96: _getSqrtPriceX96(key),
@@ -1214,12 +1248,16 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         // Try the credit transfer directly. If the fee-project controller is paused or misconfigured, restore the
         // pending credits instead of unwinding an ERC-20 fee-token claim that already succeeded earlier in the frame.
+        // `claimFeeTokensFor` holds the lock; the catch only restores the cleared claim.
+        // forge-lint: disable-start(reentrancy-no-eth,reentrancy-events)
         try IJBController(_controllerOf(feeProjectId)).transferCreditsFrom({
             holder: address(this), projectId: feeProjectId, recipient: beneficiary, creditCount: creditAmount
         }) {
             // Keep the reserve through the external call so reentrant deploy/add cannot spend the pending credits.
             _totalOutstandingFeeCreditClaims[feeProjectId] -= creditAmount;
 
+            // Emitted after the credit transfer, under `claimFeeTokensFor`'s lock.
+            // forge-lint: disable-next-line(reentrancy-events)
             emit FeeTokensClaimed({
                 projectId: projectId, beneficiary: beneficiary, amount: creditAmount, caller: msg.sender
             });
@@ -1227,6 +1265,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             // Restore the pending credits so the project owner can retry once the fee-project controller is usable.
             claimableFeeCredits[projectId] = creditAmount;
         }
+        // forge-lint: disable-end(reentrancy-no-eth,reentrancy-events)
     }
 
     /// @notice Claims ERC-20 fee tokens that have accrued for `projectId`.
@@ -1246,6 +1285,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         _totalOutstandingFeeTokenClaims[feeProjectToken] -= tokenAmount;
 
         // Emit the claim after bookkeeping so the event only survives if the downstream transfer does too.
+        // Only view permission and owner reads precede it, under `claimFeeTokensFor`'s lock.
+        // forge-lint: disable-next-line(reentrancy-events)
         emit FeeTokensClaimed({projectId: projectId, beneficiary: beneficiary, amount: tokenAmount, caller: msg.sender});
         // A token that charges the sender on top of the transfer would take the extra from balances backing other
         // claims or ledgers on this clone: measure the debit and revert, restoring the claim.
@@ -1279,9 +1320,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // project's own and could deliver the ERC-20 elsewhere, so the ledger takes only what this hook received.
         IERC20 projectToken = IERC20(_tokenOf(projectId));
         uint256 balanceBefore = projectToken.balanceOf(address(this));
+        // The hook claims its own credits under the lock; the ledger takes the measured delta.
+        // forge-lint: disable-start(reentrancy-no-eth)
         IJBController(controller).claimTokensFor({
             holder: address(this), projectId: projectId, tokenCount: creditCount, beneficiary: address(this)
         });
+        // forge-lint: disable-end(reentrancy-no-eth)
         return projectToken.balanceOf(address(this)) - balanceBefore;
     }
 
@@ -1293,6 +1337,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // Permit2 treats `expiration: 0` as "valid until the end of this block", so use a nonzero timestamp in the
         // past while zeroing the amount. The amount blocks value pulls; the expired timestamp makes the revocation
         // explicit for any zero-value or edge-case allowance reads.
+        // Canonical Permit2 revocation under the nonReentrant lock.
+        // forge-lint: disable-next-line(reentrancy-balance,reentrancy-no-eth)
         PERMIT2.approve({token: token, spender: address(positionManager), amount: 0, expiration: 1});
 
         // Drop the ERC-20 approval to Permit2 as well, so the hook leaves no pull authority behind on either layer.
@@ -1323,6 +1369,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint256 bal1Before = _currencyBalance(key.currency1);
 
         // `DECREASE_LIQUIDITY(0)` collects fees without removing principal; `TAKE_PAIR` transfers both currencies here.
+        // Actions are opcode constants below 0x20, so they fit uint8.
+        // forge-lint: disable-next-line(unsafe-typecast)
         bytes memory feeActions = abi.encodePacked(uint8(Actions.DECREASE_LIQUIDITY), uint8(Actions.TAKE_PAIR));
         bytes[] memory feeParams = new bytes[](2);
         // DECREASE_LIQUIDITY params: (tokenId, liquidity=0, minAmount0=0, minAmount1=0, hookData).
@@ -1436,6 +1484,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         // Best-effort initialize the pool. Uniswap's PositionManager swallows initialize reverts and returns
         // `type(int24).max`, so this call is still required for uninitialized pools but non-fatal for initialized ones.
+        // The tick is unused: the price is read from the pool. Runs under the lock.
+        // forge-lint: disable-next-line(reentrancy-no-eth,unused-return)
         positionManager.initializePool({key: key, sqrtPriceX96: sqrtPriceX96});
 
         // Store the pool key
@@ -1463,6 +1513,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // inside the recycle: the ask never sells below the cash-out floor and never past the issuance ceiling, so a
         // spot that leaves no ask range keeps the accumulation in its ledger (and reverts if nothing else can mint).
         address controller = _controllerOf(projectId);
+        // Only the ruleset is needed; its metadata is packed into it.
+        // forge-lint: disable-next-line(unused-return)
         (JBRuleset memory ruleset,) = IJBController(controller).currentRulesetOf(projectId);
 
         // Record the ruleset weight as a processing-era reference on the first successful attempt, now that intake
@@ -1531,12 +1583,15 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // without re-running the auto-selection. Recorded only once the deployment has succeeded.
         deployedTerminalTokenOf[projectId] = terminalToken;
 
+        // Emitted under the nonReentrant lock (`deployPool`, or `processSplitWith` via the self-call).
+        // forge-lint: disable-start(reentrancy-events)
         emit ProjectDeployed({
             projectId: projectId,
             terminalToken: terminalToken,
             poolId: PoolId.unwrap(poolKeysOf[projectId][terminalToken].toId()),
             caller: msg.sender
         });
+        // forge-lint: disable-end(reentrancy-events)
     }
 
     /// @notice Deploy pool and add liquidity using accumulated tokens.
@@ -1633,6 +1688,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             _approveViaPermit2({token: token1, amount: amount1});
         }
 
+        // Actions are opcode constants below 0x20, so they fit uint8.
+        // forge-lint: disable-start(unsafe-typecast)
         bytes memory actions = abi.encodePacked(
             uint8(Actions.MINT_POSITION),
             uint8(Actions.SETTLE),
@@ -1640,6 +1697,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             uint8(Actions.SWEEP),
             uint8(Actions.SWEEP)
         );
+        // forge-lint: disable-end(unsafe-typecast)
 
         bytes[] memory params = new bytes[](5);
         params[0] = abi.encode(
@@ -1727,9 +1785,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @param value The native ETH to forward (nonzero only when settling a native-ETH currency side).
     function _modifyLiquidities(bytes memory unlockData, uint256 value) internal {
         // Bound every batched action with a short deadline so a long-pending tx cannot execute at a stale price.
+        // positionManager is write-once at initialize; value is the native settle; under the lock.
+        // forge-lint: disable-start(arbitrary-send-eth,reentrancy-balance)
         positionManager.modifyLiquidities{value: value}({
             unlockData: unlockData, deadline: block.timestamp + _DEADLINE_SECONDS
         });
+        // forge-lint: disable-end(arbitrary-send-eth,reentrancy-balance)
     }
 
     /// @notice The token0/token1 amounts a position of `liquidity` across `[tickLower, tickUpper]` holds at
@@ -2070,6 +2131,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             uint256 remainder =
                 _attemptFeeProjectCut({projectId: projectId, feeToken: projectToken, amount: projectFee});
             if (remainder > 0) {
+                // Self-call under the caller's lock; the catch only re-ledgers the unburned remainder.
+                // forge-lint: disable-next-line(reentrancy-no-eth)
                 try this.burnFeeRemainder({projectId: projectId, projectToken: projectToken, count: remainder}) {}
                 catch {
                     accumulatedProjectTokens[projectId] += remainder;
@@ -2084,6 +2147,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             uint256 remainder =
                 _attemptFeeProjectCut({projectId: projectId, feeToken: terminalToken, amount: terminalFee});
             if (remainder > 0) {
+                // Self-call under the caller's lock; the catch only re-ledgers the unsent remainder.
+                // forge-lint: disable-start(reentrancy-no-eth)
                 try this.sendToTerminal({
                     terminal: _primaryTerminalOf({projectId: projectId, token: terminalToken}),
                     projectId: projectId,
@@ -2094,6 +2159,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 catch {
                     accumulatedTerminalTokens[projectId][terminalToken] += remainder;
                 }
+                // forge-lint: disable-end(reentrancy-no-eth)
             }
         }
     }
@@ -2133,6 +2199,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         if (!isNative) IERC20(token).forceApprove({spender: terminal, value: amount});
 
         if (shouldPay) {
+            // Self-call only, to the directory's primary terminal; the debit is measured on purpose.
+            // forge-lint: disable-start(arbitrary-send-eth,reentrancy-balance)
             beneficiaryTokenCount = IJBMultiTerminal(terminal).pay{value: value}({
                 projectId: projectId,
                 token: token,
@@ -2142,10 +2210,14 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 memo: "LP Fee",
                 metadata: ""
             });
+            // forge-lint: disable-end(arbitrary-send-eth,reentrancy-balance)
         } else {
+            // Self-call only, to the directory's primary terminal; the debit is measured on purpose.
+            // forge-lint: disable-start(arbitrary-send-eth,reentrancy-balance)
             IJBMultiTerminal(terminal).addToBalanceOf{value: value}({
                 projectId: projectId, token: token, amount: amount, shouldReturnHeldFees: false, memo: "", metadata: ""
             });
+            // forge-lint: disable-end(arbitrary-send-eth,reentrancy-balance)
         }
 
         if (!isNative) _requireTemporaryAllowanceConsumed({token: token, spender: terminal});

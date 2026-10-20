@@ -490,8 +490,8 @@ contract LPSplitHookHandler is Test {
 
     /// @notice Recycle a deployed project's positions (collect fees, burn ask and bid, re-mint both single-sided).
     /// @dev Permissionless. Every live position without uncollected fees first gets a nonzero fee. The spot, TWAP and
-    /// corridor never move in this campaign and the retired principal can always be re-minted, so no revert is
-    /// justified.
+    /// corridor never move in this campaign, so the only justified revert is a dust position whose burned principal
+    /// rounds below one unit of liquidity.
     /// @param projectIdSeed Fuzzed seed, reduced to a deployed project.
     /// @param feeSeed Fuzzed seed for the injected fees.
     function addLiquidity(uint256 projectIdSeed, uint256 feeSeed) external {
@@ -506,8 +506,27 @@ contract LPSplitHookHandler is Test {
             projectBurnRounding[projectId] += projectRounding;
             terminalBurnRounding[projectId] += terminalRounding;
         } catch (bytes memory reason) {
+            // A dust position burns back to less than one unit of liquidity needs (the burn rounds down), so with no
+            // other inventory the recycle has nothing to re-mint: the hook reverts and leaves the position up.
+            if (_isDustRemint(reason)) return;
             _latch(reason);
         }
+    }
+
+    /// @notice Whether `reason` is `NoDeployableLiquidityAtSpot` with only dust on both sides to deploy.
+    function _isDustRemint(bytes memory reason) internal pure returns (bool) {
+        if (
+            reason.length != 132
+                || _selectorOf(reason)
+                    != JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot.selector
+        ) return false;
+        uint256 projectAmount;
+        uint256 terminalAmount;
+        assembly {
+            projectAmount := mload(add(reason, 100))
+            terminalAmount := mload(add(reason, 132))
+        }
+        return projectAmount < DUST && terminalAmount < DUST;
     }
 }
 

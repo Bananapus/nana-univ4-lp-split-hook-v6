@@ -442,13 +442,15 @@ library JBUniswapV4LPSplitHookMath {
         IJBTerminal[] memory terminals = directory.terminalsOf(projectId);
 
         // Track the highest ETH-denominated value found so far.
-        uint256 highestValue;
+        uint256 highestValue = 0;
 
         // Fallback tracking for tokens without a price feed.
-        address highestUnpricedToken;
-        uint256 highestUnpricedBalance;
+        address highestUnpricedToken = address(0);
+        uint256 highestUnpricedBalance = 0;
 
         // The ETH currency identifier used for price normalization.
+        // JB currency ids are a token address's low 32 bits by convention (ETH = 61166).
+        // forge-lint: disable-next-line(unsafe-typecast)
         uint32 ethCurrency = uint32(uint160(JBConstants.NATIVE_TOKEN));
 
         // Cache terminal count for gas-efficient iteration.
@@ -465,6 +467,8 @@ library JBUniswapV4LPSplitHookMath {
             // whole selection — otherwise a single such terminal permanently DoSes `deployPool`/`addLiquidity` for
             // the project.
             IJBTerminalStore termStore;
+            // Bounded by the project's own terminal and context lists; view reads only.
+            // forge-lint: disable-next-line(calls-loop)
             try term.STORE() returns (IJBTerminalStore store_) {
                 termStore = store_;
             } catch {
@@ -474,6 +478,8 @@ library JBUniswapV4LPSplitHookMath {
             // Get all accounting contexts (one per accepted token) for this project on this terminal. Guard the same
             // way so a terminal that reverts here is skipped rather than aborting the loop.
             JBAccountingContext[] memory contexts;
+            // Bounded by the project's own terminal and context lists; view reads only.
+            // forge-lint: disable-next-line(calls-loop)
             try term.accountingContextsOf(projectId) returns (JBAccountingContext[] memory contexts_) {
                 contexts = contexts_;
             } catch {
@@ -496,14 +502,17 @@ library JBUniswapV4LPSplitHookMath {
                 if (primaryTerminal == address(0) || primaryTerminal != address(term)) continue;
 
                 // Look up how much of this token the terminal holds for the project.
+                // Bounded like the calls above. `termStore` is set in the `STORE()` try; its catch skips ahead.
+                // forge-lint: disable-start(calls-loop,uninitialized-local)
                 uint256 balance =
                     termStore.balanceOf({terminal: address(term), projectId: projectId, token: context.token});
+                // forge-lint: disable-end(calls-loop,uninitialized-local)
 
                 // Skip tokens with zero balance — they can't be the highest value.
                 if (balance == 0) continue;
 
                 // Convert the balance to an 18-decimal ETH-denominated value for apples-to-apples comparison.
-                uint256 ethValue;
+                uint256 ethValue = 0;
 
                 if (context.currency == ethCurrency) {
                     // Native ETH: balance is already denominated in 18-decimal ETH.
@@ -512,6 +521,8 @@ library JBUniswapV4LPSplitHookMath {
                     // For non-ETH tokens, use the price feed to normalize to ETH.
                     // pricePerUnit = how many of `context.currency` per 1 ETH at `context.decimals` precision.
                     // ethValue (18-decimal) = balance * 10^18 / pricePerUnit.
+                    // Bounded by the project's own terminal and context lists; view reads only.
+                    // forge-lint: disable-start(calls-loop)
                     try IJBController(controller).PRICES().pricePerUnitOf({
                         projectId: projectId,
                         pricingCurrency: context.currency,
@@ -533,6 +544,7 @@ library JBUniswapV4LPSplitHookMath {
                         }
                         continue;
                     }
+                    // forge-lint: disable-end(calls-loop)
                 }
 
                 // Update the highest value and corresponding token if this one exceeds the current best.
@@ -581,13 +593,18 @@ library JBUniswapV4LPSplitHookMath {
             IJBMultiTerminal(_primaryTerminalOf({directory: directory, projectId: projectId, token: terminalToken}));
 
         // Get the store for surplus queries.
+        // No loop in src reaches this view read, so it runs once per call.
+        // forge-lint: disable-next-line(calls-loop)
         IJBTerminalStore store = terminal.STORE();
 
         // Read the terminal's declared currency for this token. Using `uint32(uint160(terminalToken))` here would
         // diverge from `getIssuanceRate`, which reads the accounting context directly. The two paths must agree on
         // the same currency identifier so issuance and cash-out price the LP bounds against a consistent reference.
+        // No loop in src reaches this view read, so it runs once per call.
+        // forge-lint: disable-start(calls-loop)
         JBAccountingContext memory accountingContext =
             terminal.accountingContextForTokenOf({projectId: projectId, token: terminalToken});
+        // forge-lint: disable-end(calls-loop)
         uint256 decimals = accountingContext.decimals;
         uint256 currency = uint256(accountingContext.currency);
 
@@ -595,18 +612,27 @@ library JBUniswapV4LPSplitHookMath {
         // settlement (each terminal reports its own surplus), so terminals backed by different stores all count.
         uint256 surplus = JBSurplus.currentSurplusOf({
             projectId: projectId,
+            // No loop in src reaches this view read, so it runs once per call.
+            // forge-lint: disable-next-line(calls-loop)
             terminals: directory.terminalsOf(projectId),
             tokens: new address[](0),
             decimals: decimals,
             currency: currency
         });
+        // No loop in src reaches this view read, so it runs once per call.
+        // forge-lint: disable-next-line(calls-loop)
         uint256 totalSupply = IJBController(controller).totalTokenSupplyWithReservedTokensOf(projectId);
 
         // If the project doesn't scope cash outs to local balances, include remote cross-chain surplus and supply.
         if (!ruleset.scopeCashOutsToLocalBalances()) {
+            // No loop in src reaches this view read, so it runs once per call.
+            // forge-lint: disable-start(calls-loop)
             surplus += suckerRegistry.totalRemoteSurplusOf({
                 projectId: projectId, decimals: decimals, currency: currency
             });
+            // forge-lint: disable-end(calls-loop)
+            // No loop in src reaches this view read, so it runs once per call.
+            // forge-lint: disable-next-line(calls-loop)
             totalSupply += suckerRegistry.remoteTotalSupplyOf(projectId);
         }
 
@@ -837,14 +863,19 @@ library JBUniswapV4LPSplitHookMath {
         // Look up the project's primary terminal for this token.
         address terminal = _primaryTerminalOf({directory: directory, projectId: projectId, token: terminalToken});
         // Fetch the terminal's accounting context (decimals, currency) for this project/token pair.
+        // No loop in src reaches this view read, so it runs once per call.
+        // forge-lint: disable-start(calls-loop)
         JBAccountingContext memory context =
             IJBMultiTerminal(terminal).accountingContextForTokenOf({projectId: projectId, token: terminalToken});
+        // forge-lint: disable-end(calls-loop)
 
         // Read the base currency from the ruleset (e.g. ETH=1, USD=2).
         uint32 baseCurrency = ruleset.baseCurrency();
 
         // Compute the weight ratio: if the terminal currency matches the base currency, use 10^decimals
         // directly; otherwise, convert via the price oracle.
+        // No loop in src reaches this view read, so it runs once per call.
+        // forge-lint: disable-start(calls-loop)
         uint256 weightRatio = context.currency == baseCurrency
             ? 10 ** context.decimals
             : IJBController(controller).PRICES().pricePerUnitOf({
@@ -853,6 +884,7 @@ library JBUniswapV4LPSplitHookMath {
                 unitCurrency: baseCurrency,
                 decimals: context.decimals
             });
+        // forge-lint: disable-end(calls-loop)
 
         // Apply the ruleset weight to convert terminal tokens → project tokens at the current rate.
         projectTokenOutAmount = mulDiv({x: terminalTokenInAmount, y: ruleset.weight, denominator: weightRatio});
@@ -876,6 +908,8 @@ library JBUniswapV4LPSplitHookMath {
         view
         returns (address terminal)
     {
+        // Called once per context in the bounded terminal scan; a view read.
+        // forge-lint: disable-next-line(calls-loop)
         return address(directory.primaryTerminalOf({projectId: projectId, token: token}));
     }
 
@@ -902,9 +936,12 @@ library JBUniswapV4LPSplitHookMath {
         // larger count would still reclaim only the whole surplus, understating the rate) and scale it to 1e18 below.
         uint256 cashOutCount = totalSupply < _WAD ? totalSupply : _WAD;
         // No try/catch: a preview failure must not read as a zero floor.
+        // No loop in src reaches this view read, so it runs once per call.
+        // forge-lint: disable-start(calls-loop)
         uint256 reclaimableAmount = store.currentReclaimableSurplusOf({
             projectId: projectId, cashOutCount: cashOutCount, totalSupply: totalSupply, surplus: surplus
         });
+        // forge-lint: disable-end(calls-loop)
         if (cashOutCount == _WAD) return reclaimableAmount;
         // Scaling a partial-supply preview up to 1e18 tokens saturates rather than overflowing.
         if (reclaimableAmount / cashOutCount >= type(uint256).max / _WAD) return type(uint256).max;

@@ -77,7 +77,7 @@ contract Permit2SemanticsFork is Test {
 
     /// @notice An allowance approved with a future expiration is honored across blocks; warp past it expires.
     function testFork_futureExpiration_lapsesAfterWarp() public {
-        uint48 future = uint48(block.timestamp + 3600);
+        uint48 future = uint48(vm.getBlockTimestamp() + 3600);
 
         vm.startPrank(owner);
         PERMIT2.approve({token: USDC, spender: spender, amount: 100, expiration: future});
@@ -85,14 +85,14 @@ contract Permit2SemanticsFork is Test {
 
         (, uint48 expirationBefore,) = PERMIT2.allowance(owner, USDC, spender);
         assertEq(expirationBefore, future, "stored verbatim");
-        uint256 currentTimestamp = block.timestamp;
+        uint256 currentTimestamp = vm.getBlockTimestamp();
         assertFalse(currentTimestamp > expirationBefore, "live before warp");
 
         vm.warp(future + 1);
 
         (, uint48 expirationAfter,) = PERMIT2.allowance(owner, USDC, spender);
         assertEq(expirationAfter, future, "stored value unchanged by warp");
-        currentTimestamp = block.timestamp;
+        currentTimestamp = vm.getBlockTimestamp();
         assertTrue(currentTimestamp > expirationAfter, "expired after warp");
     }
 }
