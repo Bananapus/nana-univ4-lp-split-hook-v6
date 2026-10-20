@@ -110,8 +110,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     error JBUniswapV4LPSplitHook_InvalidTerminalToken(uint256 projectId, address terminalToken);
 
     /// @notice Thrown when a project's corridor is empty and the hook holds no live position to retire: the cash-out
-    /// value per token reaches the issuance price, or no aligned tick spacing fits between them, so no quotable price
-    /// is both at or above the cash-out value and at or below the issuance price.
+    /// value per token reaches the issuance price, or no pair of distinct aligned ticks fits between them, so no
+    /// quotable range is both at or above the cash-out value and at or below the issuance price.
     error JBUniswapV4LPSplitHook_EmptyCorridor(uint256 projectId, address terminalToken);
 
     /// @notice Thrown when the pool's live spot leaves nothing for the hook to deploy: no aligned ask range between the
@@ -1716,9 +1716,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             ruleset: ruleset
         });
 
-        // An empty corridor leaves no aligned price between the cash-out value and the issuance price: any ask would
-        // sell below the cash-out value or any bid would buy above the issuance price. Keep everything ledgered until
-        // the corridor reopens; retiring the live positions is the point, so only a recycle with nothing to retire
+        // An empty corridor leaves no pair of distinct aligned ticks between the cash-out value and the issuance price:
+        // any ask would sell below the cash-out value or any bid would buy above the issuance price. Keep everything
+        // ledgered until the corridor reopens; retiring the live positions is the point, so only a recycle with nothing
+        // to retire
         // reverts.
         if (corridorLower == corridorUpper) {
             if (!hadPositions) {
