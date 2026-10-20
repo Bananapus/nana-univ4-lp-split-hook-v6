@@ -1115,8 +1115,9 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint256 creditsBefore = IJBTokens(TOKENS).creditBalanceOf({holder: address(this), projectId: projectId});
         uint256 balanceBefore = IERC20(projectToken).balanceOf(address(this));
 
-        IJBController(controller)
-            .burnTokensOf({holder: address(this), projectId: projectId, tokenCount: count, memo: ""});
+        IJBController(controller).burnTokensOf({
+            holder: address(this), projectId: projectId, tokenCount: count, memo: ""
+        });
 
         // A balance that rose instead of falling underflows and reverts, which is forgiven the same way.
         if (
@@ -1213,8 +1214,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         // Try the credit transfer directly. If the fee-project controller is paused or misconfigured, restore the
         // pending credits instead of unwinding an ERC-20 fee-token claim that already succeeded earlier in the frame.
-        try IJBController(_controllerOf(feeProjectId))
-            .transferCreditsFrom({
+        try IJBController(_controllerOf(feeProjectId)).transferCreditsFrom({
             holder: address(this), projectId: feeProjectId, recipient: beneficiary, creditCount: creditAmount
         }) {
             // Keep the reserve through the external call so reentrant deploy/add cannot spend the pending credits.
@@ -1279,8 +1279,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // project's own and could deliver the ERC-20 elsewhere, so the ledger takes only what this hook received.
         IERC20 projectToken = IERC20(_tokenOf(projectId));
         uint256 balanceBefore = projectToken.balanceOf(address(this));
-        IJBController(controller)
-            .claimTokensFor({
+        IJBController(controller).claimTokensFor({
             holder: address(this), projectId: projectId, tokenCount: creditCount, beneficiary: address(this)
         });
         return projectToken.balanceOf(address(this)) - balanceBefore;

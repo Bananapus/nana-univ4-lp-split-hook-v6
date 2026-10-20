@@ -512,8 +512,7 @@ library JBUniswapV4LPSplitHookMath {
                     // For non-ETH tokens, use the price feed to normalize to ETH.
                     // pricePerUnit = how many of `context.currency` per 1 ETH at `context.decimals` precision.
                     // ethValue (18-decimal) = balance * 10^18 / pricePerUnit.
-                    try IJBController(controller).PRICES()
-                        .pricePerUnitOf({
+                    try IJBController(controller).PRICES().pricePerUnitOf({
                         projectId: projectId,
                         pricingCurrency: context.currency,
                         unitCurrency: ethCurrency,
@@ -848,8 +847,7 @@ library JBUniswapV4LPSplitHookMath {
         // directly; otherwise, convert via the price oracle.
         uint256 weightRatio = context.currency == baseCurrency
             ? 10 ** context.decimals
-            : IJBController(controller).PRICES()
-                .pricePerUnitOf({
+            : IJBController(controller).PRICES().pricePerUnitOf({
                 projectId: projectId,
                 pricingCurrency: context.currency,
                 unitCurrency: baseCurrency,
