@@ -12,8 +12,13 @@ import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingCo
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 import {mulDiv, sqrt} from "@prb/math/src/Common.sol";
+import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
+import {Pool} from "@uniswap/v4-core/src/libraries/Pool.sol";
+import {StateLibrary} from "@uniswap/v4-core/src/libraries/StateLibrary.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 import {Currency} from "@uniswap/v4-core/src/types/Currency.sol";
+import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
+import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 
 import {JBLPSplitHookHelpers} from "./JBLPSplitHookHelpers.sol";
 
@@ -26,6 +31,7 @@ import {JBLPSplitHookHelpers} from "./JBLPSplitHookHelpers.sol";
 /// delegatecall-linked, so Sphinx deploys this deterministically and the hook's CREATE2 address stays chain-same.
 library JBUniswapV4LPSplitHookMath {
     using JBRulesetMetadataResolver for JBRuleset;
+    using PoolIdLibrary for PoolKey;
 
     //*********************************************************************//
     // --------------------------- custom errors ------------------------- //
@@ -52,6 +58,47 @@ library JBUniswapV4LPSplitHookMath {
     //*********************************************************************//
     // -------------------------- public views --------------------------- //
     //*********************************************************************//
+
+    /// @notice The liquidity a single-sided mint over `[tickLower, tickUpper]` supports, funded by `amount0` (or by
+    /// `amount1` when `amount0` is zero), capped at the pool's remaining per-tick capacity at both bounds.
+    /// @dev Matches `LiquidityAmounts.getLiquidityForAmount0/1` but computes in 256 bits and caps instead of reverting,
+    /// so an amount the range cannot hold mints what fits and the excess stays with the caller.
+    /// @param poolManager The Uniswap V4 PoolManager holding the pool.
+    /// @param key The pool key.
+    /// @param tickLower The lower tick of the range.
+    /// @param tickUpper The upper tick of the range.
+    /// @param amount0 The token0 amount (single-sided above the spot), or zero.
+    /// @param amount1 The token1 amount (single-sided below the spot), used when `amount0` is zero.
+    /// @return liquidity The liquidity to mint.
+    function cappedSingleSidedLiquidity(
+        IPoolManager poolManager,
+        PoolKey memory key,
+        int24 tickLower,
+        int24 tickUpper,
+        uint256 amount0,
+        uint256 amount1
+    )
+        public
+        view
+        returns (uint128 liquidity)
+    {
+        uint256 sqrtLower = TickMath.getSqrtPriceAtTick(tickLower);
+        uint256 sqrtUpper = TickMath.getSqrtPriceAtTick(tickUpper);
+        uint256 wanted = amount0 != 0
+            ? mulDiv(amount0, mulDiv(sqrtLower, sqrtUpper, 1 << 96), sqrtUpper - sqrtLower)
+            : mulDiv(amount1, 1 << 96, sqrtUpper - sqrtLower);
+
+        PoolId poolId = key.toId();
+        (uint128 grossLower,) = StateLibrary.getTickLiquidity({manager: poolManager, poolId: poolId, tick: tickLower});
+        (uint128 grossUpper,) = StateLibrary.getTickLiquidity({manager: poolManager, poolId: poolId, tick: tickUpper});
+        uint256 used = grossLower > grossUpper ? grossLower : grossUpper;
+        uint256 maxPerTick = Pool.tickSpacingToMaxLiquidityPerTick(key.tickSpacing);
+        uint256 room = maxPerTick > used ? maxPerTick - used : 0;
+
+        // Bounded by `room`, which is at most the uint128 per-tick cap.
+        // forge-lint: disable-next-line(unsafe-typecast)
+        liquidity = uint128(wanted < room ? wanted : room);
+    }
 
     /// @notice Calculate tick bounds for liquidity position based on issuance and cash out rates.
     /// @param directory The JBDirectory used to resolve the project's primary terminal.

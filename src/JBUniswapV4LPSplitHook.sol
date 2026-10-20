@@ -29,7 +29,6 @@ import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {Actions} from "@uniswap/v4-periphery/src/libraries/Actions.sol";
-import {LiquidityAmounts} from "@uniswap/v4-periphery/src/libraries/LiquidityAmounts.sol";
 import {PositionInfo, PositionInfoLibrary} from "@uniswap/v4-periphery/src/libraries/PositionInfoLibrary.sol";
 import {ReentrancyGuard} from "solady/src/utils/ReentrancyGuard.sol";
 
@@ -1521,15 +1520,15 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     {
         if (tickLower >= tickUpper || (amount0 == 0 && amount1 == 0)) return 0;
 
-        uint160 sqrtLower = TickMath.getSqrtPriceAtTick(tickLower);
-        uint160 sqrtUpper = TickMath.getSqrtPriceAtTick(tickUpper);
-        uint128 liquidity = amount0 != 0
-            ? LiquidityAmounts.getLiquidityForAmount0({
-                sqrtPriceAX96: sqrtLower, sqrtPriceBX96: sqrtUpper, amount0: amount0
-            })
-            : LiquidityAmounts.getLiquidityForAmount1({
-                sqrtPriceAX96: sqrtLower, sqrtPriceBX96: sqrtUpper, amount1: amount1
-            });
+        // Capped at the pool's per-tick capacity: what does not fit stays in the ledgers through `_carryLeftovers`.
+        uint128 liquidity = JBUniswapV4LPSplitHookMath.cappedSingleSidedLiquidity({
+            poolManager: poolManager,
+            key: key,
+            tickLower: tickLower,
+            tickUpper: tickUpper,
+            amount0: amount0,
+            amount1: amount1
+        });
         if (liquidity == 0) return 0;
 
         _mintPosition({
