@@ -54,6 +54,13 @@ interface IJBUniswapV4LPSplitHook {
         address caller
     );
 
+    /// @notice Emitted when a payout split from one of the project's terminals is accepted into the bid's ledger.
+    /// @param projectId The Juicebox project ID.
+    /// @param terminalToken The terminal token paid out (the deployed pool's).
+    /// @param amount The amount received and ledgered.
+    /// @param caller The terminal that sent the payout.
+    event PayoutAccepted(uint256 indexed projectId, address indexed terminalToken, uint256 amount, address caller);
+
     /// @notice Emitted when a project transitions from Stage 1 to Stage 2 by deploying a pool.
     /// @param projectId The Juicebox project ID.
     /// @param terminalToken The terminal token address.

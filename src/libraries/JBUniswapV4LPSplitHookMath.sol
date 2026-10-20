@@ -61,8 +61,25 @@ library JBUniswapV4LPSplitHookMath {
 
     /// @notice The liquidity a single-sided mint over `[tickLower, tickUpper]` supports, funded by `amount0` (or by
     /// `amount1` when `amount0` is zero), capped at the pool's remaining per-tick capacity at both bounds.
-    /// @dev Matches `LiquidityAmounts.getLiquidityForAmount0/1` but computes in 256 bits and caps instead of reverting,
-    /// so an amount the range cannot hold mints what fits and the excess stays with the caller.
+    /// @dev A range that sits entirely on one side of the spot holds only one token: a range above the spot is all
+    /// token0 (the price has not risen into it yet) and a range below the spot is all token1 (the price has already
+    /// passed through it). The hook only mints such ranges, so the caller passes the one funding token and zero for
+    /// the other. Liquidity `L` relates to the amount held across `[sqrtLower, sqrtUpper]` as:
+    ///
+    /// - token0 only: `amount0 = L * (sqrtUpper - sqrtLower) * 2^96 / (sqrtLower * sqrtUpper)`, so
+    /// `L = amount0 * (sqrtLower * sqrtUpper / 2^96) / (sqrtUpper - sqrtLower)`.
+    /// - token1 only: `amount1 = L * (sqrtUpper - sqrtLower) / 2^96`, so
+    /// `L = amount1 * 2^96 / (sqrtUpper - sqrtLower)`.
+    ///
+    /// These are `LiquidityAmounts.getLiquidityForAmount0/1`, rounded down so the mint never needs more than the
+    /// amount supplied, but computed in 256 bits and capped instead of reverting.
+    ///
+    /// The cap: Uniswap tracks, at every initialized tick, the total liquidity of all positions that use it as a bound
+    /// (`liquidityGross`), and reverts a mint (`TickLiquidityOverflow`) that would push it past
+    /// `Pool.tickSpacingToMaxLiquidityPerTick(tickSpacing)`. A mint adds `L` to `liquidityGross` at BOTH its lower and
+    /// its upper tick, so both are read, and the fuller of the two (the one with less room left) sets how much this
+    /// mint can add. An amount the range cannot hold mints only what fits; the unminted tokens are never pulled, and
+    /// the caller's `_carryLeftovers` balance delta returns them to the project's ledgers for a later recycle.
     /// @param poolManager The Uniswap V4 PoolManager holding the pool.
     /// @param key The pool key.
     /// @param tickLower The lower tick of the range.
@@ -84,23 +101,48 @@ library JBUniswapV4LPSplitHookMath {
     {
         uint256 sqrtLower = TickMath.getSqrtPriceAtTick(tickLower);
         uint256 sqrtUpper = TickMath.getSqrtPriceAtTick(tickUpper);
+
+        // The liquidity the funding amount would buy with no cap: the token0 formula when token0 funds the range (it
+        // sits above the spot), otherwise the token1 formula (it sits below). Both round down.
         uint256 wanted = amount0 != 0
             ? mulDiv(amount0, mulDiv(sqrtLower, sqrtUpper, 1 << 96), sqrtUpper - sqrtLower)
             : mulDiv(amount1, 1 << 96, sqrtUpper - sqrtLower);
 
+        // The liquidity already referencing each bound from other positions (including the hook's own other leg when
+        // the ask and bid share a bound), read straight from the PoolManager's tick state.
         PoolId poolId = key.toId();
         (uint128 grossLower,) = StateLibrary.getTickLiquidity({manager: poolManager, poolId: poolId, tick: tickLower});
         (uint128 grossUpper,) = StateLibrary.getTickLiquidity({manager: poolManager, poolId: poolId, tick: tickUpper});
+        // Both bounds gain `L`, so the fuller bound is the binding one: its remaining room is the most this mint can
+        // add without reverting. A bound already at (or over) the cap leaves no room, and the mint is skipped.
         uint256 used = grossLower > grossUpper ? grossLower : grossUpper;
         uint256 maxPerTick = Pool.tickSpacingToMaxLiquidityPerTick(key.tickSpacing);
         uint256 room = maxPerTick > used ? maxPerTick - used : 0;
 
-        // Bounded by `room`, which is at most the uint128 per-tick cap.
+        // Mint what fits. Bounded by `room`, which is at most the uint128 per-tick cap, so the cast cannot truncate.
         // forge-lint: disable-next-line(unsafe-typecast)
         liquidity = uint128(wanted < room ? wanted : room);
     }
 
     /// @notice Calculate tick bounds for liquidity position based on issuance and cash out rates.
+    /// @dev The corridor is the range of pool prices at which the hook is willing to trade: never selling project
+    /// tokens for less than a holder could cash one out for (the cash-out FLOOR), and never buying them for more than
+    /// the project mints one for (the issuance CEILING). Outside it, anyone could buy from the ask and cash out, or pay
+    /// the project and sell into the bid, at the project's expense.
+    ///
+    /// Uniswap prices are `token1 / token0`, so the project price rises with the pool price when the project is token0
+    /// (floor = lower tick, ceiling = upper tick) and falls with it when the project is token1 (floor = upper tick,
+    /// ceiling = lower tick). Both bounds are aligned to the 200-tick spacing and rounded INWARD, so the aligned range
+    /// never reaches past either economic price. The result is a sorted `(lower, upper)` pair either way, and `(0, 0)`
+    /// means empty.
+    ///
+    /// Three cases:
+    ///
+    /// - A positive cash-out preview: the corridor between the two prices (`_corridorBetween`).
+    /// - A preview that rounds to 0 with issuance on: a corridor that ends exactly at the issuance tick
+    /// (`_zeroCashOutCorridor`), then lifted to the cash-out bound.
+    /// - A preview of 0 with no issuance (zero weight or 100% reserved): no ceiling, so the full usable tick range,
+    /// then lifted to the cash-out bound.
     /// @param directory The JBDirectory used to resolve the project's primary terminal.
     /// @param suckerRegistry The sucker registry for cross-chain surplus/supply queries.
     /// @param projectId The ID of the project.
@@ -124,6 +166,7 @@ library JBUniswapV4LPSplitHookMath {
         view
         returns (int24 tickLower, int24 tickUpper)
     {
+        // Uniswap orders the pair by address; the ordering decides which tick is the floor and which the ceiling.
         (address token0,) = JBLPSplitHookHelpers.sortTokens({tokenA: terminalToken, tokenB: projectToken});
         bool projectIsToken0 = projectToken == token0;
 
@@ -165,7 +208,9 @@ library JBUniswapV4LPSplitHookMath {
                 });
             }
 
-            // Neither geometry may reach below the cash-out bound.
+            // Neither geometry may reach below the cash-out bound. `_cashOutBoundSqrtPrice` never returns 0, so even
+            // a preview that rounded to 0 leaves a real (if tiny) floor: round it inward (up for a token0 project's
+            // lower bound, down for a token1 project's upper bound) and pull the corridor's floor side in to it.
             if (projectIsToken0) {
                 int24 floorTick = JBLPSplitHookHelpers.alignTickToSpacingCeil({
                     tick: _tickAtOrAbove(cashOutSqrtPrice), spacing: _TICK_SPACING
@@ -177,10 +222,12 @@ library JBUniswapV4LPSplitHookMath {
                 });
                 if (floorTick < tickUpper) tickUpper = floorTick;
             }
+            // Lifting the floor can close the corridor entirely: report it empty rather than inverted.
             if (tickLower >= tickUpper) return (0, 0);
             return (tickLower, tickUpper);
         }
 
+        // The normal case: a positive floor and an issuance ceiling.
         return _corridorBetween({
             cashOutSqrtPrice: cashOutSqrtPrice,
             issuanceSqrtPrice: getIssuanceRateSqrtPriceX96({
@@ -212,6 +259,8 @@ library JBUniswapV4LPSplitHookMath {
         pure
         returns (int24 tickLower, int24 tickUpper)
     {
+        // The lowest and highest ticks a position may use: one spacing inside the aligned ends of Uniswap's tick range,
+        // so a bound is never the extreme tick itself.
         int24 floorGap = 2 * _TICK_SPACING;
         int24 minUsable =
             JBLPSplitHookHelpers.alignTickToSpacing({tick: TickMath.MIN_TICK, spacing: _TICK_SPACING}) + _TICK_SPACING;
@@ -223,6 +272,7 @@ library JBUniswapV4LPSplitHookMath {
             tickUpper = JBLPSplitHookHelpers.alignTickToSpacing({
                 tick: TickMath.getTickAtSqrtPrice(ceilingSqrtPrice), spacing: _TICK_SPACING
             });
+            // Keep the ceiling usable and leave room for the two-spacing gap below it.
             if (tickUpper > maxUsable) tickUpper = maxUsable;
             if (tickUpper < minUsable + floorGap) tickUpper = minUsable + floorGap;
             tickLower = tickUpper - floorGap;
@@ -231,6 +281,7 @@ library JBUniswapV4LPSplitHookMath {
             tickLower = JBLPSplitHookHelpers.alignTickToSpacingCeil({
                 tick: _tickAtOrAbove(ceilingSqrtPrice), spacing: _TICK_SPACING
             });
+            // Leave room for the two-spacing gap above the ceiling.
             if (tickLower > maxUsable - floorGap) tickLower = maxUsable - floorGap;
             tickUpper = tickLower + floorGap;
         }
@@ -245,13 +296,20 @@ library JBUniswapV4LPSplitHookMath {
     /// @return sqrtPriceX96 The floor, rounded toward a HIGHER project price: up when the project is token0 (pool
     /// price = terminal per project), down when it is token1 (pool price = project per terminal).
     function _cashOutBoundSqrtPrice(uint256 rate, bool projectIsToken0) private pure returns (uint160 sqrtPriceX96) {
+        // `rate + 2` covers both truncations; saturate rather than overflow on an absurd rate.
         uint256 bound = rate > type(uint256).max - 2 ? type(uint256).max : rate + 2;
+        // Token0 project: pool price is terminal per project, `bound / 1e18`. Token1 project: pool price is project per
+        // terminal, `1e18 / bound`. Each rounds the way that raises the project price, keeping the floor conservative.
         return projectIsToken0
             ? _toSqrtPriceX96({amount1: bound, amount0: _WAD, roundUp: true})
             : _toSqrtPriceX96({amount1: _WAD, amount0: bound, roundUp: false});
     }
 
     /// @notice The aligned corridor between the cash-out and issuance prices, or an empty one when there is none.
+    /// @dev The two prices are sorted into a lower and an upper sqrt price, and each is snapped to the 200-tick grid
+    /// toward the other one, so the aligned range sits inside the exact economic range. The corridor is empty,
+    /// `(0, 0)`, when the floor is not strictly cheaper than the ceiling, or when the inward rounding leaves no full
+    /// spacing between the bounds.
     /// @param cashOutSqrtPrice The cash-out value per token as a pool sqrtPriceX96.
     /// @param issuanceSqrtPrice The issuance price as a pool sqrtPriceX96.
     /// @param projectIsToken0 Whether the project token is the pool's currency0.
@@ -298,6 +356,8 @@ library JBUniswapV4LPSplitHookMath {
     /// @param sqrtPriceX96 The exact price to round up to a tick.
     /// @return tick `getTickAtSqrtPrice` rounded up when that tick sits strictly below the price.
     function _tickAtOrAbove(uint160 sqrtPriceX96) private pure returns (int24 tick) {
+        // `getTickAtSqrtPrice` rounds DOWN (the greatest tick whose price is at or below the input). A lower bound must
+        // not sit below its price, so step up one tick when the input falls strictly between two ticks.
         tick = TickMath.getTickAtSqrtPrice(sqrtPriceX96);
         if (TickMath.getSqrtPriceAtTick(tick) < sqrtPriceX96) tick++;
     }
@@ -492,7 +552,9 @@ library JBUniswapV4LPSplitHookMath {
     }
 
     /// @notice Calculate the cash out rate (price floor).
-    /// @dev Uses total on-chain surplus across all terminals (matching JBTerminalStore._computeCashOutFrom).
+    /// @dev The floor is what a holder would reclaim by cashing out 1e18 project tokens right now, as previewed by the
+    /// project's own terminal store, so the ruleset's cash-out tax curve is included.
+    /// Uses total on-chain surplus across all terminals (matching JBTerminalStore._computeCashOutFrom).
     /// When `scopeCashOutsToLocalBalances` is false, also includes remote cross-chain surplus and supply
     /// from the sucker registry for accurate omnichain pricing.
     /// @param directory The JBDirectory used to resolve the project's primary terminal.
@@ -549,6 +611,7 @@ library JBUniswapV4LPSplitHookMath {
             totalSupply += suckerRegistry.remoteTotalSupplyOf(projectId);
         }
 
+        // Ask the store what cashing out one token (1e18) would reclaim against that surplus and supply.
         terminalTokensPerProjectToken = _terminalTokensPerProjectToken({
             store: store, projectId: projectId, totalSupply: totalSupply, surplus: surplus
         });
@@ -592,6 +655,9 @@ library JBUniswapV4LPSplitHookMath {
     }
 
     /// @notice Calculate the issuance rate (price ceiling).
+    /// @dev The number of project tokens a payer receives for 1e18 terminal tokens at the current weight, after the
+    /// reserved percent is set aside. A bid that paid more than this per token could be filled by anyone who pays the
+    /// project, mints at this rate, and sells the tokens into the bid at a profit, so the hook's bid never pays more.
     /// @param directory The JBDirectory used to resolve the project's primary terminal.
     /// @param projectId The ID of the project.
     /// @param terminalToken The terminal token address.
@@ -709,21 +775,25 @@ library JBUniswapV4LPSplitHookMath {
         pure
         returns (uint160 sqrtPriceX96)
     {
+        // A pool's sqrtPriceX96 is `sqrt(amount1 / amount0) * 2^96`, which equals `sqrt(amount1 * 2^192 / amount0)`.
         // Prices at or above 2^128 are past MAX_SQRT_PRICE (about 2^160) already; clamping first keeps the scaled
         // ratio below 2^192 so the multiplication cannot overflow.
         uint256 ratio = amount1 / amount0;
         if (ratio >= 2 ** 128) return TickMath.MAX_SQRT_PRICE - 1;
         uint256 result;
         if (ratio < 2 ** 64) {
+            // Small ratio: scale by the full 2^192 before the root.
             result = _sqrt({
                 x: _mulDiv({x: amount1, y: 2 ** 192, denominator: amount0, roundUp: roundUp}), roundUp: roundUp
             });
         } else {
+            // Large ratio: 2^192 would overflow, so scale by 2^64 and multiply the root by 2^64 (sqrt(2^128)).
             result = _sqrt({
                 x: _mulDiv({x: amount1, y: 2 ** 64, denominator: amount0, roundUp: roundUp}), roundUp: roundUp
             }) << 64;
         }
 
+        // Clamp into the range Uniswap accepts for a price.
         if (result < uint256(TickMath.MIN_SQRT_PRICE)) return TickMath.MIN_SQRT_PRICE;
         if (result > uint256(TickMath.MAX_SQRT_PRICE - 1)) return TickMath.MAX_SQRT_PRICE - 1;
         // The value was clamped into the uint160 Uniswap sqrt-price range above.
@@ -744,6 +814,8 @@ library JBUniswapV4LPSplitHookMath {
     }
 
     /// @notice For given terminalToken amount, compute equivalent projectToken amount at current JuiceboxV4 price.
+    /// @dev Mirrors how a terminal prices a payment: `amount * weight / weightRatio`, where `weightRatio` is one whole
+    /// terminal token when its currency is the ruleset's base currency, else its price in the base currency.
     /// @param directory The JBDirectory used to resolve the project's primary terminal.
     /// @param projectId The ID of the project.
     /// @param terminalToken The terminal token address.
@@ -825,8 +897,11 @@ library JBUniswapV4LPSplitHookMath {
         view
         returns (uint256 terminalTokensPerProjectToken)
     {
+        // No supply means nothing can be cashed out, so there is no floor to read.
         if (totalSupply == 0) return 0;
 
+        // Preview a 1e18-token cash-out. With less than 1e18 tokens in existence, preview the whole supply instead (a
+        // larger count would still reclaim only the whole surplus, understating the rate) and scale it to 1e18 below.
         uint256 cashOutCount = totalSupply < _WAD ? totalSupply : _WAD;
         // No try/catch: a preview failure must not read as a zero floor.
         uint256 reclaimableAmount = store.currentReclaimableSurplusOf({
