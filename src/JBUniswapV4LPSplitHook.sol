@@ -109,6 +109,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// against.
     error JBUniswapV4LPSplitHook_InvalidTerminalToken(uint256 projectId, address terminalToken);
 
+    /// @notice Thrown when a project's cash-out value per token exceeds its issuance price and the hook holds no live
+    /// position to retire: no price is both at or above the cash-out value and at or below the issuance price, so there
+    /// is nothing safe to quote.
+    error JBUniswapV4LPSplitHook_InvertedCorridor(uint256 projectId, address terminalToken);
+
     /// @notice Thrown when the pool's live spot leaves nothing for the hook to deploy: no aligned ask range between the
     /// spot and the issuance ceiling (or no project tokens to fill one), AND no terminal tokens to offer as bids
     /// between the spot and the cash-out floor (or no aligned bid range for them).
@@ -1238,6 +1243,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
                 controller: controller,
                 ruleset: ruleset
             });
+            // An empty corridor means inverted economics: there is no band to check the price against.
+            if (tickLower == tickUpper) {
+                revert JBUniswapV4LPSplitHook_InvertedCorridor({projectId: projectId, terminalToken: terminalToken});
+            }
 
             // Reject an existing price at or beyond the CASH-OUT FLOOR side of the band, where an LP sited at the
             // extreme would sell the project's tokens into a manipulated price. The ISSUANCE-CEILING side is accepted:
@@ -1673,6 +1682,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         internal
     {
         PoolKey memory key = poolKeysOf[projectId][terminalToken];
+        bool hadPositions = askTokenIdOf[projectId][terminalToken] != 0 || bidTokenIdOf[projectId][terminalToken] != 0;
 
         // Retire both live positions; their fees are routed and their principal joins the ledgers.
         _retirePosition({
@@ -1705,6 +1715,16 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             controller: controller,
             ruleset: ruleset
         });
+
+        // An empty corridor means the cash-out value exceeds the issuance price: any ask would sell below the cash-out
+        // value and any bid would buy above the issuance price. Keep everything ledgered until the corridor reopens;
+        // retiring the live positions is the point, so only a recycle with nothing to retire reverts.
+        if (corridorLower == corridorUpper) {
+            if (!hadPositions) {
+                revert JBUniswapV4LPSplitHook_InvertedCorridor({projectId: projectId, terminalToken: terminalToken});
+            }
+            return;
+        }
 
         uint160 sqrtPriceX96 = _getSqrtPriceX96(key);
         int24 spotTick = TickMath.getTickAtSqrtPrice(sqrtPriceX96);

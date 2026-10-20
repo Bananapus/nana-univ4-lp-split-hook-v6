@@ -230,7 +230,7 @@ Pure library. `alignTickToSpacing` (floor), `alignTickToSpacingCeil` (ceiling, a
 
 10. **Burn slippage floor is contract-derived.** On every recycle, each burn's minimum-out is a fraction of a pre-burn principal read at the live spot (`_burnSlippageFloor`). Callers never supply or lower it, so a burn cannot be forced to accept an arbitrarily bad recovery.
 
-11. **Recycle atomicity.** If neither side mints after the burns, the entire recycle reverts with `NoDeployableLiquidityAtSpot`. The old positions are never destroyed unless at least one new position is minted.
+11. **Recycle atomicity.** If neither side mints after the burns, the entire recycle reverts with `NoDeployableLiquidityAtSpot`. The old positions are never destroyed unless at least one new position is minted, except under inverted economics (cash-out value above the issuance price), where `calculateTickBounds` returns an empty corridor and the recycle deliberately retires both positions and holds every token in the ledgers; with nothing to retire it reverts `InvertedCorridor`.
 
 12. **At most two positions per pair.** `askTokenIdOf` and `bidTokenIdOf` are the only position ids the hook tracks for a `(projectId, terminalToken)`; every recycle burns both before minting at most one of each.
 

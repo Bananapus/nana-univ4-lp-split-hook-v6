@@ -109,7 +109,8 @@ library JBUniswapV4LPSplitHookMath {
     /// @param controller The project's controller address (pre-fetched to avoid redundant lookups).
     /// @param ruleset The project's current ruleset (pre-fetched to avoid redundant lookups).
     /// @return tickLower The lower tick bound of the LP position.
-    /// @return tickUpper The upper tick bound of the LP position.
+    /// @return tickUpper The upper tick bound of the LP position. Equal to `tickLower` (an empty corridor) exactly when
+    /// the cash-out value per token exceeds the issuance price, so no price respects both bounds.
     function calculateTickBounds(
         IJBDirectory directory,
         IJBSuckerRegistry suckerRegistry,
@@ -225,6 +226,15 @@ library JBUniswapV4LPSplitHookMath {
                 ruleset: ruleset
             })
         );
+
+        // The cash-out floor must sit on the cheap side of the issuance ceiling: below it in project price. Project
+        // price rises with the tick when the project is token0 and falls with it when the project is token1. If the
+        // cash-out value exceeds the issuance price, return an empty corridor rather than sorting the bounds into a
+        // range whose ends are economically swapped.
+        {
+            (address token0,) = JBLPSplitHookHelpers.sortTokens({tokenA: terminalToken, tokenB: projectToken});
+            if (projectToken == token0 ? rawTickA > rawTickB : rawTickA < rawTickB) return (0, 0);
+        }
 
         // Sort ticks so tickLower <= tickUpper regardless of token ordering.
         // Without sorting, pools where terminalToken is token0 (e.g. native ETH)
@@ -438,16 +448,16 @@ library JBUniswapV4LPSplitHookMath {
         if (ratioE18 == 0) return 0;
 
         // Solve for the cash-out amount `c`, folding in any pre-held terminal tokens `H`. After cashing out c project
-        // tokens the position holds (c·cashOutRate + H) terminal and (T − c) project; we want terminal/project ==
-        // ratioE18 (= R), i.e. (c·cashOutRate + H)/(T − c) = R. Rearranged:
-        //   c = (T·R − H) / (cashOutRate + R)  →  c = T·ratioE18/(r+R) − H/(r+R).
+        // tokens the position holds (c*cashOutRate + H) terminal and (T − c) project; we want terminal/project ==
+        // ratioE18 (= R), i.e. (c*cashOutRate + H)/(T − c) = R. Rearranged:
+        //   c = (T*R − H) / (cashOutRate + R)  →  c = T*ratioE18/(r+R) − H/(r+R).
         // The pre-held reduction MUST use the combined divisor (cashOutRate + ratioE18), not cashOutRate alone:
         // subtracting H/cashOutRate over-subtracts (since r+R > r), under-deploying capital and stranding project
         // tokens as leftovers. `denom` is that combined divisor.
         uint256 denom = cashOutRate + ratioE18;
         if (denom == 0) return 0;
 
-        // Gross optimum ignoring pre-held tokens: T·R/(r+R).
+        // Gross optimum ignoring pre-held tokens: T*R/(r+R).
         uint256 grossCashOut = mulDiv({x: totalProjectTokens, y: ratioE18, denominator: denom});
 
         // Project-token equivalent of the pre-held terminal tokens at the SAME combined rate: H/(r+R).
