@@ -28,7 +28,7 @@ Each project holds at most two positions on its pool:
 
 The spot sits in a one-spacing (200-tick) gap between them, so both mints are single-sided and the hook never quotes at the exact spot. A recycle collects and routes each position's fees, burns both, claims any hook-held credits, recomputes the corridor, and re-mints the ask from every project token the hook holds for the project and the bid from every terminal token. Trading converts each position toward the other token; the next recycle moves those tokens back to the side they belong on.
 
-The corridor is derived from project economics (the floor at the project's cash-out price, the ceiling at its issuance price) rather than from an arbitrary price target.
+The corridor is derived from project economics (the floor at the project's cash-out price, the ceiling at its issuance price) rather than from an arbitrary price target. Both bounds round inward against the exact prices; when the cash-out value reaches the issuance price, or no aligned spacing fits between them, the corridor is empty and the hook holds its tokens until it reopens.
 
 Use this repo when reserved-token issuance should become managed concentrated liquidity. Do not use it when a project only needs a buyback hook or normal reserved-token splits.
 

@@ -11,6 +11,11 @@ import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
 import {TickMath} from "@uniswap/v4-core/src/libraries/TickMath.sol";
 
 contract PullingFeeTerminal {
+    /// @dev Matches IJBTerminal.currentSurplusOf: this terminal holds no surplus for any project.
+    function currentSurplusOf(uint256, address[] calldata, uint256, uint256) external pure returns (uint256) {
+        return 0;
+    }
+
     address public storeAddress;
 
     mapping(uint256 projectId => mapping(address token => JBAccountingContext)) public contexts;

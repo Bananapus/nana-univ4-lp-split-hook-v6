@@ -9,7 +9,7 @@ import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookCont
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {IJBSplitHook} from "@bananapus/core-v6/src/interfaces/IJBSplitHook.sol";
 import {MockERC20} from "./mock/MockERC20.sol";
-import {MockJBController} from "./mock/MockJBContracts.sol";
+import {MockJBController, MockJBTerminalStore} from "./mock/MockJBContracts.sol";
 
 // ═══════════════════════════════════════════════════════════════════════
 // Malicious Contracts
@@ -37,6 +37,20 @@ contract ReentrantControllerTerminal is MockJBController {
 
     mapping(uint256 projectId => mapping(address token => JBAccountingContext)) public _contexts;
     mapping(uint256 projectId => JBAccountingContext[]) public _contextsList;
+
+    /// @dev Matches IJBTerminal.currentSurplusOf: this terminal's own surplus, as its store reports it.
+    function currentSurplusOf(
+        uint256 projectId,
+        address[] calldata,
+        uint256 decimals,
+        uint256 currency
+    )
+        external
+        view
+        returns (uint256)
+    {
+        return MockJBTerminalStore(storeAddr).currentTotalSurplusOf(projectId, decimals, currency);
+    }
 
     constructor(
         JBUniswapV4LPSplitHook _hook,

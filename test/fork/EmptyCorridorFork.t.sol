@@ -17,15 +17,16 @@ import {JBUniswapV4LPSplitHookMath} from "../../src/libraries/JBUniswapV4LPSplit
 import {BuySwapHelper} from "./Integration_SingleSidedRevnet.t.sol";
 import {TwoPositionForkBase} from "./TwoPositionForkBase.sol";
 
-/// @notice An inverted corridor on the real mainnet PoolManager/PositionManager: the project's cash-out value per
-/// token exceeds its issuance price, so no price is both at or above the cash-out value and at or below the issuance
-/// price. The hook must refuse to seed a pool, retire live positions into its ledgers when economics invert, never let
-/// a buyer take project tokens below their cash-out value from it, and redeploy once the corridor reopens.
+/// @notice An empty corridor on the real mainnet PoolManager/PositionManager: the project's cash-out value per token
+/// reaches its issuance price (here by inverting, including by less than one tick), so no price is both at or above
+/// the cash-out value and at or below the issuance price. The hook must refuse to seed a pool, retire live positions
+/// into its ledgers when the corridor empties, never let a buyer take project tokens below their cash-out value from
+/// it, and redeploy once the corridor reopens.
 ///
 /// Economics: weight 1M tokens per ETH with a 50% reserved percent, so the hook's issuance ceiling is the net price,
 /// 2e-6 ETH per token, while payments mint at 1e-6 ETH per token gross. A 100 ETH `addToBalanceOf` donation lifts the
 /// cash-out value far above 2e-6 (inverted); later payments pull it back toward 1e-6, below the ceiling (normal).
-contract InvertedCorridorFork is TwoPositionForkBase {
+contract EmptyCorridorFork is TwoPositionForkBase {
     using StateLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;
 
@@ -34,7 +35,7 @@ contract InvertedCorridorFork is TwoPositionForkBase {
 
     /// @notice With cash-out value above issuance from the start, a permissionless `deployPool` reverts and keeps the
     /// inventory ledgered.
-    function test_fork_deployPool_invertedCorridor_reverts() public {
+    function test_fork_deployPool_emptyCorridor_reverts() public {
         uint256 pid = _launchProject({reservedPercent: 0, weight: 1_000_000e18});
         vm.prank(multisig);
         IJBToken pToken = jbController.deployERC20For(pid, "Inverted", "INV", bytes32(0));
@@ -46,7 +47,7 @@ contract InvertedCorridorFork is TwoPositionForkBase {
         assertEq(lo, hi, "the corridor is empty");
 
         vm.expectRevert(
-            abi.encodeWithSelector(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvertedCorridor.selector, pid, NATIVE)
+            abi.encodeWithSelector(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_EmptyCorridor.selector, pid, NATIVE)
         );
         vm.prank(randomCaller);
         hook.deployPool(pid);
@@ -59,7 +60,7 @@ contract InvertedCorridorFork is TwoPositionForkBase {
     /// @notice Live ask and bid deployed under normal economics; a donation inverts the corridor. A permissionless
     /// recycle retires both positions and ledgers every recovered token exactly; no buyer can then take project tokens
     /// from the hook below their cash-out value; once payments reopen the corridor, the recycle redeploys inside it.
-    function test_fork_invertedCorridor_retiresBothPositions_thenRedeploys() public {
+    function test_fork_emptyCorridor_retiresBothPositions_thenRedeploys() public {
         // ── Normal economics: deploy an ask, let a buyer fill part of it, recycle into an ask and a bid.
         uint256 pid = _launchProject({reservedPercent: 5000, weight: 1_000_000e18});
         vm.prank(multisig);
@@ -140,14 +141,13 @@ contract InvertedCorridorFork is TwoPositionForkBase {
         // With nothing left to retire, another recycle reverts rather than quoting into the empty corridor.
         _mockOracleTwapEqualsSpot(hook.oracleHook(), V4_POOL_MANAGER, key);
         vm.expectRevert(
-            abi.encodeWithSelector(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvertedCorridor.selector, pid, NATIVE)
+            abi.encodeWithSelector(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_EmptyCorridor.selector, pid, NATIVE)
         );
         vm.prank(randomCaller);
         hook.addLiquidity(pid, NATIVE);
 
-        // ── Codex economics check: a buyer sweeping the price all the way to the cash-out value gets no fill from
-        // the
-        // hook, so no hook quote sells project tokens below what they cash out for.
+        // ── Codex economics check: a buyer sweeping the price to the cash-out value gets no fill from the hook, so
+        // no hook quote sells project tokens below what they cash out for.
         {
             uint160 cashOutSqrtPrice = _cashOutSqrtPrice(pid, address(pToken));
             (uint160 spot,,,) = V4_POOL_MANAGER.getSlot0(key.toId());
@@ -195,6 +195,44 @@ contract InvertedCorridorFork is TwoPositionForkBase {
         assertLt(hook.accumulatedTerminalTokens(pid, NATIVE), 1e9, "terminal inventory redeployed");
     }
 
+    /// @notice A cash-out value 0.001% above the issuance price shares its tick, so only the exact prices show the
+    /// inversion: the corridor is empty and a permissionless `deployPool` reverts before seeding the pool.
+    function test_fork_deployPool_subTickInversion_reverts() public {
+        // Issuance 1.25e-6 ETH per token (no reserve). 1 ETH paid plus 800 tokens minted to the hook leaves a
+        // cash-out value of 1/800,800; a 0.00101 ETH donation lifts it to 1.00101/800,800, about 0.001% above 1.25e-6.
+        // Both sit inside tick 135,930 (project tokens per ETH).
+        uint256 pid = _launchProject({reservedPercent: 0, weight: 800_000e18});
+        vm.prank(multisig);
+        IJBToken pToken = jbController.deployERC20For(pid, "SubTick", "SUB", bytes32(0));
+        _pay(pid, 1 ether);
+        _accumulateTokens(pid, address(pToken), 800e18);
+        _donate(pid, 0.001_01 ether);
+
+        uint160 cashOutSqrtPrice = _cashOutSqrtPrice(pid, address(pToken));
+        uint160 issuanceSqrtPrice = _issuanceSqrtPrice(pid, address(pToken));
+        assertEq(
+            TickMath.getTickAtSqrtPrice(cashOutSqrtPrice),
+            TickMath.getTickAtSqrtPrice(issuanceSqrtPrice),
+            "precondition: both prices round to one tick"
+        );
+        // ETH is currency0, so the pool price is project tokens per ETH: a higher cash-out value is a lower price.
+        assertLt(cashOutSqrtPrice, issuanceSqrtPrice, "precondition: the cash-out value is above the issuance price");
+        (int24 lo, int24 hi) = _corridorOf(pid, address(pToken));
+        assertEq(lo, 0, "the corridor is empty: lower");
+        assertEq(hi, 0, "the corridor is empty: upper");
+
+        vm.expectRevert(
+            abi.encodeWithSelector(JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_EmptyCorridor.selector, pid, NATIVE)
+        );
+        vm.prank(randomCaller);
+        hook.deployPool(pid);
+
+        (uint160 spot,,,) = V4_POOL_MANAGER.getSlot0(_keyOf(address(pToken)).toId());
+        assertEq(spot, 0, "the pool was not initialized");
+        assertFalse(hook.isPoolDeployed(pid, NATIVE), "no pool was deployed");
+        assertEq(hook.accumulatedProjectTokens(pid), 800e18, "the inventory stays ledgered");
+    }
+
     /// @notice A buyer swaps exact `amount` ETH in for project tokens through the pool.
     function _buy(BuySwapHelper swapHelper, PoolKey memory key, uint256 amount) internal {
         vm.prank(buyer);
@@ -214,6 +252,19 @@ contract InvertedCorridorFork is TwoPositionForkBase {
         return JBUniswapV4LPSplitHookMath.getCashOutRateSqrtPriceX96({
             directory: jbDirectory,
             suckerRegistry: IJBSuckerRegistry(address(0)),
+            projectId: pid,
+            terminalToken: NATIVE,
+            projectToken: pToken,
+            controller: address(jbController),
+            ruleset: ruleset
+        });
+    }
+
+    /// @notice The raw (unaligned) issuance price as a sqrt price, from the hook's own linked math.
+    function _issuanceSqrtPrice(uint256 pid, address pToken) internal view returns (uint160) {
+        (JBRuleset memory ruleset,) = jbController.currentRulesetOf(pid);
+        return JBUniswapV4LPSplitHookMath.getIssuanceRateSqrtPriceX96({
+            directory: jbDirectory,
             projectId: pid,
             terminalToken: NATIVE,
             projectToken: pToken,

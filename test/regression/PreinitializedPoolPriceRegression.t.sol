@@ -69,37 +69,6 @@ contract RegressionPriceMathHook is JBUniswapV4LPSplitHook {
             IJBDirectory(DIRECTORY), SUCKER_REGISTRY, projectId, terminalToken, projectToken, controller, ruleset
         );
     }
-
-    // forge-lint: disable-next-line(mixed-case-function)
-    function exposed_computeOptimalCashOutAmount(
-        uint256 projectId,
-        address terminalToken,
-        address projectToken,
-        uint256 totalProjectTokens,
-        uint160 sqrtPriceInit,
-        int24 tickLower,
-        int24 tickUpper
-    )
-        external
-        view
-        returns (uint256)
-    {
-        (address controller, JBRuleset memory ruleset) = _fetchControllerAndRuleset(projectId);
-        return JBUniswapV4LPSplitHookMath.computeOptimalCashOutAmount(
-            IJBDirectory(DIRECTORY),
-            SUCKER_REGISTRY,
-            projectId,
-            terminalToken,
-            projectToken,
-            totalProjectTokens,
-            0,
-            sqrtPriceInit,
-            tickLower,
-            tickUpper,
-            controller,
-            ruleset
-        );
-    }
 }
 
 contract RegressionPreinitializedPoolPriceRegression is LPSplitHookV4TestBase {

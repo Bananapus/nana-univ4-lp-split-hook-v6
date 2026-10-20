@@ -63,7 +63,7 @@ Lifecycle:
 ## Critical invariants
 
 1. One project path transitions from accumulation mode to deployed-LP mode exactly once.
-2. Tick bounds remain valid and inside the intended economic envelope.
+2. Tick bounds remain valid and inside the intended economic envelope: each rounds inward against its exact price, and a band with no aligned spacing between the cash-out value and the issuance price is an empty corridor, never a reopened band.
 3. Fee-token claims stay segregated from freely spendable or routable balances.
 4. A recycle must not destroy tracked fee claims or silently mint value.
 5. At most two positions exist per project and terminal token; the ask never sits below the cash-out floor and the bid never above the issuance ceiling; both are single-sided with the spot in the gap between them, and neither crosses the validated TWAP (the ask never sells below it, the bid never buys above it).

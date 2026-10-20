@@ -16,6 +16,7 @@ import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 import {LPSplitHookV4TestBase} from "../TestBaseV4.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
+import {MockJBTerminalStore} from "../mock/MockJBContracts.sol";
 
 interface IStoreLike {
     function balanceOf(address terminal, uint256 projectId, address token) external view returns (uint256);
@@ -38,6 +39,20 @@ contract HighestValueSelectionHarness is JBUniswapV4LPSplitHook {
 }
 
 contract StoreBackedCashOutTerminal {
+    /// @dev Matches IJBTerminal.currentSurplusOf: this terminal's own surplus, as its store reports it.
+    function currentSurplusOf(
+        uint256 projectId,
+        address[] calldata,
+        uint256 decimals,
+        uint256 currency
+    )
+        external
+        view
+        returns (uint256)
+    {
+        return MockJBTerminalStore(STORE_ADDRESS).currentTotalSurplusOf(projectId, decimals, currency);
+    }
+
     address public immutable ACCEPTED_TOKEN;
     address public immutable STORE_ADDRESS;
 

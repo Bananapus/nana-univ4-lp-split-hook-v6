@@ -422,7 +422,7 @@ contract TestRegressionGaps is TwoPositionFixture {
     // -----------------------------------------------------------------------
 
     /// @notice A surplus so high that the cash-out value (1 terminal token per project token) exceeds the issuance
-    /// price (1/900) leaves no price inside the corridor: `deployPool` refuses with `InvertedCorridor`, never calls
+    /// price (1/900) leaves no price inside the corridor: `deployPool` refuses with `EmptyCorridor`, never calls
     /// `cashOutTokensOf`, and keeps the reserved tokens ledgered.
     function test_ExtremePrice_HighSurplus() public {
         uint256 highSurplusProject = 6;
@@ -436,7 +436,7 @@ contract TestRegressionGaps is TwoPositionFixture {
         vm.prank(owner);
         vm.expectRevert(
             abi.encodeWithSelector(
-                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvertedCorridor.selector,
+                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_EmptyCorridor.selector,
                 highSurplusProject,
                 address(terminalToken)
             )
@@ -549,9 +549,12 @@ contract TestRegressionGaps is TwoPositionFixture {
         try hook.deployPool(dustProject) {
             assertTrue(false, "a 1-wei deploy must not succeed");
         } catch (bytes memory reason) {
-            assertNotEq(bytes4(reason), bytes4(keccak256("Panic(uint256)")), "dust must not panic");
+            // The revert data starts with its 4-byte selector; keeping only those bytes is the point.
+            // forge-lint: disable-next-line(unsafe-typecast)
+            bytes4 selector = bytes4(reason);
+            assertNotEq(selector, bytes4(keccak256("Panic(uint256)")), "dust must not panic");
             assertEq(
-                bytes4(reason),
+                selector,
                 JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_NoDeployableLiquidityAtSpot.selector,
                 "dust fails with the hook's no-deployable-liquidity error"
             );
@@ -588,19 +591,32 @@ contract TestRegressionGaps is TwoPositionFixture {
     // 17. Recycle with very high surplus (tick bounds close together)
     // -----------------------------------------------------------------------
 
-    /// @notice With issuance rate close to cash-out rate, tick bounds are very
-    ///         narrow. The recycle should handle narrow ranges correctly.
-    function test_ExtremePrice_NarrowTickRange_Recycle() public {
+    /// @notice With the cash-out value within one spacing of the issuance price, no aligned band fits between them:
+    ///         the corridor is empty, so the recycle retires the live ask and holds every token in the ledger, and
+    ///         the next recycle after the spread widens redeploys it.
+    function test_ExtremePrice_NarrowTickRange_RecycleHolds() public {
         // Set the cash-out value just below the issuance price (a narrow spread). The issuance rate at weight=1000e18
         // with a 10% reserve is 900 tokens per terminal token, a price of 1/900 ~= 0.001111e18 terminal tokens; a
         // surplus of 0.0011e18 per token puts the cash-out value about 100 ticks (half a spacing) below it.
         store.setSurplus(PROJECT_ID, 0.0011e18);
 
         _accumulateTokens(PROJECT_ID, 1e18);
+        (uint256 projectTotal,) = _recoverable(poolTokenId, 0);
         hook.addLiquidity(PROJECT_ID, address(terminalToken));
 
+        assertEq(hook.askTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "no ask in an empty corridor");
+        assertEq(hook.bidTokenIdOf(PROJECT_ID, address(terminalToken)), 0, "no bid in an empty corridor");
+        (,,,,,, bool exists) = positionManager._positions(poolTokenId);
+        assertFalse(exists, "the live ask is retired");
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), projectTotal, "every project token is held");
+        _assertBalancesBackedExactly();
+
+        // The spread widens again: the held tokens redeploy as a fresh ask.
+        store.setSurplus(PROJECT_ID, DEFAULT_SURPLUS_PER_TOKEN);
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
         uint256 newTokenId = hook.askTokenIdOf(PROJECT_ID, address(terminalToken));
-        assertNotEq(newTokenId, 0, "Recycle should succeed with narrow tick range");
+        assertGt(newTokenId, poolTokenId, "the ask redeploys under a fresh id");
+        _assertPlacedExactly(PROJECT_ID, address(projectToken), address(terminalToken), projectTotal, 0);
     }
 
     // =========================================================================

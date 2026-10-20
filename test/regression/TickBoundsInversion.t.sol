@@ -93,11 +93,9 @@ contract TestableHookForTickBounds is JBUniswapV4LPSplitHook {
 /// @dev The bug: `_calculateTickBounds` assigned cashOut tick to tickLower and issuance tick to
 ///      tickUpper without sorting. For pools where the terminal token is token0 (lower address),
 ///      e.g. native ETH pools, the cashOut tick is HIGHER than the issuance tick, causing
-///      tickLower >= tickUpper and triggering the narrow +/-1 tick fallback instead of the
-///      intended economic range.
+///      tickLower >= tickUpper and collapsing the intended economic range.
 ///
-///      The fix sorts the two raw ticks before assigning them to tickLower/tickUpper,
-///      matching the pattern already used in _computeInitialSqrtPrice (lines 994-995).
+///      The bounds are now sorted by their exact sqrt prices before rounding inward to tickLower/tickUpper.
 contract TickBoundsInversionTest is LPSplitHookV4TestBase {
     TestableHookForTickBounds public testableHook;
 
@@ -206,7 +204,7 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
     }
 
     /// @notice The fix ensures _calculateTickBounds produces a wide economic range
-    ///         (not the narrow +/-1 tick fallback) when terminal is token0.
+    ///         when terminal is token0.
     function test_tickBoundsAreWide_whenTerminalIsToken0() public view {
         (int24 tickLower, int24 tickUpper) = testableHook.exposed_calculateTickBounds(
             TEST_PROJECT_ID, address(lowTerminalToken), address(highProjectToken)
@@ -217,11 +215,9 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
         // Verify tickLower < tickUpper (basic correctness).
         assertLt(tickLower, tickUpper, "tickLower must be less than tickUpper");
 
-        // Verify the range is wider than the narrow fallback (2 * TICK_SPACING = 400).
-        // The narrow fallback of +/-1 tick spacing gives exactly 400 ticks.
-        // A proper economic range should be much wider.
+        // A proper economic range spans many spacings.
         int24 range = tickUpper - tickLower;
-        assertGt(range, 2 * tickSpacing, "Tick range should be wider than the narrow fallback of 2*TICK_SPACING");
+        assertGt(range, 2 * tickSpacing, "Tick range should span more than two spacings");
     }
 
     /// @notice Demonstrate the bug with a low cash-out rate that makes the inversion obvious.
@@ -231,7 +227,7 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
     ///           So cashOut sqrtPrice = sqrt(1e24) >> sqrt(900e18) = issuance sqrtPrice.
     ///           This means cashOut tick >> issuance tick, triggering inversion.
     ///         With the fix, sorting ensures tickLower < tickUpper and the range is correct.
-    function test_lowCashOutRate_noFallback_whenTerminalIsToken0() public {
+    function test_lowCashOutRate_wideRange_whenTerminalIsToken0() public {
         // Set a very low surplus => low cash-out rate.
         store.setSurplus(TEST_PROJECT_ID, 1e12);
 
@@ -259,16 +255,18 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
 
         assertLt(tickLower, tickUpper, "tickLower must be < tickUpper after sorting");
 
-        // The range should be wide (not the narrow +/-1 tick fallback).
+        // The range should be wide.
         int24 range = tickUpper - tickLower;
-        assertGt(range, 2 * int24(200), "Range should be wider than the narrow 2*TICK_SPACING fallback");
+        assertGt(range, 2 * int24(200), "Range should span more than two spacings");
 
         // Verify tickLower came from the issuance tick (the lower one) and
         // tickUpper came from the cashOut tick (the higher one), after alignment.
-        // tickLower is ceil-aligned (rounds up toward the inner band); tickUpper is floor-aligned. Both moves
-        // contract the LP range toward the intended price band, preventing project liquidity from being exposed
-        // outside the bonding-curve-sanctioned range.
-        int24 alignedIssuance = _alignTickToSpacingCeil({tick: tickIssuance, spacing: 200});
+        // Both bounds round inward against their exact prices: tickLower to the first aligned tick at or above the
+        // issuance price, tickUpper to the last aligned tick at or below the cash-out price, so no project liquidity
+        // sits outside the bonding-curve-sanctioned range.
+        int24 issuanceTickAtOrAbove =
+            TickMath.getSqrtPriceAtTick(tickIssuance) < sqrtPriceIssuance ? tickIssuance + 1 : tickIssuance;
+        int24 alignedIssuance = _alignTickToSpacingCeil({tick: issuanceTickAtOrAbove, spacing: 200});
         int24 alignedCashOut = _alignTickToSpacing(tickCashOut, 200);
         assertEq(tickLower, alignedIssuance, "tickLower should be the ceil-aligned issuance tick (the lower raw tick)");
         assertEq(tickUpper, alignedCashOut, "tickUpper should be the floor-aligned cashOut tick (the higher raw tick)");
@@ -297,12 +295,12 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
 
         assertLt(tickLower, tickUpper, "tickLower < tickUpper when terminal is token1");
         int24 range = tickUpper - tickLower;
-        assertGt(range, 2 * int24(200), "Range should be wider than narrow fallback");
+        assertGt(range, 2 * int24(200), "Range should span more than two spacings");
     }
 
     /// @notice End-to-end: deploy a pool where terminal is token0.
     ///         With the fix, the pool deploys with a proper LP range.
-    ///         Without the fix, the narrow fallback would waste most of the liquidity.
+    ///         Without the sort, the bounds would collapse and the corridor would be empty.
     function test_e2e_deployPool_whenTerminalIsToken0() public {
         // Accumulate project tokens.
         uint256 accAmount = 100e18;
@@ -354,7 +352,7 @@ contract TickBoundsInversionTest is LPSplitHookV4TestBase {
 
         vm.expectRevert(
             abi.encodeWithSelector(
-                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvertedCorridor.selector,
+                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_EmptyCorridor.selector,
                 TEST_PROJECT_ID,
                 address(lowTerminalToken)
             )

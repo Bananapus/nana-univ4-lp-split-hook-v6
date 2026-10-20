@@ -38,7 +38,7 @@
 reserved-token split distributions
   -> accumulate project tokens before pool deployment
 deploy (inline on a distribution, or permissionless `deployPool`)
-  -> computes price bounds from issuance and cash-out economics (floor tick = cash-out price)
+  -> computes price bounds from issuance and cash-out economics (floor tick = cash-out price), each rounded inward against its exact price
   -> deploys or uses the target pool (an already-initialized pool must pass the spot-vs-TWAP guard)
   -> runs the first recycle, which mints a single-sided ask from the accumulated project tokens (no cash-out)
 post-deployment, every recycle (inline on each distribution, or permissionless `addLiquidity` at any time)
@@ -51,7 +51,7 @@ post-deployment, every recycle (inline on each distribution, or permissionless `
      token1 rests on [corridorLower, min(spotFloor, corridorUpper)]
   -> mints the ask from the whole project ledger and the bid from the whole terminal ledger; a side with an empty range or zero amount stays in its ledger
   -> if neither side mints, reverts `NoDeployableLiquidityAtSpot` and the live positions are kept
-  -> if the corridor is empty (cash-out value above the issuance price), retires both positions and holds the tokens; reverts `InvertedCorridor` when nothing was live
+  -> if the corridor is empty (cash-out value at or above the issuance price, or a band narrower than one spacing), retires both positions and holds the tokens; reverts `EmptyCorridor` when nothing was live
 trading between recycles
   -> buys fill the ask (it accrues terminal tokens); sells fill the bid (it accrues project tokens)
   -> the next recycle moves each converted amount back to the side it belongs on

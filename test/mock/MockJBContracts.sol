@@ -407,6 +407,22 @@ contract MockJBMultiTerminal {
         return storeAddress;
     }
 
+    /// @dev Matches IJBTerminal.currentSurplusOf: this terminal's own surplus, as its store reports it.
+    function currentSurplusOf(
+        uint256 projectId,
+        address[] calldata,
+        /* tokens */
+        uint256 decimals,
+        uint256 currency
+    )
+        external
+        view
+        returns (uint256)
+    {
+        if (storeAddress == address(0)) return 0;
+        return MockJBTerminalStore(storeAddress).currentTotalSurplusOf(projectId, decimals, currency);
+    }
+
     function accountingContextForTokenOf(
         uint256 projectId,
         address token

@@ -6,6 +6,11 @@ import {MockERC20} from "../mock/MockERC20.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 
 contract PullingTerminal {
+    /// @dev Matches IJBTerminal.currentSurplusOf: this terminal holds no surplus for any project.
+    function currentSurplusOf(uint256, address[] calldata, uint256, uint256) external pure returns (uint256) {
+        return 0;
+    }
+
     address public storeAddress;
     mapping(uint256 projectId => mapping(address token => JBAccountingContext)) public contexts;
     mapping(uint256 projectId => JBAccountingContext[]) public contextsList;

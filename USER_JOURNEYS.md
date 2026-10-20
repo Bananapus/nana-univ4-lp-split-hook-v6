@@ -98,7 +98,7 @@ This repo takes reserved Juicebox token issuance and turns it into managed UniV4
 
 - oracle not warmed up or spot off the TWAP (`TwapUnavailable`, `PriceDeviationTooHigh`): retry once the price settles
 - the spot is past both ends of what the ledgers can fill (`NoDeployableLiquidityAtSpot`): the live positions are kept and the tokens wait in their ledgers
-- the project's cash-out value per token exceeds its issuance price (`InvertedCorridor` on a first deploy): nothing deploys until the issuance price rises above the cash-out value; a recycle with live positions succeeds and retires them
+- the corridor is empty (`EmptyCorridor` on a first deploy): the project's cash-out value per token reaches its issuance price, or sits within one tick spacing of it; nothing deploys until at least one aligned spacing opens between them; a recycle with live positions succeeds and retires them
 - a distribution with too little gas skips the inline attempt; nothing is lost
 
 **Postconditions**

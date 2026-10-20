@@ -18,6 +18,9 @@ import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
 import {MockERC20} from "../mock/MockERC20.sol";
+import {MockJBMultiTerminal, MockJBTerminalStore} from "../mock/MockJBContracts.sol";
+import {IJBUniswapV4LPSplitHook} from "../../src/interfaces/IJBUniswapV4LPSplitHook.sol";
+import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
 
 /// @notice Wrapper that exposes _getCashOutRate so the test can verify it queries the terminal store with the
 /// declared accounting-context currency, not the token-derived `uint32(uint160(token))`.
@@ -118,22 +121,169 @@ contract CashOutCurrencyParityTest is LPSplitHookV4TestBase {
         });
     }
 
-    /// @notice `_getCashOutRate` must call the terminal store with the project's declared currency, not the
-    /// token-derived value. We use `vm.expectCall` to assert the precise arguments.
+    /// @notice `_getCashOutRate` must ask each of the project's terminals for its surplus in the project's declared
+    /// currency, not the token-derived value. We use `vm.expectCall` to assert the precise arguments.
     function test_cashOutRate_queriesStoreWithAccountingContextCurrency() public {
-        // The hook reads the project's accounting context, then calls
-        // store.currentTotalReclaimableSurplusOf(projectId, _WAD, decimals=18, currency=DECLARED_CURRENCY).
-        // (scopeCashOutsToLocalBalances defaults to true in MockJBRulesets — see TestBaseV4 setup.)
+        // The hook reads the project's accounting context, then sums
+        // terminal.currentSurplusOf(projectId, [], decimals=18, currency=DECLARED_CURRENCY) across its terminals.
         vm.expectCall({
-            callee: address(store),
-            data: abi.encodeWithSignature(
-                "currentTotalReclaimableSurplusOf(uint256,uint256,uint256,uint256)",
-                TEST_PROJECT_ID,
-                uint256(1e18),
-                uint256(18),
-                uint256(DECLARED_CURRENCY)
+            callee: address(terminal),
+            data: abi.encodeCall(
+                IJBTerminal.currentSurplusOf,
+                (TEST_PROJECT_ID, new address[](0), uint256(18), uint256(DECLARED_CURRENCY))
             )
         });
         testableHook.exposed_getCashOutRate({projectId: TEST_PROJECT_ID, terminalToken: address(terminalTokenA)});
+    }
+}
+
+/// @notice Regression: the cash-out floor counts surplus across all of the project's local terminals, the way the
+/// terminal store sums it at settlement, so terminals backed by different stores all count. Previewing only the
+/// primary terminal's store undercounts the floor and lets asks sell below what a cash-out settles for.
+/// @dev The primary store holds 100 terminal tokens of surplus and a second local terminal, on its own store, holds
+/// 900, against a supply of 1000e18 and no tax: a 1e18 burn settles for 1 terminal token, while the primary store
+/// alone previews 0.1. The issuance price is 2 terminal tokens per project token, so the corridor is
+/// [1 + 2e-18, 2] in project price: [200, 6800] with the project as token0, [-6800, -200] as token1.
+contract CashOutAllTerminalsTest is LPSplitHookV4TestBase {
+    address internal constant NATIVE = JBConstants.NATIVE_TOKEN;
+
+    // Controlled project-token addresses on both sides of the ERC-20 terminal token (the native sentinel sorts below
+    // both, so a native pair always has the project as token1).
+    address internal lowProjectToken;
+    address internal highProjectToken;
+    MockJBTerminalStore internal secondStore;
+    MockJBMultiTerminal internal secondTerminal;
+
+    function setUp() public override {
+        super.setUp();
+        lowProjectToken = address(uint160(address(terminalToken)) - 1);
+        highProjectToken = address(uint160(address(terminalToken)) + 1);
+
+        // Issuance price 2 terminal tokens per project token.
+        controller.setWeight(PROJECT_ID, 0.5e18);
+        controller.setReservedPercent(PROJECT_ID, 0);
+
+        // The primary terminal also accepts native ETH.
+        _setDirectoryTerminal(PROJECT_ID, NATIVE, address(terminal));
+        // forge-lint: disable-next-line(unsafe-typecast)
+        terminal.setAccountingContext(PROJECT_ID, NATIVE, uint32(uint160(NATIVE)), 18);
+
+        // The primary store previews reclaims from the surplus and supply the hook passes, as the real store does.
+        store.setUseProvidedCashOutInputs(true);
+        store.setSurplus(PROJECT_ID, 100e18);
+        // What the primary store alone previews for a 1e18 burn: its own 100 of surplus over the 1000e18 supply.
+        vm.mockCall(
+            address(store),
+            abi.encodeWithSelector(MockJBTerminalStore.currentTotalReclaimableSurplusOf.selector),
+            abi.encode(uint256(0.1e18))
+        );
+
+        // A second local terminal on its own store holds the other 900.
+        secondStore = new MockJBTerminalStore();
+        secondStore.setSurplus(PROJECT_ID, 900e18);
+        secondTerminal = new MockJBMultiTerminal();
+        secondTerminal.setStore(address(secondStore));
+        _addDirectoryTerminal(PROJECT_ID, address(secondTerminal));
+    }
+
+    function _rate(address token) internal view returns (uint256) {
+        (JBRuleset memory ruleset,) = controller.currentRulesetOf(PROJECT_ID);
+        return JBUniswapV4LPSplitHookMath.getCashOutRate({
+            directory: IJBDirectory(address(directory)),
+            suckerRegistry: IJBSuckerRegistry(address(0)),
+            projectId: PROJECT_ID,
+            terminalToken: token,
+            controller: address(controller),
+            ruleset: ruleset
+        });
+    }
+
+    function _bounds(address token, address projectTokenAddr) internal view returns (int24, int24) {
+        (JBRuleset memory ruleset,) = controller.currentRulesetOf(PROJECT_ID);
+        return JBUniswapV4LPSplitHookMath.calculateTickBounds({
+            directory: IJBDirectory(address(directory)),
+            suckerRegistry: IJBSuckerRegistry(address(0)),
+            projectId: PROJECT_ID,
+            terminalToken: token,
+            projectToken: projectTokenAddr,
+            controller: address(controller),
+            ruleset: ruleset
+        });
+    }
+
+    function _assertSettlementFloor(address token, address projectTokenAddr, bool projectIsToken0) internal view {
+        assertEq(_rate(token), 1e18, "the floor counts every local terminal's surplus");
+        (int24 lower, int24 upper) = _bounds(token, projectTokenAddr);
+        assertEq(lower, projectIsToken0 ? int24(200) : int24(-6800), "corridor lower");
+        assertEq(upper, projectIsToken0 ? int24(6800) : int24(-200), "corridor upper");
+    }
+
+    function test_cashOutRate_countsEveryTerminal_ProjectToken0() public view {
+        _assertSettlementFloor(address(terminalToken), lowProjectToken, true);
+    }
+
+    function test_cashOutRate_countsEveryTerminal_ProjectToken1() public view {
+        _assertSettlementFloor(address(terminalToken), highProjectToken, false);
+    }
+
+    function test_cashOutRate_countsEveryTerminal_NativeCurrency0() public view {
+        _assertSettlementFloor(NATIVE, highProjectToken, false);
+    }
+
+    /// @notice A failing surplus or reclaim preview reverts the bounds rather than reading as a zero floor: the
+    /// recycle reverts, while a distribution's inline automation fails softly and keeps the intake.
+    function test_failingPreview_revertsBounds_inlineKeepsIntake() public {
+        _accumulateAndDeploy(PROJECT_ID, 100e18);
+        vm.mockCallRevert(
+            address(store),
+            abi.encodeWithSelector(MockJBTerminalStore.currentTotalReclaimableSurplusOf.selector),
+            bytes("preview down")
+        );
+        vm.mockCallRevert(
+            address(store),
+            abi.encodeWithSignature("currentReclaimableSurplusOf(uint256,uint256,uint256,uint256)"),
+            bytes("preview down")
+        );
+
+        vm.expectRevert(bytes("preview down"));
+        this.rateOf(address(terminalToken));
+
+        vm.expectRevert(bytes("preview down"));
+        hook.addLiquidity(PROJECT_ID, address(terminalToken));
+
+        uint256 ledgerBefore = hook.accumulatedProjectTokens(PROJECT_ID);
+        projectToken.mint(address(controller), 1e18);
+        vm.startPrank(address(controller));
+        projectToken.approve(address(hook), 1e18);
+        vm.expectEmit(true, false, false, false, address(hook));
+        emit IJBUniswapV4LPSplitHook.LiquidityAutomationFailed(PROJECT_ID, bytes4(0), address(controller));
+        hook.processSplitWith(_buildReservedContext(PROJECT_ID, 1e18));
+        vm.stopPrank();
+        assertEq(hook.accumulatedProjectTokens(PROJECT_ID), ledgerBefore + 1e18, "the intake is kept");
+    }
+
+    /// @notice External wrapper so `vm.expectRevert` can catch a library revert.
+    function rateOf(address token) external view returns (uint256) {
+        return _rate(token);
+    }
+
+    /// @notice With less than one whole token of supply, scaling the preview up to 1e18 tokens saturates instead of
+    /// overflowing, and the saturated floor leaves an empty corridor rather than a revert.
+    function test_partialSupplyPreview_saturates() public {
+        controller.setTotalTokenSupplyWithReservedTokensOf(PROJECT_ID, 1);
+        vm.mockCall(
+            address(store),
+            abi.encodeWithSignature("currentReclaimableSurplusOf(uint256,uint256,uint256,uint256)"),
+            abi.encode(type(uint256).max / 1e18 + 1)
+        );
+        vm.mockCall(
+            address(store),
+            abi.encodeWithSelector(MockJBTerminalStore.currentTotalSurplusOf.selector),
+            abi.encode(type(uint256).max / 1e18 + 1)
+        );
+        assertEq(_rate(address(terminalToken)), type(uint256).max, "the preview saturates");
+        (int24 lower, int24 upper) = _bounds(address(terminalToken), lowProjectToken);
+        assertEq(lower, 0, "a saturated floor empties the corridor: lower");
+        assertEq(upper, 0, "a saturated floor empties the corridor: upper");
     }
 }

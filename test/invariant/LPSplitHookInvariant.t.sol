@@ -252,6 +252,8 @@ contract LPSplitHookHandler is Test {
     }
 
     function _selectorOf(bytes memory reason) internal pure returns (bytes4 selector) {
+        // Keeping only the leading 4-byte selector is the point.
+        // forge-lint: disable-next-line(unsafe-typecast)
         if (reason.length >= 4) selector = bytes4(reason);
     }
 
@@ -866,7 +868,7 @@ contract LPSplitHookInvariantTest is StdInvariant, Test {
     /// @notice Every live position NFT is exactly one project's tracked ask or bid: a deployed project has one or two
     ///         live positions, recycles burn the ids they replace, and no NFT is ever left orphaned.
     /// @dev A recycle reverts (`NoDeployableLiquidityAtSpot`) rather than storing two zero ids, so a deployed project
-    ///      always keeps at least one live position. (Only an inverted corridor retires both into the ledgers; the
+    ///      always keeps at least one live position. (Only an empty corridor retires both into the ledgers; the
     ///      economics never change in this campaign.)
     function invariant_positionLifecycleConsistency() public view {
         uint256 trackedLive;

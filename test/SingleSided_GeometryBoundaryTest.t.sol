@@ -25,9 +25,12 @@ import {LiquidityAmounts} from "@uniswap/v4-core/test/utils/LiquidityAmounts.sol
 ///     one wei below the next aligned tick, for negative and positive `k`;
 ///   - the MIN_TICK partial spacing: a recycle at `MIN_SQRT_PRICE` and `MIN_SQRT_PRICE + 1` mints token0 clamped to
 ///     the corridor and skips token1 without an out-of-range TickMath call;
-///   - the inverted corridor: once the cash-out value exceeds the issuance price the corridor is empty, a recycle
-///     retires both live positions and holds every token in the ledgers, a recycle or deploy with nothing to retire
-///     reverts `InvertedCorridor`, and fresh positions redeploy once the economics are normal again.
+///   - corridor construction: bounds round inward against the exact cash-out and issuance prices, a corridor exactly
+///     one spacing wide deploys, and tiny rates keep their price precision;
+///   - the empty corridor: once the cash-out value reaches the issuance price (even by less than one tick) or the band
+///     between them is narrower than one spacing, the corridor is empty, a recycle retires both live positions and
+///     holds every token in the ledgers, a recycle or deploy with nothing to retire reverts `EmptyCorridor` before any
+///     pool is seeded, and fresh positions redeploy once the corridor reopens.
 /// @dev Spot moves go through `_swapTo`, which re-marks every live position to exactly the principal its liquidity
 /// holds at the new price (the shared `TwoPositionFixture` helpers keep the PositionManager's balances backing it), so
 /// burns always recover real principal and satisfy contract-derived burn minimums. The mocked TWAP tracks the spot.
@@ -104,6 +107,8 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
     /// @notice A spacing-aligned tick in the middle of the corridor.
     function _midTick() internal view returns (int24 mid) {
         (int24 lower, int24 upper) = _corridor();
+        // Intentionally divide before multiplying to align the midpoint to the spacing grid.
+        // forge-lint: disable-next-line(divide-before-multiply)
         mid = ((lower + (upper - lower) / 2) / SPACING) * SPACING;
     }
 
@@ -616,24 +621,88 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         _runMinPrice(false, TickMath.MIN_SQRT_PRICE + 1);
     }
 
-    // ─── Inverted corridor lifecycle (both orderings)
+    // ─── Corridor construction (both orderings)
     // ────────────────────────────────────────────────
 
-    /// @notice Cash-out value above the issuance price: one terminal token per project token against an issuance
-    /// price of 1/900 terminal tokens.
-    function _invertEconomics() internal {
-        store.setTaxedCashOutCurve({projectId: PID, surplus: 1_000_000e18, supply: 1_000_000e18, taxRate: 0});
+    /// @notice How a test empties the corridor.
+    enum Empty {
+        // Cash-out value 1 terminal token per project token against an issuance price of 1/900.
+        Inverted,
+        // Cash-out value 0.001111122222222222, about 0.001% above the 1/900 issuance price: both share one tick.
+        SubTickInverted,
+        // Cash-out value and issuance price both exactly 1.
+        Equal,
+        // Cash-out value 0.0011, about 100 ticks under the 1/900 issuance price: no aligned spacing fits between.
+        Narrow
+    }
+
+    /// @notice Set exact economics: the cash-out value per project token (18 decimals) and the issuance rate (project
+    /// tokens per terminal token, no reserved share).
+    function _setPrices(uint256 cashOutValue, uint256 issuanceRate) internal {
+        controller.setWeight(PID, issuanceRate);
+        controller.setReservedPercent(PID, 0);
+        store.setTaxedCashOutCurve({projectId: PID, surplus: cashOutValue, supply: 1e18, taxRate: 0});
+    }
+
+    function _emptyEconomics(Empty kind) internal {
+        if (kind == Empty.Inverted) _setPrices(1e18, 900e18);
+        else if (kind == Empty.SubTickInverted) _setPrices(0.001111122222222222e18, 900e18);
+        else if (kind == Empty.Equal) _setPrices(1e18, 1e18);
+        else _setPrices(0.0011e18, 900e18);
     }
 
     /// @notice The `_wire` economics: the cash-out floor genuinely below the issuance ceiling.
     function _restoreEconomics() internal {
+        controller.setWeight(PID, DEFAULT_WEIGHT);
+        controller.setReservedPercent(PID, DEFAULT_RESERVED_PERCENT);
         _setWideTaxedCurve(PID);
+    }
+
+    /// @notice The exact cash-out and issuance prices as pool sqrt prices, before any tick rounding.
+    function _exactPrices() internal view returns (uint160 cashOutSqrtPrice, uint160 issuanceSqrtPrice) {
+        (JBRuleset memory ruleset,) = controller.currentRulesetOf(PID);
+        cashOutSqrtPrice = JBUniswapV4LPSplitHookMath.getCashOutRateSqrtPriceX96({
+            directory: IJBDirectory(address(directory)),
+            suckerRegistry: IJBSuckerRegistry(address(0)),
+            projectId: PID,
+            terminalToken: address(term),
+            projectToken: address(proj),
+            controller: address(controller),
+            ruleset: ruleset
+        });
+        issuanceSqrtPrice = JBUniswapV4LPSplitHookMath.getIssuanceRateSqrtPriceX96({
+            directory: IJBDirectory(address(directory)),
+            projectId: PID,
+            terminalToken: address(term),
+            projectToken: address(proj),
+            controller: address(controller),
+            ruleset: ruleset
+        });
+    }
+
+    function _seed() internal view returns (uint160 sqrtPriceX96) {
+        (JBRuleset memory ruleset,) = controller.currentRulesetOf(PID);
+        sqrtPriceX96 = JBUniswapV4LPSplitHookMath.computeInitialSqrtPrice({
+            directory: IJBDirectory(address(directory)),
+            suckerRegistry: IJBSuckerRegistry(address(0)),
+            projectId: PID,
+            terminalToken: address(term),
+            projectToken: address(proj),
+            controller: address(controller),
+            ruleset: ruleset
+        });
+    }
+
+    function _assertCorridor(int24 expectedLower, int24 expectedUpper) internal view {
+        (int24 lower, int24 upper) = _corridor();
+        assertEq(lower, expectedLower, "corridor lower");
+        assertEq(upper, expectedUpper, "corridor upper");
     }
 
     function _assertCorridorEmpty() internal view {
         (int24 lower, int24 upper) = _corridor();
-        assertEq(lower, 0, "inverted corridor: lower is 0");
-        assertEq(upper, 0, "inverted corridor: upper is 0");
+        assertEq(lower, 0, "empty corridor: lower is 0");
+        assertEq(upper, 0, "empty corridor: upper is 0");
     }
 
     function _assertRetired(uint256 tokenId, string memory label) internal view {
@@ -641,10 +710,580 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         assertFalse(exists, label);
     }
 
-    /// @notice Live ask and bid, then the economics invert: the recycle retires both, mints nothing and holds every
+    /// @notice Empty the corridor and check the sub-tick case really is hidden by tick rounding.
+    function _emptyAndCheck(Empty kind) internal {
+        _emptyEconomics(kind);
+        if (kind == Empty.SubTickInverted) {
+            (uint160 cashOutSqrtPrice, uint160 issuanceSqrtPrice) = _exactPrices();
+            assertEq(
+                TickMath.getTickAtSqrtPrice(cashOutSqrtPrice),
+                TickMath.getTickAtSqrtPrice(issuanceSqrtPrice),
+                "precondition: both prices round to one tick"
+            );
+            assertTrue(
+                projectIsToken0 ? cashOutSqrtPrice > issuanceSqrtPrice : cashOutSqrtPrice < issuanceSqrtPrice,
+                "precondition: the cash-out value is above the issuance price"
+            );
+        }
+        _assertCorridorEmpty();
+    }
+
+    /// @notice A first deploy with an empty corridor has nothing to retire: it reverts `EmptyCorridor` before seeding
+    /// or accepting a pool price, so nothing is initialized or minted and the reserved tokens stay ledgered. Normal
+    /// economics then deploy them, at the pre-initialized price when there is one.
+    function _runEmptyDeploy(bool wantProjectToken0, Empty kind, bool preInitialized) internal {
+        _wire(wantProjectToken0);
+        uint160 existing = TickMath.getSqrtPriceAtTick(_midTick());
+        if (preInitialized) positionManager.initializePool(key, existing);
+        _emptyAndCheck(kind);
+        assertEq(_seed(), 0, "an empty corridor has no seed price");
+        _accumulate(1e18);
+        uint256 nextId = positionManager.nextTokenId();
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_EmptyCorridor.selector, PID, address(term)
+            )
+        );
+        vm.prank(user);
+        hook.deployPool(PID);
+        assertFalse(hook.isPoolDeployed(PID, address(term)), "empty: the pool is not deployed");
+        assertEq(_spot(), preInitialized ? existing : 0, "empty: the pool price is untouched");
+        assertEq(positionManager.nextTokenId(), nextId, "empty: nothing minted");
+        assertEq(_projLedger(), 1e18, "empty: the reserved tokens stay ledgered");
+        assertEq(proj.balanceOf(address(hook)), 1e18, "empty: the hook still holds them");
+
+        _restoreEconomics();
+        vm.prank(user);
+        hook.deployPool(PID);
+        if (preInitialized) assertEq(_spot(), existing, "the pre-initialized price is kept");
+        // Normal economics: the ask holds every reserved token but V4 rounding, which stays ledgered, and no terminal.
+        assertEq(_bidId(), 0, "normal economics: nothing to bid with");
+        _assertPlacedExactly(PID, address(proj), address(term), 1e18, 0);
+        _assertLedgersBacked();
+    }
+
+    function test_EmptyCorridor_DeployReverts_ProjectToken0() public {
+        _runEmptyDeploy(true, Empty.Inverted, false);
+    }
+
+    function test_EmptyCorridor_DeployReverts_ProjectToken1() public {
+        _runEmptyDeploy(false, Empty.Inverted, false);
+    }
+
+    function test_EmptyCorridor_DeployReverts_PreInitialized_ProjectToken0() public {
+        _runEmptyDeploy(true, Empty.Inverted, true);
+    }
+
+    function test_EmptyCorridor_DeployReverts_PreInitialized_ProjectToken1() public {
+        _runEmptyDeploy(false, Empty.Inverted, true);
+    }
+
+    function test_EmptyCorridor_SubTickInversion_DeployReverts_ProjectToken0() public {
+        _runEmptyDeploy(true, Empty.SubTickInverted, false);
+    }
+
+    function test_EmptyCorridor_SubTickInversion_DeployReverts_ProjectToken1() public {
+        _runEmptyDeploy(false, Empty.SubTickInverted, false);
+    }
+
+    function test_EmptyCorridor_SubTickInversion_DeployReverts_PreInitialized_ProjectToken0() public {
+        _runEmptyDeploy(true, Empty.SubTickInverted, true);
+    }
+
+    function test_EmptyCorridor_SubTickInversion_DeployReverts_PreInitialized_ProjectToken1() public {
+        _runEmptyDeploy(false, Empty.SubTickInverted, true);
+    }
+
+    function test_EmptyCorridor_EqualPrices_DeployReverts_ProjectToken0() public {
+        _runEmptyDeploy(true, Empty.Equal, false);
+    }
+
+    function test_EmptyCorridor_EqualPrices_DeployReverts_ProjectToken1() public {
+        _runEmptyDeploy(false, Empty.Equal, false);
+    }
+
+    function test_EmptyCorridor_NarrowBand_DeployReverts_ProjectToken0() public {
+        _runEmptyDeploy(true, Empty.Narrow, false);
+    }
+
+    function test_EmptyCorridor_NarrowBand_DeployReverts_ProjectToken1() public {
+        _runEmptyDeploy(false, Empty.Narrow, false);
+    }
+
+    /// @notice A cash-out value of 0.98 against an issuance price of 1/0.99 leaves exactly one aligned spacing between
+    /// them, which stays a valid corridor: the seed folds onto the floor bound and the ask fills the whole spacing.
+    function _runOneSpacing(bool wantProjectToken0) internal {
+        _wire(wantProjectToken0);
+        _setPrices(0.98e18, 0.99e18);
+        // Project token0: cash-out tick -203 rounds inward to -200, issuance tick 100 to 0. Project token1: issuance
+        // tick -101 rounds inward to 0, cash-out tick 202 to 200.
+        (int24 lower, int24 upper) = projectIsToken0 ? (int24(-200), int24(0)) : (int24(0), int24(200));
+        _assertCorridor(lower, upper);
+        _accumulate(1e18);
+
+        vm.prank(user);
+        hook.deployPool(PID);
+
+        (, int24 floor) = _ceilingAndFloor();
+        assertEq(_spot(), TickMath.getSqrtPriceAtTick(floor), "the seed folds onto the floor bound");
+        _assertPosition(_askId(), lower, upper, 1e18, 0, "one-spacing ask");
+        assertEq(_bidId(), 0, "nothing to bid with");
+        _assertPlacedExactly(PID, address(proj), address(term), 1e18, 0);
+        _assertLedgersBacked();
+    }
+
+    function test_Corridor_OneSpacingWide_Deploys_ProjectToken0() public {
+        _runOneSpacing(true);
+    }
+
+    function test_Corridor_OneSpacingWide_Deploys_ProjectToken1() public {
+        _runOneSpacing(false);
+    }
+
+    /// @notice The lower bound rounds inward against its exact price. Its exact price sits half a tick above tick 0
+    /// (1.00005 in pool terms), so the first aligned tick at or above it is 200, not 0: project token0 bounds a
+    /// cash-out value of 1.00005 against an issuance price of 2; project token1 bounds an issuance price of 1/1.00005
+    /// against a cash-out value of 0.5. Once the spot reaches the floor, the ask spans exactly that corridor.
+    function _runInwardLower(bool wantProjectToken0) internal {
+        _wire(wantProjectToken0);
+        if (wantProjectToken0) _setPrices(1.00005e18, 0.5e18);
+        else _setPrices(0.5e18, 1.00005e18);
+        (uint160 cashOutSqrtPrice, uint160 issuanceSqrtPrice) = _exactPrices();
+        uint160 exactLower = projectIsToken0 ? cashOutSqrtPrice : issuanceSqrtPrice;
+        assertGt(exactLower, TickMath.getSqrtPriceAtTick(0), "precondition: the exact lower price is above tick 0");
+        assertLt(exactLower, TickMath.getSqrtPriceAtTick(1), "precondition: and below tick 1");
+        // Upper: the exact price 2 is tick 6931, aligned down to 6800.
+        _assertCorridor(200, 6800);
+
+        _deployAt(TickMath.getSqrtPriceAtTick(_midTick()), 1e18);
+        (, int24 floor) = _ceilingAndFloor();
+        _swapTo(TickMath.getSqrtPriceAtTick(floor));
+        (uint256 projectIn,) = _inventory();
+        _recycle();
+        _assertPosition(_askId(), 200, 6800, projectIn, 0, "corridor-wide ask");
+        assertGe(TickMath.getSqrtPriceAtTick(200), exactLower, "no ask reaches past the exact lower price");
+        _assertLedgersBacked();
+    }
+
+    function test_Corridor_LowerBoundRoundsInward_ProjectToken0() public {
+        _runInwardLower(true);
+    }
+
+    function test_Corridor_LowerBoundRoundsInward_ProjectToken1() public {
+        _runInwardLower(false);
+    }
+
+    /// @notice With no cash-out value, project token1's lower bound is the issuance ceiling and rounds inward too: an
+    /// issuance price of 1/1.00005 (half a tick above tick 0) gives [200, 600], never an ask at tick 0 above it.
+    function test_Corridor_ZeroCashOut_LowerBoundRoundsInward_ProjectToken1() public {
+        _wire(false);
+        _setPrices(0, 1.00005e18);
+        _assertCorridor(200, 600);
+    }
+
+    /// @notice Corridor prices keep their precision at tiny rates. A weight of 2 project-token wei per terminal token
+    /// (no cash-out value) bounds the ceiling at 3 wei (the gross rate plus one), 1/3e18 terminal tokens per project
+    /// token: tick 403,499 in project-token0 terms, aligned down to 403,400 with the floor gap below it. A weight of 1
+    /// bounds it at 2 wei: [407,000, 407,400]. Taking the root before scaling encoded both like a rate of 1.
+    function _runTinyIssuance(bool wantProjectToken0) internal {
+        _wire(wantProjectToken0);
+        _setPrices(0, 2);
+        if (projectIsToken0) _assertCorridor(403_000, 403_400);
+        else _assertCorridor(-403_400, -403_000);
+        _setPrices(0, 1);
+        if (projectIsToken0) _assertCorridor(407_000, 407_400);
+        else _assertCorridor(-407_400, -407_000);
+    }
+
+    function test_Corridor_TinyIssuanceRate_KeepsPrecision_ProjectToken0() public {
+        _runTinyIssuance(true);
+    }
+
+    function test_Corridor_TinyIssuanceRate_KeepsPrecision_ProjectToken1() public {
+        _runTinyIssuance(false);
+    }
+
+    /// @notice A cash-out value previewed at 2 wei per project token against an issuance rate of 1e33: the floor uses
+    /// the preview's bound, 4e-18 terminal tokens per project token (tick -400,623 rounded inward to -400,600 in
+    /// project-token0 terms), never the -414,400 that taking the root before scaling gave.
+    function _runTinyCashOut(bool wantProjectToken0) internal {
+        _wire(wantProjectToken0);
+        _setPrices(2, 1e33);
+        if (projectIsToken0) _assertCorridor(-400_600, -345_600);
+        else _assertCorridor(345_600, 400_600);
+    }
+
+    function test_Corridor_TinyCashOutValue_KeepsPrecision_ProjectToken0() public {
+        _runTinyCashOut(true);
+    }
+
+    function test_Corridor_TinyCashOutValue_KeepsPrecision_ProjectToken1() public {
+        _runTinyCashOut(false);
+    }
+
+    /// @notice The floor is never below what a cash-out realizes. With no tax, a supply of 100e18 and a surplus of 250
+    /// wei, the 1-token preview truncates 2.5 to 2 wei, but burning 2e18 tokens returns 5 (2.5 per token). The floor
+    /// encodes the preview plus two, so the corridor's floor bound sits at or above 2.5e-18 terminal tokens per project
+    /// token.
+    function _runFloorAboveRealized(bool wantProjectToken0) internal {
+        _wire(wantProjectToken0);
+        _setPrices(0, 1e33);
+        store.setTaxedCashOutCurve({projectId: PID, surplus: 250, supply: 100e18, taxRate: 0});
+        (uint256 cashOutPreview,) = _previews();
+        assertEq(cashOutPreview, 2, "precondition: the preview truncates to 2");
+        assertEq(store.currentTotalReclaimableSurplusOf(PID, 2e18, 18, 0), 5, "precondition: 2e18 tokens reclaim 5");
+
+        (int24 lower, int24 upper) = _corridor();
+        if (projectIsToken0) {
+            assertEq(lower, -400_600, "floor bound");
+            // Pool price is terminal per project: the floor bound's price is at least 5 / 2e18.
+            assertGe(_cmpSquare(TickMath.getSqrtPriceAtTick(lower), 2e18, 5), 0, "floor at or above 2.5e-18");
+        } else {
+            assertEq(upper, 400_600, "floor bound");
+            // Pool price is project per terminal: the floor bound's price is at most 2e18 / 5.
+            assertLe(_cmpSquare(TickMath.getSqrtPriceAtTick(upper), 5, 2e18), 0, "floor at or above 2.5e-18");
+        }
+    }
+
+    function test_Corridor_FloorAtOrAboveRealizedCashOut_ProjectToken0() public {
+        _runFloorAboveRealized(true);
+    }
+
+    function test_Corridor_FloorAtOrAboveRealizedCashOut_ProjectToken1() public {
+        _runFloorAboveRealized(false);
+    }
+
+    /// @notice The ceiling is never above what a payer mints at. A weight of 3 with a 10% reserve previews 2 (2.7
+    /// truncated), but paying 10e18 terminal tokens mints 27 for the payer, a price of 10e18 / 27 terminal tokens per
+    /// project token. The ceiling encodes (gross + 1) * 90% rounded up, 4, so the ceiling bound sits at or below it.
+    function _runCeilingBelowPayer(bool wantProjectToken0) internal {
+        _wire(wantProjectToken0);
+        _setPrices(0, 3);
+        controller.setReservedPercent(PID, 1000);
+        (, uint256 issuancePreview) = _previews();
+        assertEq(issuancePreview, 2, "precondition: the preview truncates to 2");
+        (JBRuleset memory ruleset,) = controller.currentRulesetOf(PID);
+        uint256 gross = JBUniswapV4LPSplitHookMath.getProjectTokensOutForTerminalTokensIn({
+            directory: IJBDirectory(address(directory)),
+            projectId: PID,
+            terminalToken: address(term),
+            terminalTokenInAmount: 10e18,
+            controller: address(controller),
+            ruleset: ruleset
+        });
+        assertEq(gross * 9000 / 10_000, 27, "precondition: paying 10e18 mints 27 for the payer");
+
+        (int24 lower, int24 upper) = _corridor();
+        if (projectIsToken0) {
+            assertEq(upper, 400_600, "ceiling bound");
+            // Pool price is terminal per project: the ceiling bound's price is at most 10e18 / 27.
+            assertLe(_cmpSquare(TickMath.getSqrtPriceAtTick(upper), 27, 10e18), 0, "ceiling at or below the payer");
+        } else {
+            assertEq(lower, -400_600, "ceiling bound");
+            // Pool price is project per terminal: the ceiling bound's price is at least 27 / 10e18.
+            assertGe(_cmpSquare(TickMath.getSqrtPriceAtTick(lower), 10e18, 27), 0, "ceiling at or below the payer");
+        }
+    }
+
+    function test_Corridor_CeilingAtOrBelowPayerPrice_ProjectToken0() public {
+        _runCeilingBelowPayer(true);
+    }
+
+    function test_Corridor_CeilingAtOrBelowPayerPrice_ProjectToken1() public {
+        _runCeilingBelowPayer(false);
+    }
+
+    /// @notice Under a cash-out tax the 1-token preview truncates twice, so the floor bound is the preview plus two. A
+    /// 21% tax, a supply of 1000e18 and a surplus of 5900 wei preview 3 per token, yet burning 0.7e18 tokens returns 3
+    /// (about 4.29 per token), above a bound of 4. The floor encodes 5 (tick -398,4xx, rounded inward to -398,200).
+    function _runTaxedFloor(bool wantProjectToken0) internal {
+        _wire(wantProjectToken0);
+        _setPrices(0, 1e33);
+        store.setTaxedCashOutCurve({projectId: PID, surplus: 5900, supply: 1000e18, taxRate: 2100});
+        (uint256 cashOutPreview,) = _previews();
+        assertEq(cashOutPreview, 3, "precondition: the preview truncates to 3");
+        assertEq(store.currentTotalReclaimableSurplusOf(PID, 0.7e18, 18, 0), 3, "precondition: 0.7e18 tokens reclaim 3");
+
+        (int24 lower, int24 upper) = _corridor();
+        if (projectIsToken0) {
+            assertEq(lower, -398_200, "floor bound");
+            // Pool price is terminal per project: the floor bound's price is at least 3 / 0.7e18.
+            assertGe(_cmpSquare(TickMath.getSqrtPriceAtTick(lower), 0.7e18, 3), 0, "floor at or above 3 / 0.7e18");
+        } else {
+            assertEq(upper, 398_200, "floor bound");
+            // Pool price is project per terminal: the floor bound's price is at most 0.7e18 / 3.
+            assertLe(_cmpSquare(TickMath.getSqrtPriceAtTick(upper), 3, 0.7e18), 0, "floor at or above 3 / 0.7e18");
+        }
+    }
+
+    function test_Corridor_TaxedFloorAtOrAboveRealizedCashOut_ProjectToken0() public {
+        _runTaxedFloor(true);
+    }
+
+    function test_Corridor_TaxedFloorAtOrAboveRealizedCashOut_ProjectToken1() public {
+        _runTaxedFloor(false);
+    }
+
+    /// @notice A nonzero weight always issues something at some payment size, even when the 1-WAD sample rounds to 0.
+    /// A weight of 1 wei with a 10% reserve previews 0, yet paying 10e18 mints 9 wei for the payer. The ceiling is the
+    /// bound ceil((1 + 1) * 90%) = 2 (tick 407,554 aligned down to 407,400 in project-token0 terms), at or below the
+    /// payer's 10e18 / 9, not the full range of a project with no issuance.
+    function _runRoundedZeroIssuance(bool wantProjectToken0) internal {
+        _wire(wantProjectToken0);
+        _setPrices(0, 1);
+        controller.setReservedPercent(PID, 1000);
+        (, uint256 issuancePreview) = _previews();
+        assertEq(issuancePreview, 0, "precondition: the preview rounds to 0");
+        (JBRuleset memory ruleset,) = controller.currentRulesetOf(PID);
+        uint256 gross = JBUniswapV4LPSplitHookMath.getProjectTokensOutForTerminalTokensIn({
+            directory: IJBDirectory(address(directory)),
+            projectId: PID,
+            terminalToken: address(term),
+            terminalTokenInAmount: 10e18,
+            controller: address(controller),
+            ruleset: ruleset
+        });
+        assertEq(gross * 9000 / 10_000, 9, "precondition: paying 10e18 mints 9 for the payer");
+
+        (int24 lower, int24 upper) = _corridor();
+        if (projectIsToken0) {
+            assertEq(lower, 407_000, "corridor lower");
+            assertEq(upper, 407_400, "ceiling bound");
+            assertLe(_cmpSquare(TickMath.getSqrtPriceAtTick(upper), 9, 10e18), 0, "ceiling at or below the payer");
+        } else {
+            assertEq(lower, -407_400, "ceiling bound");
+            assertEq(upper, -407_000, "corridor upper");
+            assertGe(_cmpSquare(TickMath.getSqrtPriceAtTick(lower), 10e18, 9), 0, "ceiling at or below the payer");
+        }
+    }
+
+    function test_Corridor_RoundedZeroIssuanceIsBounded_ProjectToken0() public {
+        _runRoundedZeroIssuance(true);
+    }
+
+    function test_Corridor_RoundedZeroIssuanceIsBounded_ProjectToken1() public {
+        _runRoundedZeroIssuance(false);
+    }
+
+    /// @notice With genuinely no issuance (zero weight) and no cash-out value, the range is full on the ceiling side
+    /// but its floor side still stops at the cash-out bound of 2 wei per project token (tick -407,4xx rounded inward to
+    /// -407,400 in project-token0 terms).
+    function _runNoIssuance(bool wantProjectToken0) internal {
+        _wire(wantProjectToken0);
+        _setPrices(0, 0);
+        if (projectIsToken0) _assertCorridor(-407_400, 887_000);
+        else _assertCorridor(-887_200, 407_400);
+    }
+
+    function test_Corridor_NoIssuance_FloorStopsAtCashOutBound_ProjectToken0() public {
+        _runNoIssuance(true);
+    }
+
+    function test_Corridor_NoIssuance_FloorStopsAtCashOutBound_ProjectToken1() public {
+        _runNoIssuance(false);
+    }
+
+    /// @notice A cash-out preview of 0 still bounds the floor, and the floor wins over the zero-cash-out geometry. A
+    /// six-decimal terminal in the base currency at weight 2e24 issues at 0.5 raw units per project token, while a
+    /// surplus of 99 raw units over a supply of 100e18 previews 0 yet realizes 0.99 per token when the supply burns.
+    /// The cash-out bound (2 raw units) is above the issuance price, so the corridor is empty and has no seed.
+    function _runZeroPreviewFloor(bool wantProjectToken0) internal {
+        _wire(wantProjectToken0);
+        uint32 currency = uint32(uint160(address(term)));
+        terminal.setAccountingContext(PID, address(term), currency, 6);
+        controller.setBaseCurrency(PID, currency);
+        _setPrices(0, 2e24);
+        store.setTaxedCashOutCurve({projectId: PID, surplus: 99, supply: 100e18, taxRate: 0});
+        (uint256 cashOutPreview, uint256 issuancePreview) = _previews();
+        assertEq(cashOutPreview, 0, "precondition: the cash-out preview rounds to 0");
+        assertEq(issuancePreview, 2e36, "precondition: 2e36 project wei per 1e18 raw units (0.5 per token)");
+        assertEq(store.currentTotalReclaimableSurplusOf(PID, 100e18, 6, 0), 99, "precondition: the supply reclaims 99");
+
+        _assertCorridorEmpty();
+        assertEq(_seed(), 0, "no seed price");
+    }
+
+    function test_Corridor_ZeroCashOutPreview_FloorEmptiesCorridor_ProjectToken0() public {
+        _runZeroPreviewFloor(true);
+    }
+
+    function test_Corridor_ZeroCashOutPreview_FloorEmptiesCorridor_ProjectToken1() public {
+        _runZeroPreviewFloor(false);
+    }
+
+    /// @notice For an ordinary 18-decimal project with no surplus (weights 1e18 to 1e24 per terminal token), the
+    /// cash-out bound sits hundreds of thousands of ticks below the issuance price, so the floor lift never binds: the
+    /// corridor is exactly the two-spacing gap below the aligned issuance ceiling.
+    function testFuzz_Corridor_ZeroSurplus_FloorLiftNeverBinds(
+        bool wantProjectToken0,
+        uint256 weight,
+        uint16 reservedPercent
+    )
+        public
+    {
+        _wire(wantProjectToken0);
+        _setPrices(0, bound(weight, 1e18, 1e24));
+        controller.setReservedPercent(PID, uint16(bound(reservedPercent, 0, 9000)));
+        (, uint160 ceilingSqrtPrice) = _exactPrices();
+        int24 ceilingTick = TickMath.getTickAtSqrtPrice(ceilingSqrtPrice);
+        if (projectIsToken0) {
+            int24 upper = _alignDown(ceilingTick);
+            _assertCorridor(upper - 2 * SPACING, upper);
+        } else {
+            if (TickMath.getSqrtPriceAtTick(ceilingTick) < ceilingSqrtPrice) ceilingTick++;
+            int24 lower = -_alignDown(-ceilingTick);
+            _assertCorridor(lower, lower + 2 * SPACING);
+        }
+    }
+
+    /// @notice `tick` rounded down to the spacing grid.
+    function _alignDown(int24 tick) internal pure returns (int24) {
+        // Intentionally divide before multiplying to align to the spacing grid.
+        // forge-lint: disable-next-line(divide-before-multiply)
+        int24 aligned = (tick / SPACING) * SPACING;
+        return aligned > tick ? aligned - SPACING : aligned;
+    }
+
+    /// @notice The cash-out and issuance previews (per-WAD rates, truncated).
+    function _previews() internal view returns (uint256 cashOutValue, uint256 issuanceRate) {
+        (JBRuleset memory ruleset,) = controller.currentRulesetOf(PID);
+        cashOutValue = JBUniswapV4LPSplitHookMath.getCashOutRate({
+            directory: IJBDirectory(address(directory)),
+            suckerRegistry: IJBSuckerRegistry(address(0)),
+            projectId: PID,
+            terminalToken: address(term),
+            controller: address(controller),
+            ruleset: ruleset
+        });
+        issuanceRate = JBUniswapV4LPSplitHookMath.getIssuanceRate({
+            directory: IJBDirectory(address(directory)),
+            projectId: PID,
+            terminalToken: address(term),
+            controller: address(controller),
+            ruleset: ruleset
+        });
+    }
+
+    /// @notice For realistic rates the conservative bounds move each price by less than one tick from its preview:
+    /// the floor at most a factor 1.0001 above the cash-out preview and the ceiling at most that factor below the
+    /// issuance preview (in project price), so each aligned bound moves by at most the one-spacing tick rounding.
+    function testFuzz_Corridor_RealisticRates_MoveLessThanOneTick(
+        bool wantProjectToken0,
+        uint256 cashOutValue,
+        uint256 weight,
+        uint16 reservedPercent
+    )
+        public
+    {
+        _wire(wantProjectToken0);
+        weight = bound(weight, 1e18, 1e30);
+        reservedPercent = uint16(bound(reservedPercent, 0, 9000));
+        _setPrices(bound(cashOutValue, 1e9, 1e30), weight);
+        controller.setReservedPercent(PID, reservedPercent);
+        (uint256 cashOut, uint256 issuance) = _previews();
+        (uint160 floorSqrtPrice, uint160 ceilingSqrtPrice) = _exactPrices();
+        if (projectIsToken0) {
+            // Pool price is terminal per project.
+            assertGe(_cmpSquare(floorSqrtPrice, 1e18, cashOut), 0, "floor at or above the preview");
+            assertLe(_cmpSquare(floorSqrtPrice, 1e22, cashOut * 10_001), 0, "floor within one tick");
+            assertLe(_cmpSquare(ceilingSqrtPrice, issuance, 1e18), 0, "ceiling at or below the preview");
+            assertGe(_cmpSquare(ceilingSqrtPrice, issuance * 10_001, 1e22), 0, "ceiling within one tick");
+        } else {
+            // Pool price is project per terminal.
+            assertLe(_cmpSquare(floorSqrtPrice, cashOut, 1e18), 0, "floor at or above the preview");
+            assertGe(_cmpSquare(floorSqrtPrice, cashOut * 10_001, 1e22), 0, "floor within one tick");
+            assertGe(_cmpSquare(ceilingSqrtPrice, 1e18, issuance), 0, "ceiling at or below the preview");
+            assertLe(_cmpSquare(ceilingSqrtPrice, 1e22, issuance * 10_001), 0, "ceiling within one tick");
+        }
+    }
+
+    /// @notice Each corridor price encodes conservatively and tightly: the cash-out floor at or above its bound (the
+    /// preview plus two) in project price, the issuance ceiling at or below its bound (the gross rate plus one, no
+    /// reserve here), each within one unit of root precision (one, or 2^64 when the ratio is at least 2^64 and the
+    /// root is shifted).
+    function testFuzz_Encoder_FloorAtOrAboveCeilingAtOrBelow(
+        bool wantProjectToken0,
+        uint256 cashOutValue,
+        uint256 issuanceRate
+    )
+        public
+    {
+        cashOutValue = bound(cashOutValue, 0, type(uint160).max - 2);
+        issuanceRate = bound(issuanceRate, 1, type(uint112).max);
+        _wire(wantProjectToken0);
+        _setPrices(cashOutValue, issuanceRate);
+        (uint160 cashOutSqrtPrice, uint160 issuanceSqrtPrice) = _exactPrices();
+        // Pool price is token1 per token0. A higher project price is a higher pool price for project token0 (round
+        // up) and a lower one for project token1 (round down); the ceiling rounds the other way.
+        if (projectIsToken0) {
+            _assertEncodes(cashOutSqrtPrice, cashOutValue + 2, 1e18, true);
+            _assertEncodes(issuanceSqrtPrice, 1e18, issuanceRate + 1, false);
+        } else {
+            _assertEncodes(cashOutSqrtPrice, 1e18, cashOutValue + 2, false);
+            _assertEncodes(issuanceSqrtPrice, issuanceRate + 1, 1e18, true);
+        }
+    }
+
+    /// @notice `sqrtPriceX96` is sqrt(amount1 / amount0) * 2^96 rounded up (or down), to `step` precision.
+    function _assertEncodes(uint160 sqrtPriceX96, uint256 amount1, uint256 amount0, bool roundUp) internal pure {
+        // Clamped encodings sit outside every usable corridor tick.
+        if (sqrtPriceX96 <= TickMath.MIN_SQRT_PRICE || sqrtPriceX96 >= TickMath.MAX_SQRT_PRICE - 1) return;
+        uint256 step = amount1 / amount0 < 2 ** 64 ? 1 : 2 ** 64;
+        if (roundUp) {
+            assertGe(_cmpSquare(sqrtPriceX96, amount0, amount1), 0, "rounded up: at or above the exact price");
+            assertLt(_cmpSquare(sqrtPriceX96 - step, amount0, amount1), 0, "rounded up: within one step");
+        } else {
+            assertLe(_cmpSquare(sqrtPriceX96, amount0, amount1), 0, "rounded down: at or below the exact price");
+            assertGt(_cmpSquare(sqrtPriceX96 + step, amount0, amount1), 0, "rounded down: within one step");
+        }
+    }
+
+    /// @notice Compare `root^2 * amount0` with `amount1 * 2^192` exactly in 512 bits (-1, 0 or 1). Needs `root` below
+    /// 2^161 and both amounts below 2^160.
+    function _cmpSquare(uint256 root, uint256 amount0, uint256 amount1) internal pure returns (int256) {
+        (uint256 squareHi, uint256 squareLo) = _mul512(root, root);
+        (uint256 carry, uint256 lo) = _mul512(squareLo, amount0);
+        uint256 hi = squareHi * amount0 + carry;
+        (uint256 targetHi, uint256 targetLo) = (amount1 >> 64, amount1 << 192);
+        if (hi != targetHi) return hi > targetHi ? int256(1) : int256(-1);
+        if (lo != targetLo) return lo > targetLo ? int256(1) : int256(-1);
+        return 0;
+    }
+
+    /// @notice The full 512-bit product of `a` and `b`.
+    function _mul512(uint256 a, uint256 b) internal pure returns (uint256 hi, uint256 lo) {
+        assembly ("memory-safe") {
+            let mm := mulmod(a, b, not(0))
+            lo := mul(a, b)
+            hi := sub(sub(mm, lo), lt(mm, lo))
+        }
+    }
+
+    /// @notice An empty corridor has no seed price, however it went empty.
+    function _runNoSeed(bool wantProjectToken0) internal {
+        _wire(wantProjectToken0);
+        for (uint8 kind; kind <= uint8(Empty.Narrow); kind++) {
+            _emptyEconomics(Empty(kind));
+            assertEq(_seed(), 0, "no seed price");
+        }
+    }
+
+    function test_EmptyCorridor_NoSeedPrice_ProjectToken0() public {
+        _runNoSeed(true);
+    }
+
+    function test_EmptyCorridor_NoSeedPrice_ProjectToken1() public {
+        _runNoSeed(false);
+    }
+
+    // ─── Empty corridor lifecycle (both orderings)
+    // ────────────────────────────────────────────────
+
+    /// @notice Live ask and bid, then the corridor goes empty: the recycle retires both, mints nothing and holds every
     /// token (principal, forgiven fee, new reserved tokens) exactly in the ledgers. A second recycle has nothing to
     /// retire and reverts. Normal economics redeploy everything into fresh positions.
-    function _runInvertedRecycle(bool wantProjectToken0) internal {
+    function _runEmptyRecycle(bool wantProjectToken0, Empty kind) internal {
         _wire(wantProjectToken0);
         int24 mid = _deployBothAtMid(1e18, 0.5e18);
         (int24 lower, int24 upper) = _corridor();
@@ -660,8 +1299,7 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         _addTerminalFee(oldAsk, fee);
         _accumulate(newTokens);
 
-        _invertEconomics();
-        _assertCorridorEmpty();
+        _emptyAndCheck(kind);
 
         uint256 nextId = positionManager.nextTokenId();
         vm.expectEmit(true, true, true, true, address(hook));
@@ -670,11 +1308,11 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         });
         _recycle();
 
-        assertEq(_askId(), 0, "inverted: no ask");
-        assertEq(_bidId(), 0, "inverted: no bid");
-        assertEq(positionManager.nextTokenId(), nextId, "inverted: nothing minted");
-        _assertRetired(oldAsk, "inverted: the old ask is burned");
-        _assertRetired(oldBid, "inverted: the old bid is burned");
+        assertEq(_askId(), 0, "empty: no ask");
+        assertEq(_bidId(), 0, "empty: no bid");
+        assertEq(positionManager.nextTokenId(), nextId, "empty: nothing minted");
+        _assertRetired(oldAsk, "empty: the old ask is burned");
+        _assertRetired(oldBid, "empty: the old bid is burned");
         assertTrue(hook.isPoolDeployed(PID, address(term)), "the pool stays deployed");
         assertEq(_projLedger(), projectLedger + projectHeld + newTokens, "every project token is ledgered");
         assertEq(_termLedger(), terminalLedger + terminalHeld + fee, "every terminal token is ledgered");
@@ -700,16 +1338,14 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         // Nothing left to retire: the recycle refuses and changes nothing.
         vm.expectRevert(
             abi.encodeWithSelector(
-                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvertedCorridor.selector, PID, address(term)
+                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_EmptyCorridor.selector, PID, address(term)
             )
         );
         _recycle();
 
-        // The economics normalize: the held inventory redeploys around the unchanged mid-corridor spot.
+        // The corridor reopens: the held inventory redeploys around the unchanged mid-corridor spot.
         _restoreEconomics();
-        (int24 restoredLower, int24 restoredUpper) = _corridor();
-        assertEq(restoredLower, lower, "restored corridor lower");
-        assertEq(restoredUpper, upper, "restored corridor upper");
+        _assertCorridor(lower, upper);
         uint256 projectTotal = _projLedger();
         uint256 terminalTotal = _termLedger();
         _recycle();
@@ -724,47 +1360,19 @@ contract SingleSided_GeometryBoundaryTest is TwoPositionFixture {
         _assertLedgersBacked();
     }
 
-    function test_InvertedCorridor_RecycleRetiresAndHolds_ProjectToken0() public {
-        _runInvertedRecycle(true);
+    function test_EmptyCorridor_RecycleRetiresAndHolds_ProjectToken0() public {
+        _runEmptyRecycle(true, Empty.Inverted);
     }
 
-    function test_InvertedCorridor_RecycleRetiresAndHolds_ProjectToken1() public {
-        _runInvertedRecycle(false);
+    function test_EmptyCorridor_RecycleRetiresAndHolds_ProjectToken1() public {
+        _runEmptyRecycle(false, Empty.Inverted);
     }
 
-    /// @notice A first deploy under inverted economics has nothing to retire: it reverts, leaving the pool undeployed
-    /// and the reserved tokens ledgered. Normal economics then deploy them.
-    function _runInvertedDeploy(bool wantProjectToken0) internal {
-        _wire(wantProjectToken0);
-        _invertEconomics();
-        _assertCorridorEmpty();
-        _accumulate(1e18);
-
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                JBUniswapV4LPSplitHook.JBUniswapV4LPSplitHook_InvertedCorridor.selector, PID, address(term)
-            )
-        );
-        vm.prank(user);
-        hook.deployPool(PID);
-        assertFalse(hook.isPoolDeployed(PID, address(term)), "inverted: the pool is not deployed");
-        assertEq(_projLedger(), 1e18, "inverted: the reserved tokens stay ledgered");
-        assertEq(proj.balanceOf(address(hook)), 1e18, "inverted: the hook still holds them");
-
-        _restoreEconomics();
-        vm.prank(user);
-        hook.deployPool(PID);
-        // Normal economics: the ask holds every reserved token but V4 rounding, which stays ledgered, and no terminal.
-        assertEq(_bidId(), 0, "normal economics: nothing to bid with");
-        _assertPlacedExactly(PID, address(proj), address(term), 1e18, 0);
-        _assertLedgersBacked();
+    function test_EmptyCorridor_NarrowBand_RecycleRetiresAndHolds_ProjectToken0() public {
+        _runEmptyRecycle(true, Empty.Narrow);
     }
 
-    function test_InvertedCorridor_DeployReverts_ProjectToken0() public {
-        _runInvertedDeploy(true);
-    }
-
-    function test_InvertedCorridor_DeployReverts_ProjectToken1() public {
-        _runInvertedDeploy(false);
+    function test_EmptyCorridor_NarrowBand_RecycleRetiresAndHolds_ProjectToken1() public {
+        _runEmptyRecycle(false, Empty.Narrow);
     }
 }

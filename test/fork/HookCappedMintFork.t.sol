@@ -22,18 +22,19 @@ import {ThirdPartyLP, TwoPositionForkBase} from "./TwoPositionForkBase.sol";
 /// (currency1 against native ETH) one spacing costs `liquidity * sqrtPrice * ~0.01`, so at an ordinary issuance price
 /// (1M tokens per ETH, tick ~138k) the cap is ~3.8e17 tokens, which no real project mints. The test therefore uses the
 /// extreme-price corner where the cap is reachable with ordinary token counts: a weight of 1 (one wei of project token
-/// per ETH), which puts the issuance ceiling near tick -414,400 where one spacing at the cap costs ~3.8e5 tokens. The
-/// pool is pre-initialized one spacing inside that ceiling, so the TWAP-anchored ask is exactly one spacing wide, and
-/// 1M tokens of inventory overflow it. The second case adds the configuration that applies at any price: a third-party
-/// LP already holding most of the cap at the ask's lower bound, so the room left is small.
+/// per ETH, bounded at 2 wei by the ceiling), which puts the issuance ceiling near tick -407,400 where one spacing at
+/// the cap costs ~5.4e5 tokens. The pool is pre-initialized one spacing inside that ceiling, so the TWAP-anchored ask
+/// is exactly one spacing wide, and 2M tokens of inventory overflow it. The second case adds the configuration that
+/// applies at any price: a third-party LP already holding most of the cap at the ask's lower bound, so the room left is
+/// small.
 contract HookCappedMintFork is TwoPositionForkBase {
     using StateLibrary for IPoolManager;
     using PoolIdLibrary for PoolKey;
 
     address randomRecycler = address(0xBEEF2);
 
-    /// @notice Inventory far above what one spacing at the cap holds (~3.8e5 tokens here).
-    uint256 constant BIG_INVENTORY = 1_000_000e18;
+    /// @notice Inventory far above what one spacing at the cap holds (~5.4e5 tokens here).
+    uint256 constant BIG_INVENTORY = 2_000_000e18;
 
     /// @notice With no other liquidity at either bound, the recycled ask mints exactly the per-tick cap.
     function test_fork_cappedRecycle_mintsExactlyThePerTickCap() public {

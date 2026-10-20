@@ -13,6 +13,11 @@ import {JBSplitHookContext} from "@bananapus/core-v6/src/structs/JBSplitHookCont
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract DrainingAddToBalanceTerminal {
+    /// @dev Matches IJBTerminal.currentSurplusOf: this terminal holds no surplus for any project.
+    function currentSurplusOf(uint256, address[] calldata, uint256, uint256) external pure returns (uint256) {
+        return 0;
+    }
+
     address public storeAddress;
     mapping(uint256 projectId => mapping(address token => JBAccountingContext)) public contexts;
     mapping(uint256 projectId => JBAccountingContext[]) public contextsList;
