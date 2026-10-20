@@ -11,7 +11,7 @@
 ## Core invariants
 
 - Both positions stay inside the project's economic corridor: the ask never sells below the cash-out floor and the bid never buys above the issuance ceiling.
-- A project holds at most two positions per pair, tracked in `askTokenIdOf` and `bidTokenIdOf`; both are single-sided, with the spot in a gap of at most one spacing between them.
+- A project holds at most two positions per pair, tracked in `askTokenIdOf` and `bidTokenIdOf`; both are single-sided, with the spot in the gap between them and neither quote past the validated TWAP.
 - The hook has materially different pre-deployment and post-deployment behavior.
 - Fee routing takes a best-effort `feeProjectId` cut symmetrically on both the project-token and terminal-token fee sides, then carries each side's non-cut remainder into the project's own ask/bid ledgers — never into the project's treasury.
 - A project's accumulation ledger is the single sink for reserved-token inflows both before AND after pool deployment; the hook never burns. Pre-deploy, `deployPool` consumes the accumulation; post-deploy, each recycle does.
@@ -45,7 +45,8 @@ post-deployment, every recycle (inline on each distribution, or permissionless `
   -> requires the pool spot within 200 ticks of the 30-minute oracle TWAP
   -> for each live position: collect fees (best-effort `feeProjectId` cut per side; project remainder into `accumulatedProjectTokens`, terminal remainder into `accumulatedTerminalTokens`), burn it with a contract-derived slippage floor, credit recovered principal to the same ledgers
   -> claims hook-held credits into the project ledger and recomputes the corridor
-  -> spotFloor = spot tick aligned down to the 200 spacing; spotCeil = spotFloor if the spot sits exactly on it, else spotFloor + 200
+  -> spotFloor = min(spot, TWAP) aligned down to the 200 spacing
+     spotCeil = max(first aligned tick at or above the spot, TWAP aligned up)
      token0 rests on [max(spotCeil, corridorLower), corridorUpper]
      token1 rests on [corridorLower, min(spotFloor, corridorUpper)]
   -> mints the ask from the whole project ledger and the bid from the whole terminal ledger; a side with an empty range or zero amount stays in its ledger
@@ -69,7 +70,7 @@ It also owns claim segregation for routed LP-fee cuts. Outstanding ERC-20 fee-to
 
 - The main risks are price-bound math (including the cash-out-price floor), the ask/bid range geometry around the spot, and staged behavior drift.
 - A recycle is a collect, burn, recompute, mint pipeline across two positions and should be reviewed as one unit (`_recycle`, `_retirePosition`, `_mintSingleSided`).
-- Recycles are permissionless at any time, bounded by the spot-vs-TWAP guard; a within-band manipulation can shift the gap by up to the TWAP tolerance.
+- Recycles are permissionless at any time, bounded by the spot-vs-TWAP guard; both quotes are anchored to the validated TWAP, so a within-band manipulation only widens the gap and never pulls a quote past the TWAP price.
 - Pool initialization race conditions matter on first deployment.
 - Accumulation/LP-funding logic, fee routing, and outstanding-claim accounting are coupled.
 

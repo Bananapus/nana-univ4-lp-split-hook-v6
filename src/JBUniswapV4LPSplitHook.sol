@@ -737,14 +737,15 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         // Reject the recycle while the pool's spot price is off the oracle TWAP. The burns and re-mints price against
         // the live spot, so a sandwiched/JIT-skewed spot would re-center both positions around a manipulated price.
-        _requireSpotNearTwap({projectId: projectId, terminalToken: terminalToken, key: key});
+        int24 twapTick = _requireSpotNearTwap({projectId: projectId, terminalToken: terminalToken, key: key});
 
         _recycle({
             projectId: projectId,
             projectToken: projectToken,
             terminalToken: terminalToken,
             controller: controller,
-            ruleset: ruleset
+            ruleset: ruleset,
+            anchorTick: twapTick
         });
 
         emit LiquidityAdded({
@@ -1393,10 +1394,11 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // For a pool that was ALREADY initialized before this deploy (the revnet norm — a buyback pool already
         // exists), validate the live spot against the oracle TWAP before minting, mirroring `addLiquidity`, so a
         // deploy cannot be sandwiched into minting at a manipulated price. A pool this hook initializes itself in
-        // the same transaction has no TWAP history, so the guard is skipped (it would revert on cold start).
-        if (wasAlreadyInitialized) {
-            _requireSpotNearTwap({projectId: projectId, terminalToken: terminalToken, key: key});
-        }
+        // the same transaction has no TWAP history, so the guard is skipped (it would revert on cold start) and its own
+        // initial price anchors the ranges: nobody else can have moved it yet.
+        int24 anchorTick = wasAlreadyInitialized
+            ? _requireSpotNearTwap({projectId: projectId, terminalToken: terminalToken, key: key})
+            : TickMath.getTickAtSqrtPrice(_getSqrtPriceX96(key));
 
         // Mint the first ask (and a bid, if the hook already holds terminal tokens for this project).
         _recycle({
@@ -1404,7 +1406,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             projectToken: projectToken,
             terminalToken: terminalToken,
             controller: controller,
-            ruleset: ruleset
+            ruleset: ruleset,
+            anchorTick: anchorTick
         });
     }
 
@@ -1647,22 +1650,26 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// primitive behind deploy and add.
     /// @dev Token0 always rests above the spot and token1 below it. With `spotFloor` and `spotCeil` the aligned ticks
     /// at or below and at or above the spot, `[.., spotFloor]` holds only token1 and `[spotCeil, ..]` only token0, so
-    /// both mints are single-sided; the spot sits in the one-spacing gap between them, or on their shared bound when
-    /// it is exactly on an aligned tick. Both ranges stay inside the corridor:
-    /// the ask never sells below the cash-out floor and the bid never buys above the issuance ceiling. A side whose
-    /// range is empty (spot past the ceiling for the ask, past the floor for the bid) stays in its ledger for a later
-    /// recycle; if neither side can be minted the whole recycle reverts and the live positions are kept.
+    /// both mints are single-sided; the spot sits in the gap between them, or on their shared bound when it is exactly
+    /// on an aligned tick. Both ranges also stay on the far side of `anchorTick` (the validated TWAP): a spot pushed
+    /// inside the TWAP band cannot pull the ask below the TWAP or the bid above it, so a caller who buys from the ask
+    /// and sells into the bid across repeated same-block recycles always does so at a loss. Both ranges stay inside
+    /// the corridor: the ask never sells below the cash-out floor and the bid never buys above the issuance ceiling. A
+    /// side whose range is empty (spot past the ceiling for the ask, past the floor for the bid) stays in its ledger
+    /// for a later recycle; if neither side can be minted the whole recycle reverts and the live positions are kept.
     /// @param projectId The ID of the project.
     /// @param projectToken The project token address.
     /// @param terminalToken The terminal token address.
     /// @param controller The project's controller address (pre-fetched to avoid redundant lookups).
     /// @param ruleset The project's current ruleset (pre-fetched to avoid redundant lookups).
+    /// @param anchorTick The validated TWAP tick (or, for a pool this hook just initialized, its initial tick).
     function _recycle(
         uint256 projectId,
         address projectToken,
         address terminalToken,
         address controller,
-        JBRuleset memory ruleset
+        JBRuleset memory ruleset,
+        int24 anchorTick
     )
         internal
     {
@@ -1709,6 +1716,14 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         int24 spotCeil = spotFloor >= TickMath.MIN_TICK && TickMath.getSqrtPriceAtTick(spotFloor) == sqrtPriceX96
             ? spotFloor
             : spotFloor + TICK_SPACING;
+
+        // Keep both ranges on the far side of the anchor as well as the spot.
+        {
+            int24 anchorCeil = JBLPSplitHookHelpers.alignTickToSpacingCeil({tick: anchorTick, spacing: TICK_SPACING});
+            int24 anchorFloor = JBLPSplitHookHelpers.alignTickToSpacing({tick: anchorTick, spacing: TICK_SPACING});
+            if (anchorCeil > spotCeil) spotCeil = anchorCeil;
+            if (anchorFloor < spotFloor) spotFloor = anchorFloor;
+        }
         bool projectIsToken0 = projectToken == Currency.unwrap(key.currency0);
         uint256 projectAmount = accumulatedProjectTokens[projectId];
         uint256 terminalAmount = accumulatedTerminalTokens[projectId][terminalToken];
@@ -1764,7 +1779,16 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @notice Revert if the pool's spot price has deviated from the oracle TWAP by more than
     /// `_MAX_TWAP_DEVIATION_TICKS`, or if the TWAP cannot be read. Prevents a JIT/sandwich attacker from skewing the
     /// add ratio by moving the pool price right before the add.
-    function _requireSpotNearTwap(uint256 projectId, address terminalToken, PoolKey memory key) internal view {
+    /// @return twapTick The validated TWAP tick, which also anchors the recycle's ranges.
+    function _requireSpotNearTwap(
+        uint256 projectId,
+        address terminalToken,
+        PoolKey memory key
+    )
+        internal
+        view
+        returns (int24 twapTick)
+    {
         uint32[] memory secondsAgos = new uint32[](2);
         secondsAgos[0] = _TWAP_WINDOW;
         secondsAgos[1] = 0;
@@ -1792,7 +1816,7 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         int56 tickCumulativesDelta = tickCumulatives[1] - tickCumulatives[0];
         // The mean of in-range cumulative ticks is itself a valid tick, well within int24.
         // forge-lint: disable-next-line(unsafe-typecast)
-        int24 twapTick = int24(tickCumulativesDelta / window);
+        twapTick = int24(tickCumulativesDelta / window);
         if (tickCumulativesDelta < 0 && (tickCumulativesDelta % window != 0)) twapTick--;
 
         int24 spotTick = TickMath.getTickAtSqrtPrice(_getSqrtPriceX96(key));

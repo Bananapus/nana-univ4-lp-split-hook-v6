@@ -26,6 +26,7 @@ import {IHooks} from "@uniswap/v4-core/src/interfaces/IHooks.sol";
 import {IPermit2} from "@uniswap/permit2/src/interfaces/IPermit2.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {IPositionManager} from "@uniswap/v4-periphery/src/interfaces/IPositionManager.sol";
+import {FullMath} from "@uniswap/v4-core/src/libraries/FullMath.sol";
 import {IUnlockCallback} from "@uniswap/v4-core/src/interfaces/callback/IUnlockCallback.sol";
 import {PoolId, PoolIdLibrary} from "@uniswap/v4-core/src/types/PoolId.sol";
 import {PoolKey} from "@uniswap/v4-core/src/types/PoolKey.sol";
@@ -55,6 +56,7 @@ contract BuySwapHelper is IUnlockCallback {
         PoolKey key;
         bool zeroForOne;
         int256 amountSpecified;
+        uint160 sqrtPriceLimitX96;
         address sender;
     }
 
@@ -65,7 +67,24 @@ contract BuySwapHelper is IUnlockCallback {
     receive() external payable {}
 
     function swap(PoolKey memory key, bool zeroForOne, int256 amountSpecified) external payable {
-        poolManager.unlock(abi.encode(SwapCallbackData(key, zeroForOne, amountSpecified, msg.sender)));
+        poolManager.unlock(abi.encode(SwapCallbackData(key, zeroForOne, amountSpecified, 0, msg.sender)));
+    }
+
+    /// @notice Swaps until `sqrtPriceLimitX96` (or `amountSpecified`) is reached and refunds unspent ETH.
+    function swapTo(
+        PoolKey memory key,
+        bool zeroForOne,
+        int256 amountSpecified,
+        uint160 sqrtPriceLimitX96
+    )
+        external
+        payable
+    {
+        poolManager.unlock(
+            abi.encode(SwapCallbackData(key, zeroForOne, amountSpecified, sqrtPriceLimitX96, msg.sender))
+        );
+        (bool ok,) = msg.sender.call{value: address(this).balance}("");
+        require(ok, "refund failed");
     }
 
     function _amountOwedToPool(int128 delta) private pure returns (uint256 amount) {
@@ -88,7 +107,9 @@ contract BuySwapHelper is IUnlockCallback {
             SwapParams({
                 zeroForOne: params.zeroForOne,
                 amountSpecified: params.amountSpecified,
-                sqrtPriceLimitX96: params.zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
+                sqrtPriceLimitX96: params.sqrtPriceLimitX96 != 0
+                    ? params.sqrtPriceLimitX96
+                    : params.zeroForOne ? TickMath.MIN_SQRT_PRICE + 1 : TickMath.MAX_SQRT_PRICE - 1
             }),
             ""
         );
@@ -315,6 +336,138 @@ contract Integration_SingleSidedRevnet is ForkDeployHelper {
             balAfterDeploy,
             "recycling must never reduce the project's terminal balance"
         );
+    }
+
+    /// @notice Codex pass-2 attack: with the TWAP pinned, an attacker sweeps the spot between both edges of the
+    /// deviation band and recycles at each edge, trying to buy project tokens from the ask on one side of the TWAP
+    /// and sell them into the bid on the other. Both quotes are anchored to the TWAP, so the attacker buys at or above
+    /// the TWAP price and sells at or below it, and the round trips can only lose swap fees.
+    function test_fork_twoPositionRecycle_bandEdgeCycling_notProfitable() public {
+        uint256 pid =
+            _launchProject({reservedPercent: 3000, cashOutTaxRate: 4000, weight: 1_000_000e18, duration: 1 days});
+        vm.prank(multisig);
+        IJBToken pToken = jbController.deployERC20For(pid, "Revnet Token", "RVNT", bytes32(0));
+        _payProjectAndSnapshot(pid, 50 ether);
+        address attacker = address(0xA77AC4);
+        vm.deal(attacker, 10_000 ether);
+        vm.prank(attacker);
+        jbMultiTerminal.pay{value: 100 ether}({
+            projectId: pid,
+            token: JBConstants.NATIVE_TOKEN,
+            amount: 100 ether,
+            beneficiary: attacker,
+            minReturnedTokens: 0,
+            memo: "",
+            metadata: ""
+        });
+        _accumulateTokens(pid, address(pToken), 500_000e18);
+
+        (int24 ascLower, int24 ascUpper) = _corridorOf(pid, address(pToken));
+        int24 tickSpacing = hook.TICK_SPACING();
+        PoolKey memory key = PoolKey({
+            currency0: JBLPSplitHookHelpers.toCurrency(JBConstants.NATIVE_TOKEN),
+            currency1: Currency.wrap(address(pToken)),
+            fee: hook.POOL_FEE(),
+            tickSpacing: tickSpacing,
+            hooks: hook.oracleHook()
+        });
+        // An unaligned start, so the spot's own spacing gap is not the TWAP's.
+        V4_POSITION_MANAGER.initializePool(
+            key,
+            TickMath.getSqrtPriceAtTick(
+                JBLPSplitHookHelpers.alignTickToSpacing({
+                        tick: ascLower + (ascUpper - ascLower) / 2, spacing: tickSpacing
+                    }) + 77
+            )
+        );
+        _mockOracleTwapEqualsSpot(hook.oracleHook(), V4_POOL_MANAGER, key);
+        vm.prank(randomDeployer);
+        hook.deployPool(pid);
+
+        BuySwapHelper swapHelper = new BuySwapHelper(V4_POOL_MANAGER);
+        vm.prank(attacker);
+        IERC20(address(pToken)).approve(address(swapHelper), type(uint256).max);
+
+        // Give the hook both sides: a buyer partly fills the ask, then a recycle on an aligned tick opens the bid.
+        int24 twapTick = _spotTick(key);
+        _swapTo(swapHelper, key, attacker, twapTick - 100);
+        twapTick = JBLPSplitHookHelpers.alignTickToSpacing({tick: twapTick, spacing: tickSpacing});
+        _swapTo(swapHelper, key, attacker, twapTick);
+        _mockOracleTwapEqualsSpot(hook.oracleHook(), V4_POOL_MANAGER, key);
+        vm.prank(attacker);
+        hook.addLiquidity(pid, JBConstants.NATIVE_TOKEN);
+        assertTrue(hook.bidTokenIdOf(pid, JBConstants.NATIVE_TOKEN) != 0, "the cycle needs a live bid");
+
+        // The TWAP stays pinned at `twapTick` for the whole attack: same-block swaps do not move it.
+        uint160 twapSqrt = TickMath.getSqrtPriceAtTick(twapTick);
+        uint256 valueBefore = _valueAt(attacker, address(pToken), twapSqrt);
+        for (uint256 i; i < 3; i++) {
+            // Walk to the band's top edge, where the project token is cheapest, and buy from the ask there.
+            _walkTo(swapHelper, key, attacker, pid, twapTick + 200);
+            _swapTo(swapHelper, key, attacker, twapTick + 100);
+            vm.prank(attacker);
+            hook.addLiquidity(pid, JBConstants.NATIVE_TOKEN);
+            // Walk to the bottom edge, where the project token is dearest, and sell into the bid there.
+            _walkTo(swapHelper, key, attacker, pid, twapTick - 200);
+            _swapTo(swapHelper, key, attacker, twapTick - 100);
+            vm.prank(attacker);
+            hook.addLiquidity(pid, JBConstants.NATIVE_TOKEN);
+        }
+        _walkTo(swapHelper, key, attacker, pid, twapTick);
+
+        uint256 valueAfter = _valueAt(attacker, address(pToken), twapSqrt);
+        emit log_named_int("  attacker P&L at TWAP (wei)", int256(valueAfter) - int256(valueBefore));
+        assertLe(valueAfter, valueBefore, "cycling recycles across the TWAP band must not profit the attacker");
+    }
+
+    /// @notice The spot tick exactly as the hook reads it (from the sqrt price, not slot0's crossing-adjusted tick).
+    function _spotTick(PoolKey memory key) internal view returns (int24) {
+        (uint160 sqrtPriceX96,,,) = V4_POOL_MANAGER.getSlot0(key.toId());
+        return TickMath.getTickAtSqrtPrice(sqrtPriceX96);
+    }
+
+    /// @notice Moves the spot to `targetTick` one spacing at a time: each step trades one tick past the next aligned
+    /// boundary and recycles, which re-opens an empty gap the spot then crosses for free.
+    function _walkTo(
+        BuySwapHelper swapHelper,
+        PoolKey memory key,
+        address trader,
+        uint256 pid,
+        int24 targetTick
+    )
+        internal
+    {
+        int24 spacing = hook.TICK_SPACING();
+        while (true) {
+            int24 spotFloor = JBLPSplitHookHelpers.alignTickToSpacing({tick: _spotTick(key), spacing: spacing});
+            if (targetTick >= spotFloor && targetTick <= spotFloor + spacing) break;
+            _swapTo(swapHelper, key, trader, targetTick > spotFloor ? spotFloor + spacing + 1 : spotFloor - 1);
+            vm.prank(trader);
+            hook.addLiquidity(pid, JBConstants.NATIVE_TOKEN);
+        }
+        _swapTo(swapHelper, key, trader, targetTick);
+        vm.prank(trader);
+        hook.addLiquidity(pid, JBConstants.NATIVE_TOKEN);
+    }
+
+    /// @notice Moves the spot to exactly `targetTick` with an unbounded exact-input swap capped by the price limit.
+    function _swapTo(BuySwapHelper swapHelper, PoolKey memory key, address trader, int24 targetTick) internal {
+        int24 spotTick = _spotTick(key);
+        if (spotTick == targetTick) return;
+        bool zeroForOne = targetTick < spotTick;
+        vm.prank(trader);
+        swapHelper.swapTo{value: zeroForOne ? 1000 ether : 0}({
+            key: key,
+            zeroForOne: zeroForOne,
+            amountSpecified: zeroForOne ? -int256(1000 ether) : -int256(1e30),
+            sqrtPriceLimitX96: TickMath.getSqrtPriceAtTick(targetTick)
+        });
+    }
+
+    /// @notice `who`'s ETH plus project tokens valued in ETH at `sqrtPriceX96` (project = currency1).
+    function _valueAt(address who, address pToken, uint160 sqrtPriceX96) internal view returns (uint256) {
+        uint256 tokens = IERC20(pToken).balanceOf(who);
+        return who.balance + FullMath.mulDiv(FullMath.mulDiv(tokens, 1 << 96, sqrtPriceX96), 1 << 96, sqrtPriceX96);
     }
 
     /// @notice The project's live corridor, computed with the same linked math the hook uses.

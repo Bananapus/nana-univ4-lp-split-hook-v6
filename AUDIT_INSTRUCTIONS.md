@@ -49,7 +49,7 @@ Lifecycle:
 | Role | Powers | How constrained |
 |------|--------|-----------------|
 | Project owner or delegate | Claim tracked fee value | Must hold `SET_BUYBACK_POOL` |
-| Permissionless caller | Deploy a fresh clone, deploy the pool, recycle (`addLiquidity` or reserved distribution), collect fees | Accumulation threshold, spot-vs-TWAP guard, corridor caps, contract-derived burn floor |
+| Permissionless caller | Deploy a fresh clone, deploy the pool, recycle (`addLiquidity` or reserved distribution), collect fees | Spot-vs-TWAP guard, TWAP-anchored quotes, corridor caps, contract-derived burn floor |
 | Hook contract | Hold tokens, manage LP state, and route fees | Must preserve treasury value and claim segregation |
 
 ## Integration assumptions
@@ -66,7 +66,7 @@ Lifecycle:
 2. Tick bounds remain valid and inside the intended economic envelope.
 3. Fee-token claims stay segregated from freely spendable or routable balances.
 4. A recycle must not destroy tracked fee claims or silently mint value.
-5. At most two positions exist per project and terminal token; the ask never sits below the cash-out floor and the bid never above the issuance ceiling; both are single-sided with the spot in a gap of at most one spacing.
+5. At most two positions exist per project and terminal token; the ask never sits below the cash-out floor and the bid never above the issuance ceiling; both are single-sided with the spot in the gap between them, and neither crosses the validated TWAP (the ask never sells below it, the bid never buys above it).
 6. Clone initialization must not allow configuration drift after deployment.
 7. A recycle never runs at a spot beyond the TWAP bound (it reverts when spot deviates from the oracle TWAP beyond 200 ticks, or the TWAP is unavailable), and the hook never cashes out.
 
@@ -83,8 +83,8 @@ Lifecycle:
 
 - Some fee collection paths are intentionally permissionless.
 - Newly received reserved tokens are intentionally re-accumulated after deployment and later added as liquidity via `addLiquidity`. The hook never burns; supply-reducing burns are a protocol-layer split-routing decision (`{projectId:0, hook:0, beneficiary:0xdead}`).
-- Recycles are permissionless at any time, so a caller controls their timing, down to the block. A manipulation inside the TWAP band can shift the gap between the positions by up to the TWAP tolerance; the one-spacing gap means the hook never quotes at the exact spot, and the corridor caps bound both positions.
-- A recycle can revert (below threshold, TWAP unavailable or deviated, nothing deployable at spot) and is expected to be retried; the inline attempt reports failures with `LiquidityAutomationFailed` and never reverts intake.
+- Recycles are permissionless at any time, so a caller controls their timing, down to the block. Both quotes are anchored to the validated TWAP, so a manipulation inside the band only widens the gap between the positions; neither quote crosses the TWAP price, and the corridor caps bound both positions. `test_fork_twoPositionRecycle_bandEdgeCycling_notProfitable` runs the gap-walk attack (dust-cross a boundary, recycle, cross the empty gap free, trade only at the band edges) on real Uniswap V4 and requires it to lose.
+- A recycle can revert (TWAP unavailable or deviated, nothing deployable at spot) and is expected to be retried; the inline attempt reports failures with `LiquidityAutomationFailed` and never reverts intake.
 
 ## Verification
 
