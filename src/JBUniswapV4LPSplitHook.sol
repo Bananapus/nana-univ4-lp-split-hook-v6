@@ -101,11 +101,17 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// touched its project credits. Caught by `_routeCollectedFees`, which then keeps the remainder in the ask ledger.
     error JBUniswapV4LPSplitHook_FeeBurnNotExact(uint256 projectId, uint256 count);
 
+    /// @notice Thrown when a held fee-project cut is retried and the fee project still cannot take it.
+    error JBUniswapV4LPSplitHook_HeldFeeCutStillFailing(uint256 projectId, address token, uint256 amount);
+
     /// @notice Thrown when a non-zero fee percent is configured without a fee project to route the fee to.
     error JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject(uint256 feePercent, uint256 feeProjectId);
 
     /// @notice Thrown when the hook's held balance of a token is less than the amount an operation requires.
     error JBUniswapV4LPSplitHook_InsufficientBalance(uint256 available, uint256 required);
+
+    /// @notice Thrown when there is no held fee-project cut to retry.
+    error JBUniswapV4LPSplitHook_NoHeldFeeCut(uint256 projectId, address token);
 
     /// @notice Thrown when the configured fee percent exceeds the maximum the hook allows.
     error JBUniswapV4LPSplitHook_InvalidFeePercent(uint256 feePercent, uint256 maxFeePercent);
@@ -333,6 +339,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @custom:param projectId The ID of the project to get the currently claimable fee-token balance of.
     mapping(uint256 projectId => uint256 claimableFeeTokens) public claimableFeeTokens;
 
+    /// @notice Fee-project cuts the fee project could not take at the time, held here until a retry succeeds.
+    /// @dev Anyone can retry with `processHeldFeeCutOf`. Held cuts are excluded from every spendable balance.
+    /// @custom:param projectId The project whose LP fees the cut came from.
+    /// @custom:param token The token the cut is held in (the terminal token or the project token).
+    mapping(uint256 projectId => mapping(address token => uint256 amount)) public heldFeeCutOf;
+
     /// @notice The terminal token the project's one supported pool was deployed against.
     /// @dev Set once, after the pool deployment succeeds, so post-deployment inline automation can resolve the pool
     /// pairing without re-running the terminal-token auto-selection. Never cleared: `hasDeployedPool` marks a one-way
@@ -408,6 +420,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     ///      spend fee tokens reserved for other projects' unclaimed fee balances.
     /// @custom:param token The fee project's ERC-20 token address.
     mapping(address token => uint256 totalClaims) internal _totalOutstandingFeeTokenClaims;
+
+    /// @notice Token address => total fee-project cuts held across all projects, excluded from spendable balances.
+    /// @custom:param token The token the cuts are held in.
+    mapping(address token => uint256 totalHeld) internal _totalHeldFeeCutsOf;
 
     //*********************************************************************//
     // ---------------------------- constructor -------------------------- //
@@ -536,6 +552,29 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         if (creditAmount > 0) {
             _claimFeeCredits({projectId: projectId, beneficiary: beneficiary, creditAmount: creditAmount});
         }
+    }
+
+    /// @notice Retries paying a held fee-project cut.
+    /// @dev Permissionless. Reverts if the fee project still cannot take it, so the cut stays held.
+    /// @param projectId The project whose LP fees the cut came from.
+    /// @param feeToken The token the cut is held in.
+    function processHeldFeeCutOf(uint256 projectId, address feeToken) external nonReentrant {
+        uint256 cut = heldFeeCutOf[projectId][feeToken];
+        if (cut == 0) revert JBUniswapV4LPSplitHook_NoHeldFeeCut({projectId: projectId, token: feeToken});
+        delete heldFeeCutOf[projectId][feeToken];
+        _totalHeldFeeCutsOf[feeToken] -= cut;
+
+        address feeTerminal = _primaryTerminalOf({projectId: feeProjectId, token: feeToken});
+        (bool paid, uint256 received) = feeTerminal == address(0)
+            ? (false, 0)
+            : _routeFeeCut({projectId: projectId, feeToken: feeToken, feeTerminal: feeTerminal, cut: cut});
+        if (!paid) {
+            revert JBUniswapV4LPSplitHook_HeldFeeCutStillFailing({projectId: projectId, token: feeToken, amount: cut});
+        }
+
+        emit ProcessHeldFeeCut({
+            projectId: projectId, token: feeToken, amount: cut, feeTokensMinted: received, caller: msg.sender
+        });
     }
 
     /// @notice Collect accrued Uniswap LP trading fees from a project's ask and bid positions and route them to the
@@ -1130,14 +1169,19 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
 
         (bool paid, uint256 received) =
             _routeFeeCut({projectId: projectId, feeToken: feeToken, feeTerminal: feeTerminal, cut: cut});
-        if (paid) {
-            // The project keeps everything but the paid cut.
-            remainder = amount - cut;
-        } else {
-            // Forgive the cut: the whole amount is the remainder.
-            cut = 0;
-            remainder = amount;
+        if (!paid) {
+            // The fee project could not take the cut right now. Hold it for `processHeldFeeCutOf` instead of
+            // forgiving it: whether the pay succeeds can depend on the gas the caller chose, and a forgiven cut would
+            // be a fee anyone can waive.
+            heldFeeCutOf[projectId][feeToken] += cut;
+            _totalHeldFeeCutsOf[feeToken] += cut;
+            // Under the caller's nonReentrant lock.
+            // forge-lint: disable-next-line(reentrancy-events)
+            emit HoldFeeCut({projectId: projectId, token: feeToken, amount: cut, caller: msg.sender});
         }
+
+        // The project keeps everything but the cut, whether it was paid or held.
+        remainder = amount - cut;
 
         // Reports the reconciled cut; every path runs under the nonReentrant lock.
         // forge-lint: disable-start(reentrancy-events)
@@ -2457,7 +2501,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // reflected in `_totalOutstandingFeeTokenClaims`. Treat the whole balance as unavailable until routing
         // finishes.
         if (_inflightFeeRoutingCount[token] != 0) return IERC20(token).balanceOf(address(this));
-        // Otherwise only the already-recorded outstanding claims are off-limits; the rest of the balance is free.
-        return _totalOutstandingFeeTokenClaims[token];
+        // Otherwise the already-recorded outstanding claims and the held fee-project cuts are off-limits; the rest of
+        // the balance is free.
+        return _totalOutstandingFeeTokenClaims[token] + _totalHeldFeeCutsOf[token];
     }
 }
