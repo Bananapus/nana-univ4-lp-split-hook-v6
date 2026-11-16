@@ -97,7 +97,7 @@ library JBUniswapV4LPSplitHookMath {
         address controller,
         JBRuleset memory ruleset
     )
-        public
+        internal
         view
         returns (int24 tickLower, int24 tickUpper)
     {
@@ -213,7 +213,7 @@ library JBUniswapV4LPSplitHookMath {
         uint256 amount0,
         uint256 amount1
     )
-        public
+        internal
         view
         returns (uint128 liquidity)
     {
@@ -266,7 +266,7 @@ library JBUniswapV4LPSplitHookMath {
         address controller,
         JBRuleset memory ruleset
     )
-        public
+        internal
         view
         returns (uint160 sqrtPriceX96)
     {
@@ -321,7 +321,7 @@ library JBUniswapV4LPSplitHookMath {
         uint256 projectId,
         address controller
     )
-        public
+        internal
         view
         returns (address highestToken)
     {
@@ -471,7 +471,7 @@ library JBUniswapV4LPSplitHookMath {
         address controller,
         JBRuleset memory ruleset
     )
-        public
+        internal
         view
         returns (uint256 terminalTokensPerProjectToken)
     {
@@ -549,7 +549,7 @@ library JBUniswapV4LPSplitHookMath {
         address controller,
         JBRuleset memory ruleset
     )
-        public
+        internal
         view
         returns (uint160 sqrtPriceX96)
     {
@@ -586,7 +586,7 @@ library JBUniswapV4LPSplitHookMath {
         address controller,
         JBRuleset memory ruleset
     )
-        public
+        internal
         view
         returns (uint256 projectTokensPerTerminalToken)
     {
@@ -631,7 +631,7 @@ library JBUniswapV4LPSplitHookMath {
         address controller,
         JBRuleset memory ruleset
     )
-        public
+        internal
         view
         returns (uint160 sqrtPriceX96)
     {
@@ -691,7 +691,7 @@ library JBUniswapV4LPSplitHookMath {
         address controller,
         JBRuleset memory ruleset
     )
-        public
+        internal
         view
         returns (uint256 projectTokenOutAmount)
     {
