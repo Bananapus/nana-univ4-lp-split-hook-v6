@@ -101,11 +101,17 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// touched its project credits. Caught by `_routeCollectedFees`, which then keeps the remainder in the ask ledger.
     error JBUniswapV4LPSplitHook_FeeBurnNotExact(uint256 projectId, uint256 count);
 
+    /// @notice Thrown when a held fee-project cut is retried and the fee project still cannot take it.
+    error JBUniswapV4LPSplitHook_HeldFeeCutStillFailing(uint256 projectId, address token, uint256 amount);
+
     /// @notice Thrown when a non-zero fee percent is configured without a fee project to route the fee to.
     error JBUniswapV4LPSplitHook_FeePercentWithoutFeeProject(uint256 feePercent, uint256 feeProjectId);
 
     /// @notice Thrown when the hook's held balance of a token is less than the amount an operation requires.
     error JBUniswapV4LPSplitHook_InsufficientBalance(uint256 available, uint256 required);
+
+    /// @notice Thrown when there is no held fee-project cut to retry.
+    error JBUniswapV4LPSplitHook_NoHeldFeeCut(uint256 projectId, address token);
 
     /// @notice Thrown when the configured fee percent exceeds the maximum the hook allows.
     error JBUniswapV4LPSplitHook_InvalidFeePercent(uint256 feePercent, uint256 maxFeePercent);
@@ -333,6 +339,12 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     /// @custom:param projectId The ID of the project to get the currently claimable fee-token balance of.
     mapping(uint256 projectId => uint256 claimableFeeTokens) public claimableFeeTokens;
 
+    /// @notice Fee-project cuts the fee project could not take at the time, held here until a retry succeeds.
+    /// @dev Anyone can retry with `processHeldFeeCutOf`. Held cuts are excluded from every spendable balance.
+    /// @custom:param projectId The project whose LP fees the cut came from.
+    /// @custom:param token The token the cut is held in (the terminal token or the project token).
+    mapping(uint256 projectId => mapping(address token => uint256 amount)) public heldFeeCutOf;
+
     /// @notice The terminal token the project's one supported pool was deployed against.
     /// @dev Set once, after the pool deployment succeeds, so post-deployment inline automation can resolve the pool
     /// pairing without re-running the terminal-token auto-selection. Never cleared: `hasDeployedPool` marks a one-way
@@ -408,6 +420,10 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     ///      spend fee tokens reserved for other projects' unclaimed fee balances.
     /// @custom:param token The fee project's ERC-20 token address.
     mapping(address token => uint256 totalClaims) internal _totalOutstandingFeeTokenClaims;
+
+    /// @notice Token address => total fee-project cuts held across all projects, excluded from spendable balances.
+    /// @custom:param token The token the cuts are held in.
+    mapping(address token => uint256 totalHeld) internal _totalHeldFeeCutsOf;
 
     //*********************************************************************//
     // ---------------------------- constructor -------------------------- //
@@ -497,9 +513,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint256 balanceBefore = IERC20(projectToken).balanceOf(address(this));
 
         // Burn the remainder from the hook's own holdings through the project's controller.
-        IJBController(controller).burnTokensOf({
-            holder: address(this), projectId: projectId, tokenCount: count, memo: ""
-        });
+        IJBController(controller)
+            .burnTokensOf({holder: address(this), projectId: projectId, tokenCount: count, memo: ""});
 
         // A balance that rose instead of falling underflows and reverts, which is forgiven the same way.
         if (
@@ -537,6 +552,29 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         if (creditAmount > 0) {
             _claimFeeCredits({projectId: projectId, beneficiary: beneficiary, creditAmount: creditAmount});
         }
+    }
+
+    /// @notice Retries paying a held fee-project cut.
+    /// @dev Permissionless. Reverts if the fee project still cannot take it, so the cut stays held.
+    /// @param projectId The project whose LP fees the cut came from.
+    /// @param feeToken The token the cut is held in.
+    function processHeldFeeCutOf(uint256 projectId, address feeToken) external nonReentrant {
+        uint256 cut = heldFeeCutOf[projectId][feeToken];
+        if (cut == 0) revert JBUniswapV4LPSplitHook_NoHeldFeeCut({projectId: projectId, token: feeToken});
+        delete heldFeeCutOf[projectId][feeToken];
+        _totalHeldFeeCutsOf[feeToken] -= cut;
+
+        address feeTerminal = _primaryTerminalOf({projectId: feeProjectId, token: feeToken});
+        (bool paid, uint256 received) = feeTerminal == address(0)
+            ? (false, 0)
+            : _routeFeeCut({projectId: projectId, feeToken: feeToken, feeTerminal: feeTerminal, cut: cut});
+        if (!paid) {
+            revert JBUniswapV4LPSplitHook_HeldFeeCutStillFailing({projectId: projectId, token: feeToken, amount: cut});
+        }
+
+        emit ProcessHeldFeeCut({
+            projectId: projectId, token: feeToken, amount: cut, feeTokensMinted: received, caller: msg.sender
+        });
     }
 
     /// @notice Collect accrued Uniswap LP trading fees from a project's ask and bid positions and route them to the
@@ -1129,70 +1167,21 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
             });
         }
 
-        // Pre-increment with `cut` as a conservative estimate; reconciled to the actual received amount after the pay.
-        uint256 feeProjectTokenBalanceBefore = 0;
-        if (feeProjectToken != address(0)) {
-            feeProjectTokenBalanceBefore = IERC20(feeProjectToken).balanceOf(address(this));
-            _totalOutstandingFeeTokenClaims[feeProjectToken] += cut;
-            _inflightFeeRoutingCount[feeProjectToken] += 1;
+        (bool paid, uint256 received) =
+            _routeFeeCut({projectId: projectId, feeToken: feeToken, feeTerminal: feeTerminal, cut: cut});
+        if (!paid) {
+            // The fee project could not take the cut right now. Hold it for `processHeldFeeCutOf` instead of
+            // forgiving it: whether the pay succeeds can depend on the gas the caller chose, and a forgiven cut would
+            // be a fee anyone can waive.
+            heldFeeCutOf[projectId][feeToken] += cut;
+            _totalHeldFeeCutsOf[feeToken] += cut;
+            // Under the caller's nonReentrant lock.
+            // forge-lint: disable-next-line(reentrancy-events)
+            emit HoldFeeCut({projectId: projectId, token: feeToken, amount: cut, caller: msg.sender});
         }
 
-        // The fee-project tokens (or credits) the pay mints to this hook.
-        uint256 received = 0;
-        // Pay the cut best-effort. The pay (plus its ERC-20 approve + allowance-consumption check) runs inside an
-        // external self-call so a revert on ANY of them is caught here and forgiven rather than bubbling up and
-        // blocking the collection. The self-call target is unguarded (so the surrounding `nonReentrant` guard is not
-        // self-tripped) and restricted to `address(this)`.
-        // The reserve is pre-incremented before the pay and reconciled after, under the nonReentrant lock.
-        // forge-lint: disable-start(reentrancy-no-eth)
-        try this.sendToTerminal({
-            terminal: feeTerminal, projectId: feeProjectId, token: feeToken, amount: cut, shouldPay: true
-        }) returns (
-            uint256 payReturn
-        ) {
-            if (feeProjectToken != address(0)) {
-                // Prefer the observed balance delta over the terminal return value so fee-on-transfer or nonstandard
-                // token behavior cannot overstate what this hook actually received.
-                uint256 expectedBalanceWithoutFeeTokens = feeProjectTokenBalanceBefore;
-                // If the cut is paid in the fee-project ERC-20 itself, the pay first transfers `cut` out of this hook;
-                // subtract it from the baseline so the later balance delta does not hide freshly minted fee tokens.
-                if (feeToken == feeProjectToken) expectedBalanceWithoutFeeTokens -= cut;
-                uint256 feeProjectTokenBalanceAfter = IERC20(feeProjectToken).balanceOf(address(this));
-                received = feeProjectTokenBalanceAfter > expectedBalanceWithoutFeeTokens
-                    ? feeProjectTokenBalanceAfter - expectedBalanceWithoutFeeTokens
-                    : 0;
-                // Remove the conservative estimate and reserve the reconciled token amount for later claiming.
-                _totalOutstandingFeeTokenClaims[feeProjectToken] =
-                    _totalOutstandingFeeTokenClaims[feeProjectToken] - cut + received;
-                _inflightFeeRoutingCount[feeProjectToken] -= 1;
-            } else {
-                received = payReturn;
-            }
-
-            // Track fee proceeds for later claiming: ERC-20s via `claimableFeeTokens`, else fee-project credits.
-            if (received > 0) {
-                if (feeProjectToken != address(0)) {
-                    claimableFeeTokenOf[projectId] = feeProjectToken;
-                    claimableFeeTokens[projectId] += received;
-                } else {
-                    claimableFeeCredits[projectId] += received;
-                    _totalOutstandingFeeCreditClaims[feeProjectId] += received;
-                }
-            }
-
-            // The project keeps everything but the paid cut.
-            remainder = amount - cut;
-        } catch {
-            // Forgive the cut: fully roll back the pre-incremented reserve and return the whole amount as the
-            // remainder.
-            if (feeProjectToken != address(0)) {
-                _totalOutstandingFeeTokenClaims[feeProjectToken] -= cut;
-                _inflightFeeRoutingCount[feeProjectToken] -= 1;
-            }
-            cut = 0;
-            remainder = amount;
-        }
-        // forge-lint: disable-end(reentrancy-no-eth)
+        // The project keeps everything but the cut, whether it was paid or held.
+        remainder = amount - cut;
 
         // Reports the reconciled cut; every path runs under the nonReentrant lock.
         // forge-lint: disable-start(reentrancy-events)
@@ -1334,7 +1323,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // pending credits instead of unwinding an ERC-20 fee-token claim that already succeeded earlier in the frame.
         // `claimFeeTokensFor` holds the lock; the catch only restores the cleared claim.
         // forge-lint: disable-start(reentrancy-no-eth,reentrancy-events)
-        try IJBController(_controllerOf(feeProjectId)).transferCreditsFrom({
+        try IJBController(_controllerOf(feeProjectId))
+            .transferCreditsFrom({
             holder: address(this), projectId: feeProjectId, recipient: beneficiary, creditCount: creditAmount
         }) {
             // Keep the reserve through the external call so reentrant deploy/add cannot spend the pending credits.
@@ -1408,7 +1398,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         uint256 balanceBefore = projectToken.balanceOf(address(this));
         // The hook claims its own credits under the lock; the ledger takes the measured delta.
         // forge-lint: disable-start(reentrancy-no-eth)
-        IJBController(controller).claimTokensFor({
+        IJBController(controller)
+            .claimTokensFor({
             holder: address(this), projectId: projectId, tokenCount: creditCount, beneficiary: address(this)
         });
         // forge-lint: disable-end(reentrancy-no-eth)
@@ -2195,6 +2186,87 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         }
     }
 
+    /// @notice Pays a fee-project cut and books what the fee project minted back for later claiming.
+    /// @dev The reentrancy-safe reserve dance (pre-increment `_totalOutstandingFeeTokenClaims` and
+    /// `_inflightFeeRoutingCount` before the external pay, reconcile after) is preserved and fully rolled back when the
+    /// pay reverts.
+    /// @param projectId The project whose LP fees are being cut.
+    /// @param feeToken The token the cut is denominated in.
+    /// @param feeTerminal The fee project's terminal for `feeToken`.
+    /// @param cut The amount to pay.
+    /// @return paid Whether the fee project took the cut.
+    /// @return received The fee-project tokens (or credits) the pay minted to this hook.
+    function _routeFeeCut(
+        uint256 projectId,
+        address feeToken,
+        address feeTerminal,
+        uint256 cut
+    )
+        internal
+        returns (bool paid, uint256 received)
+    {
+        address feeProjectToken = _tokenOf(feeProjectId);
+
+        // Pre-increment with `cut` as a conservative estimate; reconciled to the actual received amount after the pay.
+        uint256 feeProjectTokenBalanceBefore = 0;
+        if (feeProjectToken != address(0)) {
+            feeProjectTokenBalanceBefore = IERC20(feeProjectToken).balanceOf(address(this));
+            _totalOutstandingFeeTokenClaims[feeProjectToken] += cut;
+            _inflightFeeRoutingCount[feeProjectToken] += 1;
+        }
+
+        // Pay the cut best-effort. The pay (plus its ERC-20 approve + allowance-consumption check) runs inside an
+        // external self-call so a revert on ANY of them is caught here and forgiven rather than bubbling up and
+        // blocking the collection. The self-call target is unguarded (so the surrounding `nonReentrant` guard is not
+        // self-tripped) and restricted to `address(this)`.
+        // The reserve is pre-incremented before the pay and reconciled after, under the nonReentrant lock.
+        // forge-lint: disable-start(reentrancy-no-eth)
+        try this.sendToTerminal({
+            terminal: feeTerminal, projectId: feeProjectId, token: feeToken, amount: cut, shouldPay: true
+        }) returns (
+            uint256 payReturn
+        ) {
+            if (feeProjectToken != address(0)) {
+                // Prefer the observed balance delta over the terminal return value so fee-on-transfer or nonstandard
+                // token behavior cannot overstate what this hook actually received.
+                uint256 expectedBalanceWithoutFeeTokens = feeProjectTokenBalanceBefore;
+                // If the cut is paid in the fee-project ERC-20 itself, the pay first transfers `cut` out of this hook;
+                // subtract it from the baseline so the later balance delta does not hide freshly minted fee tokens.
+                if (feeToken == feeProjectToken) expectedBalanceWithoutFeeTokens -= cut;
+                uint256 feeProjectTokenBalanceAfter = IERC20(feeProjectToken).balanceOf(address(this));
+                received = feeProjectTokenBalanceAfter > expectedBalanceWithoutFeeTokens
+                    ? feeProjectTokenBalanceAfter - expectedBalanceWithoutFeeTokens
+                    : 0;
+                // Remove the conservative estimate and reserve the reconciled token amount for later claiming.
+                _totalOutstandingFeeTokenClaims[feeProjectToken] =
+                    _totalOutstandingFeeTokenClaims[feeProjectToken] - cut + received;
+                _inflightFeeRoutingCount[feeProjectToken] -= 1;
+            } else {
+                received = payReturn;
+            }
+
+            // Track fee proceeds for later claiming: ERC-20s via `claimableFeeTokens`, else fee-project credits.
+            if (received > 0) {
+                if (feeProjectToken != address(0)) {
+                    claimableFeeTokenOf[projectId] = feeProjectToken;
+                    claimableFeeTokens[projectId] += received;
+                } else {
+                    claimableFeeCredits[projectId] += received;
+                    _totalOutstandingFeeCreditClaims[feeProjectId] += received;
+                }
+            }
+
+            paid = true;
+        } catch {
+            // Fully roll back the pre-incremented reserve.
+            if (feeProjectToken != address(0)) {
+                _totalOutstandingFeeTokenClaims[feeProjectToken] -= cut;
+                _inflightFeeRoutingCount[feeProjectToken] -= 1;
+            }
+        }
+        // forge-lint: disable-end(reentrancy-no-eth)
+    }
+
     /// @notice Sort two token addresses into the canonical Uniswap V4 ordering (lower address = token0).
     /// @param tokenA One token address.
     /// @param tokenB The other token address.
@@ -2429,7 +2501,8 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // reflected in `_totalOutstandingFeeTokenClaims`. Treat the whole balance as unavailable until routing
         // finishes.
         if (_inflightFeeRoutingCount[token] != 0) return IERC20(token).balanceOf(address(this));
-        // Otherwise only the already-recorded outstanding claims are off-limits; the rest of the balance is free.
-        return _totalOutstandingFeeTokenClaims[token];
+        // Otherwise the already-recorded outstanding claims and the held fee-project cuts are off-limits; the rest of
+        // the balance is free.
+        return _totalOutstandingFeeTokenClaims[token] + _totalHeldFeeCutsOf[token];
     }
 }

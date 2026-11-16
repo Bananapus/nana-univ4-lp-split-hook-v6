@@ -18,6 +18,23 @@ interface IJBUniswapV4LPSplitHook {
     /// @param caller The address that claimed the tokens.
     event FeeTokensClaimed(uint256 indexed projectId, address indexed beneficiary, uint256 amount, address caller);
 
+    /// @notice Emitted when a fee-project cut the fee project could not take is held for a later retry.
+    /// @param projectId The project whose LP fees the cut came from.
+    /// @param token The token the cut is held in.
+    /// @param amount The amount held.
+    /// @param caller The address that routed the LP fees.
+    event HoldFeeCut(uint256 indexed projectId, address indexed token, uint256 amount, address caller);
+
+    /// @notice Emitted when a held fee-project cut is retried and paid.
+    /// @param projectId The project whose LP fees the cut came from.
+    /// @param token The token the cut was held in.
+    /// @param amount The amount paid.
+    /// @param feeTokensMinted The number of fee project tokens minted.
+    /// @param caller The address that retried the cut.
+    event ProcessHeldFeeCut(
+        uint256 indexed projectId, address indexed token, uint256 amount, uint256 feeTokensMinted, address caller
+    );
+
     /// @notice Emitted when a recycle after deployment re-mints the project's ask and bid positions.
     /// @param projectId The Juicebox project ID.
     /// @param terminalToken The terminal token address.
@@ -115,6 +132,17 @@ interface IJBUniswapV4LPSplitHook {
     /// @param terminalToken The terminal token address.
     // forge-lint: disable-next-line(mixed-case-function)
     function collectAndRouteLPFees(uint256 projectId, address terminalToken) external;
+
+    /// @notice A fee-project cut held because the fee project could not take it at the time.
+    /// @param projectId The project whose LP fees the cut came from.
+    /// @param token The token the cut is held in.
+    /// @return amount The amount held.
+    function heldFeeCutOf(uint256 projectId, address token) external view returns (uint256 amount);
+
+    /// @notice Retries paying a held fee-project cut. Reverts if the fee project still cannot take it.
+    /// @param projectId The project whose LP fees the cut came from.
+    /// @param feeToken The token the cut is held in.
+    function processHeldFeeCutOf(uint256 projectId, address feeToken) external;
 
     /// @notice Deploy a Uniswap V4 pool using accumulated project tokens.
     /// @dev Auto-selects the terminal token with the highest ETH-denominated value across all terminals. Mints the
