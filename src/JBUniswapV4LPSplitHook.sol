@@ -209,26 +209,6 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
     // ----------------------- internal constants ------------------------ //
     //*********************************************************************//
 
-    /// @notice The gas an inline automation attempt starts with and may use: the minimum below which
-    /// `processSplitWith` skips automation, and the cap it forwards, so a failing attempt never costs the caller more.
-    /// @dev A cold full two-position recycle through real Core (two fee collections with fee-project payments, the fee
-    /// adds and burns with their credit claim, the surplus read, two position burns, corridor math, oracle reads, and
-    /// two mints) measured ~1.28M gas with one terminal, ~1.37M with four, ~1.43M with six, and ~1.49M with eight; the
-    /// surplus read adds ~30k per terminal, so the budget covers about 20 terminals. A first deploy costs less. An
-    /// attempt that still runs out of gas inside the self-call is reported like any failed attempt and keeps the
-    /// intake. Capping the attempt keeps the caller's own work after the split (the terminal's remaining payout
-    /// recipients, the controller's remaining reserved splits) safe: a caller that supplies this budget plus the
-    /// reserve plus its own needs always finishes. The permissionless `deployPool`/`addLiquidity` retries are NOT bound
-    /// by this budget.
-    uint256 internal constant _AUTOMATION_GAS_BUDGET = 2_000_000;
-
-    /// @notice The gas reserved for `processSplitWith` to finish (emit the failure event and return to the
-    /// Controller) after an inline automation attempt, successful or not.
-    /// @dev The attempt starts only with at least `_AUTOMATION_GAS_BUDGET + _AUTOMATION_GAS_RESERVE` left and is given
-    /// at most the budget, so even an attempt that burns its whole budget (an out-of-gas revert) leaves this frame the
-    /// reserve to log `LiquidityAutomationFailed` and return.
-    uint256 internal constant _AUTOMATION_GAS_RESERVE = 64_000;
-
     /// @notice The slippage floor, out of `BPS`, applied to a burned position's contract-derived principal read.
     /// @dev When retiring a position, the hook computes the position's current token amounts from its on-chain
     /// liquidity and the live pool price, then requires the BURN to return at least this fraction of that read. The
@@ -1093,16 +1073,13 @@ contract JBUniswapV4LPSplitHook is IJBUniswapV4LPSplitHook, IJBSplitHook, JBPerm
         // Post-deployment automation needs the recorded pool pairing; without it there is nothing to grow safely.
         if (hasDeployedPool[projectId] && deployedTerminalTokenOf[projectId] == address(0)) return;
 
-        // Skip when the remaining gas cannot cover a meaningful attempt plus the reserve this frame needs to finish
-        // and return to the Controller. The permissionless retries are not bound by this floor.
-        if (gasleft() < _AUTOMATION_GAS_BUDGET + _AUTOMATION_GAS_RESERVE) return;
-
         // The external self-call is the rollback boundary: a revert inside the attempt rolls back the attempt's
         // state changes while this frame's accepted inventory stays intact. Only the error selector is captured, so
-        // a revert-data bomb downstream cannot blow up this frame's memory.
-        (bool success, bytes4 reasonSelector) = _boundedSelfCall({
-            data: abi.encodeCall(this.executeAutomationFor, (projectId)), gasLimit: _AUTOMATION_GAS_BUDGET
-        });
+        // a revert-data bomb downstream cannot blow up this frame's memory. The attempt gets all the gas EIP-150
+        // allows: there is no budget constant to go stale at the next repricing, and if the attempt starves the
+        // whole payout reverts rather than silently skipping it.
+        (bool success, bytes4 reasonSelector) =
+            _boundedSelfCall({data: abi.encodeCall(this.executeAutomationFor, (projectId)), gasLimit: gasleft()});
 
         if (!success) {
             // Reports the bounded self-call's failure, under `processSplitWith`'s lock.
