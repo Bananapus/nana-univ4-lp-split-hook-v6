@@ -4,6 +4,7 @@ pragma solidity 0.8.28;
 import {IJBController} from "@bananapus/core-v6/src/interfaces/IJBController.sol";
 import {IJBDirectory} from "@bananapus/core-v6/src/interfaces/IJBDirectory.sol";
 import {IJBMultiTerminal} from "@bananapus/core-v6/src/interfaces/IJBMultiTerminal.sol";
+import {IJBPrices} from "@bananapus/core-v6/src/interfaces/IJBPrices.sol";
 import {IJBTerminal} from "@bananapus/core-v6/src/interfaces/IJBTerminal.sol";
 import {IJBTerminalStore} from "@bananapus/core-v6/src/interfaces/IJBTerminalStore.sol";
 import {JBConstants} from "@bananapus/core-v6/src/libraries/JBConstants.sol";
@@ -12,6 +13,7 @@ import {JBSurplus} from "@bananapus/core-v6/src/libraries/JBSurplus.sol";
 import {JBAccountingContext} from "@bananapus/core-v6/src/structs/JBAccountingContext.sol";
 import {JBRuleset} from "@bananapus/core-v6/src/structs/JBRuleset.sol";
 import {IJBSuckerRegistry} from "@bananapus/suckers-v6/src/interfaces/IJBSuckerRegistry.sol";
+import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 import {mulDiv, sqrt} from "@prb/math/src/Common.sol";
 import {IPoolManager} from "@uniswap/v4-core/src/interfaces/IPoolManager.sol";
 import {Pool} from "@uniswap/v4-core/src/libraries/Pool.sol";
@@ -309,6 +311,47 @@ library JBUniswapV4LPSplitHookMath {
         return TickMath.getSqrtPriceAtTick(seedTick);
     }
 
+    /// @notice Values a terminal balance for the pairing comparison.
+    /// @dev Native balances are already 18-decimal ETH. Other balances are priced through the project's feeds when
+    /// one exists (project or default); "no feed" is a return value of the prices contract, while a feed that reverts
+    /// propagates so the gas a caller picks cannot decide which token wins. Unpriced balances are returned normalized
+    /// to 18 decimals so callers can compare them among themselves.
+    /// @param controller The project's controller.
+    /// @param projectId The project ID.
+    /// @param context The accounting context of the balance.
+    /// @param balance The balance in the context's decimals.
+    /// @return ethValue The 18-decimal ETH value, or 0 when unpriced.
+    /// @return unpricedBalance The 18-decimal token-unit balance when unpriced, or 0 when priced.
+    function _valueOf(
+        address controller,
+        uint256 projectId,
+        JBAccountingContext memory context,
+        uint256 balance
+    )
+        private
+        view
+        returns (uint256 ethValue, uint256 unpricedBalance)
+    {
+        uint256 ethCurrency = uint32(uint160(JBConstants.NATIVE_TOKEN));
+        if (context.currency == ethCurrency) return (balance, 0);
+
+        IJBPrices prices = IJBController(controller).PRICES();
+        bool priced = prices.priceFeedCountFor({
+                    projectId: projectId, pricingCurrency: context.currency, unitCurrency: ethCurrency
+                }) != 0
+            || prices.priceFeedCountFor({projectId: 0, pricingCurrency: context.currency, unitCurrency: ethCurrency})
+                != 0;
+        if (!priced) return (0, mulDiv({x: balance, y: 10 ** 18, denominator: 10 ** context.decimals}));
+
+        uint256 pricePerUnit = prices.pricePerUnitOf({
+            projectId: projectId,
+            pricingCurrency: context.currency,
+            unitCurrency: ethCurrency,
+            decimals: context.decimals
+        });
+        return (mulDiv({x: balance, y: 10 ** 18, denominator: pricePerUnit}), 0);
+    }
+
     /// @notice Find the primary terminal token with the highest ETH-denominated value across the project's terminals.
     /// @dev Converts each token's balance to 18-decimal ETH using price feeds. Falls back to token-decimal-normalized
     /// balance comparison when no price feed exists.
@@ -335,103 +378,58 @@ library JBUniswapV4LPSplitHookMath {
         address highestUnpricedToken = address(0);
         uint256 highestUnpricedBalance = 0;
 
-        // The ETH currency identifier used for price normalization.
-        // JB currency ids are a token address's low 32 bits by convention (ETH = 61166).
-        // forge-lint: disable-next-line(unsafe-typecast)
-        uint32 ethCurrency = uint32(uint160(JBConstants.NATIVE_TOKEN));
-
-        // Cache terminal count for gas-efficient iteration.
-        uint256 terminalCount = terminals.length;
-
         // Iterate over each terminal to inspect its token balances.
-        for (uint256 i; i < terminalCount; i++) {
+        for (uint256 i; i < terminals.length; i++) {
             // Cast to IJBMultiTerminal to access store and accounting context methods.
             IJBMultiTerminal term = IJBMultiTerminal(address(terminals[i]));
 
             // A project's terminal set can include non-`IJBMultiTerminal` terminals that hold no balances of their
             // own (e.g. the router terminal registry, which forwards to per-token terminals and has no `STORE()`).
-            // Probe `STORE()` in a try/catch and skip any terminal that doesn't expose one, rather than reverting the
-            // whole selection — otherwise a single such terminal permanently DoSes `deployPool`/`addLiquidity` for
-            // the project.
-            IJBTerminalStore termStore;
+            // Skip those by interface, not by catching a revert: whether a call reverts can depend on the gas the
+            // caller chose, and this selection decides which token the pool is paired with.
+            if (!IERC165(address(term)).supportsInterface(type(IJBMultiTerminal).interfaceId)) continue;
             // Bounded by the project's own terminal and context lists; view reads only.
             // forge-lint: disable-next-line(calls-loop)
-            try term.STORE() returns (IJBTerminalStore store_) {
-                termStore = store_;
-            } catch {
-                continue;
-            }
+            IJBTerminalStore termStore = term.STORE();
 
-            // Get all accounting contexts (one per accepted token) for this project on this terminal. Guard the same
-            // way so a terminal that reverts here is skipped rather than aborting the loop.
-            JBAccountingContext[] memory contexts;
-            // Bounded by the project's own terminal and context lists; view reads only.
+            // Get all accounting contexts (one per accepted token) for this project on this terminal.
             // forge-lint: disable-next-line(calls-loop)
-            try term.accountingContextsOf(projectId) returns (JBAccountingContext[] memory contexts_) {
-                contexts = contexts_;
-            } catch {
-                continue;
-            }
-
-            // Cache context count for gas-efficient iteration.
-            uint256 contextCount = contexts.length;
+            JBAccountingContext[] memory contexts = term.accountingContextsOf(projectId);
 
             // Iterate over each token accepted by this terminal.
-            for (uint256 j; j < contextCount; j++) {
+            for (uint256 j; j < contexts.length; j++) {
                 // Load the accounting context for this token.
                 JBAccountingContext memory context = contexts[j];
 
                 // This hook keys each LP by terminal token and, when it operates, cashes out through the project's
                 // primary terminal for that token. Holders may still cash out directly from same-token secondary
                 // terminals, but those balances are not available to this hook's primary-terminal path.
-                address primaryTerminal =
-                    _primaryTerminalOf({directory: directory, projectId: projectId, token: context.token});
-                if (primaryTerminal == address(0) || primaryTerminal != address(term)) continue;
+                if (
+                    _primaryTerminalOf({directory: directory, projectId: projectId, token: context.token})
+                        != address(term)
+                ) {
+                    continue;
+                }
 
-                // Look up how much of this token the terminal holds for the project.
-                // Bounded like the calls above. `termStore` is set in the `STORE()` try; its catch skips ahead.
-                // forge-lint: disable-start(calls-loop,uninitialized-local)
+                // Look up how much of this token the terminal holds for the project. Bounded like the calls above.
+                // forge-lint: disable-next-line(calls-loop)
                 uint256 balance =
                     termStore.balanceOf({terminal: address(term), projectId: projectId, token: context.token});
-                // forge-lint: disable-end(calls-loop,uninitialized-local)
 
                 // Skip tokens with zero balance — they can't be the highest value.
                 if (balance == 0) continue;
 
-                // Convert the balance to an 18-decimal ETH-denominated value for apples-to-apples comparison.
-                uint256 ethValue = 0;
+                // Value the balance in 18-decimal ETH, or as a normalized token balance when no feed prices it.
+                (uint256 ethValue, uint256 unpricedBalance) =
+                    _valueOf({controller: controller, projectId: projectId, context: context, balance: balance});
 
-                if (context.currency == ethCurrency) {
-                    // Native ETH: balance is already denominated in 18-decimal ETH.
-                    ethValue = balance;
-                } else {
-                    // For non-ETH tokens, use the price feed to normalize to ETH.
-                    // pricePerUnit = how many of `context.currency` per 1 ETH at `context.decimals` precision.
-                    // ethValue (18-decimal) = balance * 10^18 / pricePerUnit.
-                    // Bounded by the project's own terminal and context lists; view reads only.
-                    // forge-lint: disable-start(calls-loop)
-                    try IJBController(controller).PRICES().pricePerUnitOf({
-                        projectId: projectId,
-                        pricingCurrency: context.currency,
-                        unitCurrency: ethCurrency,
-                        decimals: context.decimals
-                    }) returns (
-                        uint256 pricePerUnit
-                    ) {
-                        // Normalize the balance to 18-decimal ETH using the price feed result.
-                        ethValue = mulDiv({x: balance, y: 10 ** 18, denominator: pricePerUnit});
-                    } catch {
-                        // No price feed available — skip this token while priced candidates exist. If every candidate
-                        // is unpriced, compare 18-decimal token-unit balances so low-decimal tokens are not penalized.
-                        uint256 normalizedBalance =
-                            mulDiv({x: balance, y: 10 ** 18, denominator: 10 ** context.decimals});
-                        if (normalizedBalance > highestUnpricedBalance) {
-                            highestUnpricedBalance = normalizedBalance;
-                            highestUnpricedToken = context.token;
-                        }
-                        continue;
+                // Unpriced tokens compete only among themselves, and only win if nothing is priced.
+                if (unpricedBalance != 0) {
+                    if (unpricedBalance > highestUnpricedBalance) {
+                        highestUnpricedBalance = unpricedBalance;
+                        highestUnpricedToken = context.token;
                     }
-                    // forge-lint: disable-end(calls-loop)
+                    continue;
                 }
 
                 // Update the highest value and corresponding token if this one exceeds the current best.
@@ -713,7 +711,8 @@ library JBUniswapV4LPSplitHookMath {
         // forge-lint: disable-start(calls-loop)
         uint256 weightRatio = context.currency == baseCurrency
             ? 10 ** context.decimals
-            : IJBController(controller).PRICES().pricePerUnitOf({
+            : IJBController(controller).PRICES()
+                .pricePerUnitOf({
                 projectId: projectId,
                 pricingCurrency: context.currency,
                 unitCurrency: baseCurrency,
